@@ -57,6 +57,17 @@ let
 
   cargoHash = "sha256-gBaOjzKNUDZ+dB0fEAh7PpaViE/BaQUIpvYIovnp4I4=";
 
+  # Fat LTO (Cargo.toml: lto = true) compiles every dependency as bitcode
+  # (-C linker-plugin-lto) and links it in one rustc. That link is killed on
+  # a 4GB machine, and stripping -C lto only from the final rustc then leaves
+  # mold with undefined symbols, because the rlibs contain no object code.
+  # These override the release profile, and the wasm-plugin profile that
+  # inherits it, so the crates ship ordinary object code.
+  cargoEnv = {
+    CARGO_PROFILE_RELEASE_LTO = "off";
+    CARGO_PROFILE_WASM_PLUGIN_LTO = "off";
+  };
+
   # derisk-gpui, as a cargo build of its own. It cannot share derisk's: the
   # portal talks to xdg-desktop-portal through ashpd on tokio, and Sonne's
   # GPUI through the same ashpd on async-io, and cargo unifies features
@@ -67,6 +78,7 @@ let
   gpui = rustPlatform.buildRustPackage {
     pname = "derisk-gpui";
     inherit version src cargoHash;
+    env = cargoEnv;
     cargoDepsName = "derisk-${version}";
 
     # `gpui` is what makes it a binary at all: the crate is otherwise only
@@ -131,6 +143,7 @@ let
   terminal = rustPlatform.buildRustPackage {
     pname = "derisk-terminal";
     inherit version src cargoHash;
+    env = cargoEnv;
     cargoDepsName = "derisk-${version}";
 
     cargoBuildFlags = [
@@ -181,6 +194,7 @@ let
   index = rustPlatform.buildRustPackage {
     pname = "derisk-index";
     inherit version src cargoHash;
+    env = cargoEnv;
     cargoDepsName = "derisk-${version}";
 
     cargoBuildFlags = [
@@ -215,6 +229,7 @@ let
   agent = rustPlatform.buildRustPackage {
     pname = "derisk-agent";
     inherit version src cargoHash;
+    env = cargoEnv;
     cargoDepsName = "derisk-${version}";
 
     cargoBuildFlags = [
@@ -268,6 +283,7 @@ in
 rustPlatform.buildRustPackage {
   pname = "derisk";
   inherit version src cargoHash;
+  env = cargoEnv;
 
   # derisk and its portal backend, xdg-desktop-portal-derisk. `host` is the
   # compositor; without it the binary has only the headless commands. It is

@@ -188,7 +188,7 @@ paste "$work/sizes" "$work/missing" > "$work/sized"
 # stage; the rest stays free for the copy's own scratch.
 batch_cap() {
   local avail
-  avail=$(df -P --output=avail "$staging" | awk 'NR == 2 { print $1 }')
+  avail=$(df --output=avail "$staging" | awk 'NR == 2 { print $1 }')
   [ -n "$avail" ] || { echo "nix-cache-push: could not read free space on $staging" >&2; exit 1; }
   echo $((avail * 1024 / 4))
 }
