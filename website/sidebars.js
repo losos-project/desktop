@@ -46,6 +46,7 @@ module.exports = {
         'choice-screens',
         'losos-boxes',
         'windows-apps',
+        'app-windows',
         'backup',
       ],
     },

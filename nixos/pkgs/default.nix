@@ -101,6 +101,9 @@ in
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.
   windows-app-support = final.callPackage ./windows-app-support.nix { inherit (plain) winboat; };
+  # A guest's apps and windows on the desktop, from macOS's app server or
+  # any other that speaks its protocol (docs/app-windows.md).
+  app-windows = callWithMold ./app-windows.nix { };
   # This repository's documentation, for reading offline; built by Node, so
   # nothing to link.
   losos-docs = final.callPackage ./losos-docs.nix { };

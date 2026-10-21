@@ -28,6 +28,7 @@
     ./backup.nix
     ./docs.nix
     ./losos-boxes.nix
+    ./app-windows.nix
     ./userland.nix
   ];
 
