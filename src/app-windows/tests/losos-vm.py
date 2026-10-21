@@ -313,6 +313,7 @@ def grub(args, machine, run):
     machine.key("up", every=0.5)
     machine.key("c", every=1)
     v = f"losos-desktop_{args.version}"
+    prompts = 1
     for line in [
         "set root=(hd0,gpt1)",
         "probe --set=losos_esp --part-uuid (hd0,gpt1)",
@@ -321,8 +322,32 @@ def grub(args, machine, run):
         f"initrd /EFI/Linux/{v}.initrd",
         "boot",
     ]:
-        machine.type(line + "\n", every=0.05)
-        time.sleep(1)
+        # Keys typed while GRUB is still loading the previous line's file go
+        # missing (an Intel runner lost the u of "Linux" in the initrd's
+        # path, and the kernel panicked without it), so each line waits for
+        # GRUB's next prompt, and is checked against GRUB's echo on the
+        # serial port before Enter and typed again when it does not match.
+        # GRUB wraps a long line at 80 columns, hence the line breaks taken
+        # out of the echo.
+        end = time.time() + 300
+        while machine.serial().count("grub>") < prompts and time.time() < end:
+            time.sleep(0.2)
+        for attempt in range(4):
+            if attempt:
+                log(f"GRUB echoed {echo!r} for {line!r}, typing it again")
+                machine.key("ctrl+a", "ctrl+k", every=0.5)
+            since = len(machine.serial())
+            machine.type(line, every=0.1)
+            end = time.time() + 5
+            while True:
+                echo = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\r\n]", "", machine.serial()[since:])
+                if echo.endswith(line) or time.time() > end:
+                    break
+                time.sleep(0.2)
+            if echo.endswith(line):
+                break
+        prompts = machine.serial().count("grub>") + 1
+        machine.key("ret", every=1)
     return True
 
 
