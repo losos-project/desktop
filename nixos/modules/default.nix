@@ -16,6 +16,7 @@
     ./libvirt.nix
     ./machines.nix
     ./windows-apps.nix
+    ./android-apps.nix
     ./flatpak-machine.nix
     ./allocator.nix
     ./image.nix

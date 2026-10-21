@@ -12,7 +12,7 @@ Everything the overlay builds itself links with
 [mold](https://github.com/rui314/mold) instead of nixpkgs' default `ld.bfd`.
 That covers derisk, pm and its plugins, `losos-installer`, `losos-security`,
 `losos-swap`, `losos-adblock`, the LosOS client `losos`, Danube, `x2mcsapi`,
-libhybris, the Android Translation Layer, and the patched GTK and Qt. The
+libhybris, and the patched GTK and Qt. The
 overlay calls them through one helper, `callWithMold`. It gives a package
 nixpkgs' stdenv and a `rustPlatform` built on it, both through
 `stdenvAdapters.useMoldLinker`, so the C compiler and the `cc` that rustc

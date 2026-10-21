@@ -1,5 +1,9 @@
 # What is not done
 
+- **arm64 macOS on a PC.** `qemu-vmapple` runs `vmapple` under TCG with an
+  M1 CPU and Apple's pointer authentication, and its check passes. Nobody
+  has booted macOS on it yet, it has no GPU, and nothing in derisk starts
+  it. [arm64 macOS machines](macos-arm64.md) lists the rest.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
@@ -207,31 +211,15 @@
   kernel arguments only as a replacement for its whole command line.
 - **sysext.** Extensions merge into `/usr`, which here holds little but the
   Nix store, so an extension can add a program but cannot replace one.
-- **Android apps.** `nixos/modules/atl.nix` has two options, both off by
-  default. `losos.android.enable` installs the Android Translation Layer.
-  `losos.android.openApks` also makes it the default handler for `.apk`
-  files. The package, `nixos/pkgs/android-translation-layer.nix`, is pinned
-  to a full commit with a real fixed-output hash. It evaluates, but it has
-  never built to completion. Two gaps remain, and the package header lists
-  the first. ATL's build shells out to the Android SDK build-tools, `dx` and
-  `aapt`, which the recipe does not provide yet. And the pinned tree has no
-  `thirdparty/art_standalone/build`, which ART's Makefile includes, so it
-  needs another source input. The package is marked `meta.broken`, so
-  enabling `losos.android` fails at evaluation with nixpkgs' broken-package
-  error until both are fixed. Both options are off, so `nix flake check`
-  never builds the package, and the work can land and continue without
-  blocking the image.
-
-  **APKs run in a sandbox that is not Android's.** Opening an `.apk` starts
-  ATL through `losos-android-run`, under bubblewrap. The app sees the Nix
-  store, `/etc` and the GPU read-only, its own home under
-  `~/.local/share/losos/android/`, the Wayland and PipeWire sockets, the
-  desktop portals through `xdg-dbus-proxy`, and the network. It sees none of
-  the user's files, other sockets or session environment. That was checked
-  with a stand-in for ATL, since ATL does not build yet. Android's per-app
-  permissions are still missing. Every app has the network, and the
-  microphone through PipeWire, so `openApks`, which makes opening a file run
-  it, stays a separate choice.
+- **Android app support.** [Android app support](android-apps.md) boots
+  its Pixel and opens an app's display in CI, on a runner with KVM and no
+  GPU, so the Pixel drew in software there. Drawing through a real GPU with
+  `-gpu host` has not been tried. Google Play needs a person to sign in to
+  a Google account on the Pixel before it installs anything. The Pixel has
+  no camera, and no USB passthrough. Its windows have no colour of their
+  own, since they come from scrcpy on the desktop rather than from a
+  machine. Google builds no emulator for Linux on ARM, so aarch64 PCs and
+  the GSI have no Android app support.
 - **Booted under QEMU only.** Every CI run boots the x86_64 image in QEMU
   with `nix flake check`, under UEFI and under SeaBIOS, as "Tested" in
   [Boot loader](boot-loaders.md) describes. First boot lays out the disk with

@@ -254,6 +254,12 @@
           home-manager-pm = import ./nixos/tests/home-manager-pm.nix {
             inherit self home-manager pkgs;
           };
+          # qemu-vmapple's M1 CPU and Apple's pointer authentication, under
+          # TCG with no Apple software (docs/macos-arm64.md).
+          apple-m1 = import ./nixos/tests/apple-m1.nix {
+            inherit pkgs;
+            inherit (self.legacyPackages.${system}) qemu-vmapple;
+          };
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           # Every GSI module and assertion, libhybris's build, and the
