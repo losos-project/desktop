@@ -70,7 +70,9 @@
   desktop. Nothing in the image starts a macOS guest for it yet. Pictures go
   to the compositor through shared memory rather than the GPU's own
   buffers. The pointer is always the arrow, only text crosses the
-  clipboard, and drag and drop and sound stay in the guest.
+  clipboard, and drag and drop and sound stay in the guest. A Mac package
+  downloaded in another machine stays there; only this desktop's own hand
+  packages to macOS.
 - **No hosted proxy.** GitHub Pages serves files only. Of what
   [`proxy/`](binary-cache.md) did, updates moved to GitHub Releases, through
   an index on the documentation site and a service on each machine

@@ -77,13 +77,38 @@ Under derisk, a guest window's menus go in the top bar and the palette,
 through derisk's agent socket. A pick there goes back to the guest as the
 item it names.
 
+## Mac packages
+
+A disk image (`.dmg`) or installer package (`.pkg`, `.mpkg`) that reaches
+this desktop opens in macOS, as a double click would open it on a Mac: an
+image is mounted and its window shown, a package starts Installer. Two ways
+lead there:
+
+- **Opening one in Files.** "Open in macOS" is the default app for both
+  types. It runs `app-windows send`, which waits for macOS if it is still
+  starting.
+- **Downloading one.** The `app-windows-downloads` user unit runs
+  `app-windows watch ~/Downloads` for each person with a macOS guest, which
+  is anyone with a token in `~/.config/app-windows/macos/`. It looks at the
+  folder every two seconds and hands over each new package once its size has
+  stopped changing, so a download still in progress is left alone. What was
+  in the folder before it started stays where it is. A package that comes
+  while macOS is off is handed over once it is up.
+
+The file travels over the server's own connection, in pieces of 1 MiB, and
+lands in Downloads on macOS under a name no other file there has. One that
+does not arrive whole is removed there rather than left for someone to open.
+The copy here stays where it was.
+
 | Command | What it does |
 | --- | --- |
 | `app-windows show` | shows the guest's windows and keeps its apps listed, until the guest goes away |
 | `app-windows apps` | lists the guest's apps here and prints them |
 | `app-windows open ID` | starts an app, and runs `show` when nothing shows the guest yet; this is what an entry runs |
 | `app-windows record SCRIPT OUT` | runs a test script with no screen, saving every picture |
-| `app-windows replay FILE [SPEED]` | shows a recording's windows, timed as they came |
+| `app-windows replay FILE [SPEED]` | shows a recording's windows, timed as they came, and lists its apps |
+| `app-windows send FILE...` | hands files to the guest, which opens them; this is what "Open in macOS" runs |
+| `app-windows watch DIR [EXTENSION...]` | hands over each such file that lands in `DIR`, `dmg`, `pkg` and `mpkg` unless told |
 
 `--server HOST:PORT` names the guest's server, and `--token-file` its
 token, which by default is `~/.config/app-windows/<prefix>/token`.
@@ -104,7 +129,9 @@ is captured until a client asks to watch windows. A client that falls
 behind misses pictures rather than queueing them, and its next picture is a
 keyframe.
 
-Nothing in the protocol is particular to macOS. Keys are Linux key codes,
+A file goes as a start message with its name, size and whether to open it,
+its bytes in pieces, and an end message, and the guest answers with where it
+saved it. Nothing in the protocol is particular to macOS. Keys are Linux key codes,
 which a guest maps to its own, and menus already have derisk's shape.
 
 ## How it is tested
@@ -119,7 +146,10 @@ runners, which are Apple hardware, on Apple silicon and on Intel. There
 from the same machine with the scripts in `src/app-windows/tests`. Those
 scripts open TextEdit and Calculator. They type, pick menu items, copy and
 paste, open a context menu, resize, hold a key and time how long a key
-takes to show. A step fails when its picture, size, title, menus or
+takes to show. Another downloads Rectangle's newest disk image into a
+folder `app-windows watch` looks at, and sends an installer package built
+with `pkgbuild`, then waits for the Finder and Installer windows they
+open. A step fails when its picture, size, title, menus or
 clipboard never comes. Each run keeps every picture, a report with frame
 rates and key latency, and a recording, which `app-windows replay` shows on
 a desktop.
@@ -132,4 +162,6 @@ a desktop.
   or a text field.
 - Only text crosses the clipboard, not pictures or files.
 - Drag and drop between the guest and this desktop does not work.
+- A package downloaded inside another machine stays in that machine; only
+  this desktop's own Files and Downloads hand packages to macOS.
 - Sound stays in the guest.
