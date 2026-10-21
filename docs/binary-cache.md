@@ -84,12 +84,14 @@ Five things are set up once, outside the repository:
    is signed with. Make it on a machine you trust, with no passphrase,
    because CI signs unattended:
 
-   ``` export GNUPGHOME=$(mktemp -d) mkdir -p nixos/keys gpg --batch
-   --pinentry-mode loopback --passphrase '' --quick-gen-key 'LosOS Desktop
-   updates' ed25519 sign never gpg --armor --export >
-   nixos/keys/update-signing.asc gpg --armor --export-secret-keys # paste into
-   the secret UPDATE_SIGNING_KEY rm -rf "$GNUPGHOME" # once the secret and an
-   offline copy are saved ```
+   ```
+   export GNUPGHOME=$(mktemp -d)
+   mkdir -p nixos/keys
+   gpg --batch --pinentry-mode loopback --passphrase '' --quick-gen-key 'LosOS Desktop updates' ed25519 sign never
+   gpg --armor --export > nixos/keys/update-signing.asc
+   gpg --armor --export-secret-keys   # paste into the secret UPDATE_SIGNING_KEY
+   rm -rf "$GNUPGHOME"                # once the secret and an offline copy are saved
+   ```
 
    Commit `nixos/keys/update-signing.asc`, which `losos.update.pubring`
    reads. sysupdate verifies every update against it. Put the key's
