@@ -10,8 +10,9 @@
 //!
 //! The windows carry no title bar of their own: the guest draws its own,
 //! and dragging it moves the window here (`Moving`). A size the desktop
-//! gives a window (tiling, maximizing) is asked of the guest, and the
-//! picture is stretched to it until the guest's window has that size.
+//! gives a window (tiling, maximizing) is asked of the guest, and until the
+//! guest's window has that size, which a dialog or a fixed-size window
+//! never does, the picture keeps its shape in the middle of it.
 //!
 //! Input goes back in the guest window's own points. Keys go by their Linux
 //! code with the text this desktop's layout types with them; held keys
@@ -83,6 +84,7 @@ use smithay_client_toolkit::{
     },
 };
 
+use crate::decode::Picture;
 use crate::derisk::{self, Bridge, Register};
 use crate::entries;
 use crate::link::Link;
@@ -132,6 +134,12 @@ struct Shown {
     /// The last size asked of the guest, so it is asked once.
     asked: Option<(u32, u32)>,
     buffers: Vec<Buffer>,
+    /// The picture on screen, drawn again when the desktop resizes the
+    /// window and the guest sends no new one, as a window that will not
+    /// take the size never does.
+    last: Option<Picture>,
+    /// The size changed since the last picture was drawn.
+    resized: bool,
     /// A picture is on screen and the compositor has not yet said when to
     /// draw the next.
     drawing: bool,
@@ -145,18 +153,33 @@ impl Shown {
         }
     }
 
-    /// Guest points for a position on this surface.
+    /// Guest points for a position on this surface, kept on the guest's
+    /// window so a press on the bars beside it lands on its edge and not on
+    /// whatever is behind it on the guest.
     fn to_guest(&self, x: f64, y: f64) -> (f64, f64) {
-        let (w, h) = (f64::from(self.size.0.max(1)), f64::from(self.size.1.max(1)));
-        (x * self.info.width / w, y * self.info.height / h)
+        let (scale, ox, oy) = self.fit();
+        (
+            ((x - ox) / scale).clamp(0.0, self.info.width),
+            ((y - oy) / scale).clamp(0.0, self.info.height),
+        )
     }
 
     /// How many logical pixels here one guest point takes, across and down.
     fn stretch(&self) -> (f64, f64) {
-        (
-            f64::from(self.size.0) / self.info.width.max(1.0),
-            f64::from(self.size.1) / self.info.height.max(1.0),
-        )
+        let (scale, _, _) = self.fit();
+        (scale, scale)
+    }
+
+    /// Where the guest's picture goes on this surface: how many logical
+    /// pixels a guest point takes, and its offset from the top left. A size
+    /// the desktop chose that the guest's window does not take, as a
+    /// dialog or Calculator never does, keeps the picture's shape and
+    /// centres it, with bars either side, instead of stretching it.
+    fn fit(&self) -> (f64, f64, f64) {
+        let (w, h) = (f64::from(self.size.0), f64::from(self.size.1));
+        let (gw, gh) = (self.info.width.max(1.0), self.info.height.max(1.0));
+        let scale = (w / gw).min(h / gh).max(f64::MIN_POSITIVE);
+        (scale, (w - gw * scale) / 2.0, (h - gh * scale) / 2.0)
     }
 }
 
@@ -426,6 +449,8 @@ impl App {
                 sized_here: stretched,
                 asked: None,
                 buffers: Vec::new(),
+                last: None,
+                resized: false,
                 drawing: false,
             },
         );
@@ -437,8 +462,9 @@ impl App {
         let positioner = XdgPositioner::new(&self.xdg).map_err(|e| e.to_string())?;
         let (sx, sy) = parent.stretch();
         let (w, h) = rounded(info.width * sx, info.height * sy);
-        let x = ((info.x - parent.info.x) * sx).round() as i32;
-        let y = ((info.y - parent.info.y) * sy).round() as i32;
+        let (_, ox, oy) = parent.fit();
+        let x = ((info.x - parent.info.x) * sx + ox).round() as i32;
+        let y = ((info.y - parent.info.y) * sy + oy).round() as i32;
         // The anchor has to lie on the parent; whatever of the offset does
         // not is added after.
         let ax = x.clamp(0, parent.size.0 as i32 - 1);
@@ -549,14 +575,31 @@ impl App {
             // The picture waits in its mailbox for the frame callback.
             return;
         }
-        let Some(picture) = self.frames.take(window) else {
-            return;
+        let picture = match self.frames.take(window) {
+            Some(picture) => picture,
+            None if shown.resized && shown.last.is_some() => shown.last.take().unwrap(),
+            None => return,
         };
-        let (width, height, stride) = (
-            picture.width as i32,
-            picture.height as i32,
-            picture.stride as i32,
-        );
+        shown.resized = false;
+        // With bars beside the picture, the buffer is the surface's shape
+        // in the picture's pixels, black but for the picture in its middle.
+        let (pw, ph) = (picture.width as usize, picture.height as usize);
+        let (scale, ox, oy) = shown.fit();
+        let per_point = pw as f64 / (shown.info.width.max(1.0) * scale);
+        let (bw, bh, bx, by) = if shown.viewport.is_some() && (ox >= 1.0 || oy >= 1.0) {
+            let bw = ((f64::from(shown.size.0) * per_point).round() as usize).max(pw);
+            let bh = ((f64::from(shown.size.1) * per_point).round() as usize).max(ph);
+            (bw, bh, (bw - pw) / 2, (bh - ph) / 2)
+        } else {
+            (pw, ph, 0, 0)
+        };
+        let barred = (bw, bh) != (pw, ph);
+        let (width, height) = (bw as i32, bh as i32);
+        let stride = if barred {
+            (bw * 4) as i32
+        } else {
+            picture.stride as i32
+        };
         let pool = &mut self.pool;
         // A buffer the compositor is done with, of this size, or a new one;
         // buffers of an old size go.
@@ -578,8 +621,17 @@ impl App {
         let Some(canvas) = buffer.canvas(pool) else {
             return;
         };
-        let n = canvas.len().min(picture.pixels.len());
-        canvas[..n].copy_from_slice(&picture.pixels[..n]);
+        if barred {
+            canvas.fill(0);
+            let row = pw * 4;
+            for (y, line) in picture.pixels.chunks(picture.stride).take(ph).enumerate() {
+                let at = (by + y) * bw * 4 + bx * 4;
+                canvas[at..at + row].copy_from_slice(&line[..row]);
+            }
+        } else {
+            let n = canvas.len().min(picture.pixels.len());
+            canvas[..n].copy_from_slice(&picture.pixels[..n]);
+        }
 
         let surface = shown.surface().clone();
         if buffer.attach_to(&surface).is_err() {
@@ -597,6 +649,7 @@ impl App {
         surface.frame(&self.qh, FrameCallbackData(surface.clone()));
         surface.commit();
         shown.drawing = true;
+        shown.last = Some(picture);
     }
 
     fn send_pointer(&self, window: u32, x: f64, y: f64) {
@@ -739,6 +792,7 @@ impl WindowHandler for App {
             let size = (w.get(), h.get());
             if size != shown.size {
                 shown.size = size;
+                shown.resized = true;
                 shown.sized_here =
                     configure.is_maximized() || configure.is_fullscreen() || configure.is_tiled();
                 if shown.asked != Some(size) {
