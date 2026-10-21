@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -55,8 +55,9 @@ use objc2_screen_capture_kit::{
 use objc2_video_toolbox::{
     kVTCompressionPropertyKey_AllowFrameReordering, kVTCompressionPropertyKey_AverageBitRate,
     kVTCompressionPropertyKey_ColorPrimaries, kVTCompressionPropertyKey_ExpectedFrameRate,
-    kVTCompressionPropertyKey_MaxKeyFrameInterval, kVTCompressionPropertyKey_ProfileLevel,
-    kVTCompressionPropertyKey_RealTime, kVTCompressionPropertyKey_TransferFunction,
+    kVTCompressionPropertyKey_MaxFrameDelayCount, kVTCompressionPropertyKey_MaxKeyFrameInterval,
+    kVTCompressionPropertyKey_ProfileLevel, kVTCompressionPropertyKey_RealTime,
+    kVTCompressionPropertyKey_TransferFunction,
     kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
     kVTCompressionPropertyKey_YCbCrMatrix, kVTEncodeFrameOptionKey_ForceKeyFrame,
     kVTProfileLevel_H264_High_AutoLevel,
@@ -492,7 +493,7 @@ pub fn track(hub: &Arc<Hub>) {
             }
         }
         for (id, stream) in streams.iter_mut() {
-            stream.output.repeat_if_asked();
+            stream.output.still();
             let Some((info, _)) = current.get(id) else {
                 continue;
             };
@@ -541,7 +542,10 @@ fn configuration(
         config.setPixelFormat(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
         // The host draws its own pointer over the window.
         config.setShowsCursor(false);
-        config.setQueueDepth(4);
+        // One more than the four it had: the window's latest picture is
+        // kept (`OutputIvars::last`), and a stream whose surfaces are all
+        // held stops sending.
+        config.setQueueDepth(5);
         // macOS 14 and later draw a window's shadow into its picture unless
         // told not to; the host draws its own window's edges.
         if config.respondsToSelector(sel!(setIgnoreShadowsSingleWindow:)) {
@@ -565,6 +569,7 @@ fn start(
         encoder: Mutex::new(None),
         epoch: Instant::now(),
         last: Mutex::new(None),
+        samples: AtomicU32::new(0),
     });
     unsafe {
         let display_frame = display.map(|d| d.frame());
@@ -627,10 +632,20 @@ pub struct OutputIvars {
     keyframe: Arc<AtomicBool>,
     encoder: Mutex<Option<Encoder>>,
     epoch: Instant,
-    /// The window's latest picture and when it came. ScreenCaptureKit sends
-    /// nothing while a window stays the same, so a keyframe asked for then
-    /// is made from this.
-    last: Mutex<Option<(CFRetained<objc2_core_video::CVImageBuffer>, Instant)>>,
+    /// The window's latest picture. ScreenCaptureKit sends nothing while a
+    /// window stays the same, so a keyframe asked for then is made from it.
+    last: Mutex<Option<Last>>,
+    /// Buffers ScreenCaptureKit has sent, for the log to say what the first
+    /// few were.
+    samples: AtomicU32,
+}
+
+#[derive(Clone)]
+struct Last {
+    image: CFRetained<objc2_core_video::CVImageBuffer>,
+    at: Instant,
+    /// Whether it has been pushed out of the encoder since it came.
+    flushed: bool,
 }
 
 define_class!(
@@ -678,43 +693,66 @@ impl WindowOutput {
     /// One picture from ScreenCaptureKit, on the window's own queue.
     fn picture(&self, sample: &CMSampleBuffer) {
         let ivars = self.ivars();
+        let status = frame_status(sample);
+        let image = unsafe { sample.image_buffer() };
+        if ivars.samples.fetch_add(1, Ordering::Relaxed) < SAMPLES_LOGGED {
+            eprintln!(
+                "window {}: ScreenCaptureKit sent status {status:?}{}",
+                ivars.window,
+                if image.is_some() { "" } else { ", no picture" }
+            );
+        }
         // ScreenCaptureKit also sends a buffer when nothing changed (idle)
         // or the window is hidden. Complete frames carry a picture, and so
         // does the first a stream sends on some Macs, marked started.
-        if !matches!(frame_status(sample), Some(FRAME_COMPLETE | FRAME_STARTED)) {
+        if !matches!(status, Some(FRAME_COMPLETE | FRAME_STARTED)) {
             return;
         }
-        let Some(image) = (unsafe { sample.image_buffer() }) else {
+        let Some(image) = image else {
             return;
         };
-        let first = ivars
-            .last
-            .lock()
-            .unwrap()
-            .replace((image.clone(), Instant::now()));
+        let first = ivars.last.lock().unwrap().replace(Last {
+            image: image.clone(),
+            at: Instant::now(),
+            flushed: false,
+        });
         if first.is_none() {
             eprintln!("window {}: first picture", ivars.window);
         }
         self.encode(&image);
     }
 
-    /// Makes the latest picture again, as a keyframe, for a window whose
-    /// keyframe was asked for while it has not changed: a connection that
-    /// has just started watching, or a decoder that lost its place.
-    fn repeat_if_asked(&self) {
+    /// Called each tick, off the window's queue. Once a window has stayed
+    /// the same a moment, its latest picture is pushed out of the encoder,
+    /// which may hold a picture back until the next one comes, and that
+    /// for a still window is never. It is made again as a keyframe if one
+    /// was asked for meanwhile: by a connection that has just started
+    /// watching, or a decoder that lost its place.
+    fn still(&self) {
         let ivars = self.ivars();
-        if !ivars.keyframe.load(Ordering::Relaxed) {
-            return;
-        }
         let last = ivars.last.lock().unwrap().clone();
-        let Some((image, at)) = last else { return };
-        // A window that is changing sends its own keyframe in a moment.
-        if at.elapsed() < REPEAT_AFTER {
+        let Some(last) = last else { return };
+        // A window that is changing sends its own pictures in a moment.
+        if last.at.elapsed() < REPEAT_AFTER {
             return;
         }
-        self.encode(&image);
-        if let Some(last) = ivars.last.lock().unwrap().as_mut() {
-            last.1 = Instant::now();
+        let repeat = ivars.keyframe.load(Ordering::Relaxed);
+        if !repeat && last.flushed {
+            return;
+        }
+        if repeat {
+            self.encode(&last.image);
+        }
+        if let Some(encoder) = ivars.encoder.lock().unwrap().as_ref() {
+            encoder.flush();
+        }
+        let mut now = ivars.last.lock().unwrap();
+        // Unless a new picture came meanwhile, which is the encoder's again.
+        if let Some(now) = now.as_mut().filter(|n| n.at == last.at) {
+            now.flushed = true;
+            if repeat {
+                now.at = Instant::now();
+            }
         }
     }
 
@@ -749,9 +787,14 @@ impl WindowOutput {
 const FRAME_COMPLETE: i64 = 0;
 const FRAME_STARTED: i64 = 4;
 
-/// How long a window must have stayed the same before a keyframe asked for
-/// is made from its last picture rather than waited for.
+/// How long a window must have stayed the same before its last picture is
+/// pushed out of the encoder, or made again for a keyframe asked for,
+/// rather than the next picture waited for.
 const REPEAT_AFTER: Duration = Duration::from_millis(150);
+
+/// How many of a stream's first buffers the log describes: enough to see
+/// how a stream starts on a Mac that shows a window late or never.
+const SAMPLES_LOGGED: u32 = 3;
 
 /// SCStreamFrameInfoStatus of a sample: 0 complete, 1 idle, 2 blank, ...
 fn frame_status(sample: &CMSampleBuffer) -> Option<i64> {
@@ -786,6 +829,8 @@ struct Sink {
     height: u32,
     hub: Arc<Hub>,
     keyframe: Arc<AtomicBool>,
+    /// Whether a picture has left the encoder yet, for the log.
+    sent: AtomicBool,
 }
 
 struct Encoder {
@@ -892,6 +937,7 @@ impl Encoder {
             height: height as u32,
             hub,
             keyframe,
+            sent: AtomicBool::new(false),
         }));
         let Some((session, _)) = Self::open_with(width, height, Some(encoded), sink.cast()) else {
             drop(unsafe { Box::from_raw(sink) });
@@ -907,6 +953,14 @@ impl Encoder {
             set(
                 kVTCompressionPropertyKey_AllowFrameReordering,
                 CFBoolean::new(false),
+            );
+            // Nor any picture held back to look ahead, which the software
+            // encoder does otherwise: a window's last change would show
+            // only with its next. Not every encoder takes it; `flush`
+            // covers those.
+            set(
+                kVTCompressionPropertyKey_MaxFrameDelayCount,
+                &CFNumber::new_i32(0),
             );
             set(
                 kVTCompressionPropertyKey_ProfileLevel,
@@ -993,6 +1047,24 @@ impl Encoder {
     }
 }
 
+impl Encoder {
+    /// Has every picture given so far come out.
+    fn flush(&self) {
+        let all = CMTime {
+            value: 0,
+            timescale: 0,
+            flags: CMTimeFlags::empty(),
+            epoch: 0,
+        };
+        let status = unsafe { self.session.complete_frames(all) };
+        if status != 0 {
+            eprintln!("finishing pictures of window {}: {status}", unsafe {
+                (*self.sink).window
+            });
+        }
+    }
+}
+
 impl Drop for Encoder {
     fn drop(&mut self) {
         unsafe {
@@ -1024,6 +1096,14 @@ unsafe extern "C-unwind" fn encoded(
         return;
     };
     let micros = unsafe { sample.presentation_time_stamp() }.value.max(0) as u64;
+    if !sink.sent.swap(true, Ordering::Relaxed) {
+        eprintln!(
+            "window {}: first picture sent, {} bytes{}",
+            sink.window,
+            data.len(),
+            if keyframe { ", a keyframe" } else { "" }
+        );
+    }
     sink.hub.video(
         Video {
             window: sink.window,
