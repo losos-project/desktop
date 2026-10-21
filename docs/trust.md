@@ -89,7 +89,9 @@ no source hash to update: the submodule commit already names the tree.
 `tools/nix-refresh-hashes before.txt` after it finds and rewrites that
 `cargoHash`.
 derisk's own `Cargo.lock` still fetches mcsapi by git revision, so move
-`components/mcsapi` to the revision that lock names.
+`components/mcsapi` to the revision that lock names. Every Monday the
+lockfile update moves all three to releases ([Keeping the pins
+current](#keeping-the-pins-current)); a move by hand in between stays.
 
 ## Keeping the pins current
 
@@ -100,6 +102,15 @@ runs `tools/update-lockfiles`, which a person can run the same way:
 - `cargo update` moves every `Cargo.lock` outside `components/`, and
   `npm update --package-lock-only` every `package-lock.json`, each only as
   far as its manifest allows, with cargo and npm from the new nixpkgs.
+- The submodules move to releases. derisk, mcsapi and pm publish GitHub
+  releases on the same cadences as the OS ([Release
+  cadences](releases.md#release-cadences)), and cut their weekly ones at
+  02:17 UTC, before this runs. `components/derisk` and `components/pm` move
+  to their repository's newest weekly release, and `components/mcsapi` to
+  the revision derisk's `Cargo.lock` names at that release, so the two
+  agree. A pin only moves forward: one moved past the release by hand stays
+  until a newer release passes it. Inside the submodules nothing else
+  moves, since each repository updates its own lockfiles the same way.
 - `tools/nix-refresh-hashes` then re-fetches every fixed output pinned in
   this repository whose derivation those changes touched, and writes back
   the hash it really has. Re-fetching is the point: a stale hash still names
@@ -111,8 +122,6 @@ The result is a pull request on an `automation/lockfiles-<date>` branch that
 merges itself with a merge commit once every check on it has passed and no
 VM test warned; otherwise it waits for a person, with a comment saying
 which check stopped it. A newer week's pull request closes the older one.
-The submodules stay where they are, since each of derisk, mcsapi and pm
-updates its own lockfiles the same way and moving a pin is a decision.
 
 > [!IMPORTANT]
 > The workflow opens and merges with `LOCKFILE_UPDATE_TOKEN`, a fine-grained

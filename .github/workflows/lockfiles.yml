@@ -3,7 +3,8 @@
 # "Keeping the pins current").
 #
 # `update` runs tools/update-lockfiles: flake.lock, every Cargo.lock and
-# package-lock.json outside components/, and the fixed-output hashes they
+# package-lock.json outside components/, the submodules to their
+# repositories' newest weekly releases, and the fixed-output hashes they
 # move. If anything changed it pushes `automation/lockfiles-<date>`, opens a
 # pull request for it and closes the previous week's if that one never
 # merged. `merge` wakes whenever `ci` or `docs` finishes on such a branch,
@@ -64,12 +65,15 @@ jobs:
           sudo systemctl restart nix-daemon
           echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
 
-      # The submodules are evaluated with the release, though nothing in them
-      # is updated here.
+      # The submodules are evaluated with the release, and move to their
+      # repositories' weekly releases.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false, submodules: true }
 
+      # gh reads the components' releases with it; they are public.
       - name: Update the lockfiles
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           tools/update-lockfiles > "$RUNNER_TEMP/summary.md"
           cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
@@ -82,7 +86,8 @@ jobs:
           BASE: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if git diff --quiet; then
+          # HEAD, because a moved submodule is staged, not just changed.
+          if git diff HEAD --quiet; then
             echo "Every lockfile is already current." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -113,7 +118,7 @@ jobs:
             echo
             echo "## Reviewer notes"
             echo
-            echo "Made by \`tools/update-lockfiles\`. Manifests and submodule pins are unchanged."
+            echo "Made by \`tools/update-lockfiles\`. Manifests are unchanged; a submodule moves only to its repository's newest weekly release, or to the mcsapi revision derisk's lock names."
           } > "$RUNNER_TEMP/body.md"
           url=$(gh pr create --base "$BASE" --head "$branch" \
             --title "chore(deps): update lockfiles" --body-file "$RUNNER_TEMP/body.md")
