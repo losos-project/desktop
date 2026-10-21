@@ -449,6 +449,9 @@ pub fn track(hub: &Arc<Hub>) {
                 let Some(window) = shareable.windows.get(&id) else {
                     // ScreenCaptureKit does not offer every window the
                     // window server lists (without Screen Recording, none).
+                    if !unshareable.contains_key(&id) {
+                        eprintln!("window {id}: not offered by ScreenCaptureKit yet");
+                    }
                     let wait = unshareable
                         .get(&id)
                         .map_or(RETRY, |(_, w)| (*w * 2).min(RETRY_MAX));
@@ -464,6 +467,18 @@ pub fn track(hub: &Arc<Hub>) {
                 };
                 match start(hub, window, display.as_deref(), &tracked) {
                     Ok(stream) => {
+                        eprintln!(
+                            "window {id}: capturing {} \"{}\" at {}x{}{}",
+                            tracked.info.app,
+                            tracked.info.title,
+                            stream.width,
+                            stream.height,
+                            if display.is_some() {
+                                ", cut from its display"
+                            } else {
+                                ""
+                            }
+                        );
                         streams.insert(id, stream);
                     }
                     Err(e) => {
@@ -477,6 +492,7 @@ pub fn track(hub: &Arc<Hub>) {
             }
         }
         for (id, stream) in streams.iter_mut() {
+            stream.output.repeat_if_asked();
             let Some((info, _)) = current.get(id) else {
                 continue;
             };
@@ -548,6 +564,7 @@ fn start(
         keyframe: tracked.keyframe.clone(),
         encoder: Mutex::new(None),
         epoch: Instant::now(),
+        last: Mutex::new(None),
     });
     unsafe {
         let display_frame = display.map(|d| d.frame());
@@ -610,6 +627,10 @@ pub struct OutputIvars {
     keyframe: Arc<AtomicBool>,
     encoder: Mutex<Option<Encoder>>,
     epoch: Instant,
+    /// The window's latest picture and when it came. ScreenCaptureKit sends
+    /// nothing while a window stays the same, so a keyframe asked for then
+    /// is made from this.
+    last: Mutex<Option<(CFRetained<objc2_core_video::CVImageBuffer>, Instant)>>,
 }
 
 define_class!(
@@ -658,15 +679,49 @@ impl WindowOutput {
     fn picture(&self, sample: &CMSampleBuffer) {
         let ivars = self.ivars();
         // ScreenCaptureKit also sends a buffer when nothing changed (idle)
-        // or the window is hidden; only complete frames carry a picture.
-        if frame_status(sample) != Some(0) {
+        // or the window is hidden. Complete frames carry a picture, and so
+        // does the first a stream sends on some Macs, marked started.
+        if !matches!(frame_status(sample), Some(FRAME_COMPLETE | FRAME_STARTED)) {
             return;
         }
         let Some(image) = (unsafe { sample.image_buffer() }) else {
             return;
         };
-        let width = CVPixelBufferGetWidth(&image);
-        let height = CVPixelBufferGetHeight(&image);
+        let first = ivars
+            .last
+            .lock()
+            .unwrap()
+            .replace((image.clone(), Instant::now()));
+        if first.is_none() {
+            eprintln!("window {}: first picture", ivars.window);
+        }
+        self.encode(&image);
+    }
+
+    /// Makes the latest picture again, as a keyframe, for a window whose
+    /// keyframe was asked for while it has not changed: a connection that
+    /// has just started watching, or a decoder that lost its place.
+    fn repeat_if_asked(&self) {
+        let ivars = self.ivars();
+        if !ivars.keyframe.load(Ordering::Relaxed) {
+            return;
+        }
+        let last = ivars.last.lock().unwrap().clone();
+        let Some((image, at)) = last else { return };
+        // A window that is changing sends its own keyframe in a moment.
+        if at.elapsed() < REPEAT_AFTER {
+            return;
+        }
+        self.encode(&image);
+        if let Some(last) = ivars.last.lock().unwrap().as_mut() {
+            last.1 = Instant::now();
+        }
+    }
+
+    fn encode(&self, image: &objc2_core_video::CVImageBuffer) {
+        let ivars = self.ivars();
+        let width = CVPixelBufferGetWidth(image);
+        let height = CVPixelBufferGetHeight(image);
         let mut encoder = ivars.encoder.lock().unwrap();
         if encoder
             .as_ref()
@@ -686,9 +741,17 @@ impl WindowOutput {
         };
         let keyframe = ivars.keyframe.swap(false, Ordering::Relaxed);
         let micros = ivars.epoch.elapsed().as_micros() as i64;
-        encoder.encode(&image, micros, keyframe);
+        encoder.encode(image, micros, keyframe);
     }
 }
+
+/// SCStreamFrameStatus values that carry a picture.
+const FRAME_COMPLETE: i64 = 0;
+const FRAME_STARTED: i64 = 4;
+
+/// How long a window must have stayed the same before a keyframe asked for
+/// is made from its last picture rather than waited for.
+const REPEAT_AFTER: Duration = Duration::from_millis(150);
 
 /// SCStreamFrameInfoStatus of a sample: 0 complete, 1 idle, 2 blank, ...
 fn frame_status(sample: &CMSampleBuffer) -> Option<i64> {
