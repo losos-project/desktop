@@ -7,36 +7,34 @@ technical report. Everything it knows comes from fwupd's
 protections: Secure Boot, the SPI descriptor, Intel BootGuard, TPM
 reconstruction.
 
-That is a real question. It is not the question a desktop user is asking, which
-is nearer "is this machine set up the way a careful person would set it up".
-Whether the disk is encrypted, whether the kernel is locked down, whether
-modules are signed, whether the IOMMU is on, whether the usual hardening
-sysctls are set — none of it appears in that dialog, because fwupd reports on
-the OS only where a plugin happens to exist. lynis answers those questions, for
-servers, as a shell script producing a report nobody reads twice.
+Those matter, but a desktop user is asking something closer to "is this
+machine set up the way a careful person would set it up". Is the disk
+encrypted? Is the kernel locked down, are modules signed, is the IOMMU on, are
+the usual hardening sysctls set? None of that appears in the dialog, because
+fwupd reports on the OS only where it has a plugin for it. lynis answers those
+questions for servers, as a shell script that prints a long text report.
 
-So this OS ships both halves, in one list.
+This OS answers both sets of questions in one list.
 
 ## Two providers, one shape
 
-`losos-security` (`src/losos-security/`) runs the OS-level checks
-and serves them on the system bus as `io.losos.Security1`, answering
-`GetHostSecurityAttrs` — deliberately the same method name, and the same
-`a{sv}` dictionary keys, that fwupd uses. That choice is the whole design: the
-gnome-control-center patch is "ask a second bus name and file the answers
-separately", not a second parser and a second widget. The key set is pinned in
-`src/attr.rs` against gnome-control-center's
-`panels/privacy/firmware-security/cc-firmware-security-utils.c`, which is the
-consumer.
+`losos-security`, in `src/losos-security/`, runs the OS-level checks and
+serves them on the system bus as `io.losos.Security1`. It answers
+`GetHostSecurityAttrs`, the same method name fwupd uses, with the same `a{sv}`
+dictionary keys. Because the answers have fwupd's shape, the
+gnome-control-center patch only asks a second bus name and files the answers
+separately. It needs no second parser and no second widget. `src/attr.rs` pins
+the key set against the code that reads it, gnome-control-center's
+`panels/privacy/firmware-security/cc-firmware-security-utils.c`.
 
-The attributes go into their own table, not into the HSI tables. HSI levels are
-defined by fwupd, for firmware; filing "disk encryption" under HSI-1 would
-claim an equivalence that does not exist.
+The attributes go into their own table, not into the HSI tables. fwupd
+defines the HSI levels for firmware, and filing "disk encryption" under HSI-1
+would claim the two are equivalent when they are not.
 
 ## The checks
 
-Each reports a `FwupdSecurityAttrResult`, a level, and — this is the part that
-is not fwupd's — the path it read and what it found.
+Each check reports a `FwupdSecurityAttrResult` and a level. Unlike fwupd's,
+it also reports the path it read and what it found there.
 
 | Check | Reads |
 |---|---|
@@ -53,46 +51,45 @@ is not fwupd's — the path it read and what it found.
 | Unprivileged BPF | `kernel.unprivileged_bpf_disabled` ≥ 1 |
 | BPF JIT hardening | `net.core.bpf_jit_harden` ≥ 1 |
 
-Two properties are load-bearing and easy to lose:
+Two rules matter here, and a careless change can break either.
 
-**Every check names where it looked.** A verdict without its evidence cannot be
-argued with, and a security report nobody can argue with is one nobody can
-correct. The evidence rides in the `Description` field, so the panel shows it
-when the row is expanded.
+**Every check names where it looked.** If a verdict comes without its
+evidence, nobody can tell when it is wrong. The evidence goes in the
+`Description` field, so the panel shows it when the row is expanded.
 
-**Every check is rooted.** Nothing opens an absolute path; they all go through
-`Context::path`, which prefixes a configurable root. That is what makes the
-suite testable — `tests/checks.rs` builds a fixture directory of sysfs files
-and asserts both directions of every check, with no TPM and no root — and it
-costs one function call.
+**Every check is rooted.** No check opens an absolute path. They all go
+through `Context::path`, which prefixes a configurable root. That one
+function call makes the suite testable: `tests/checks.rs` builds a fixture
+directory of sysfs files and tests every check passing and failing, with no
+TPM and no root.
 
-The overall level is the **weakest link**: the highest level at which every
-check passed, not a score and not a percentage. A machine with nine passes and
-one level-1 failure has a level-0 problem, and averaging that away is how a
-report becomes decoration. A level with no checks in it does not count as
-passed — `all()` over an empty iterator is true, which would otherwise report
-the most flattering possible answer arrived at by testing nothing.
+The overall level is the weakest link, the highest level at which every check
+passed. It is not a score or a percentage. A machine with nine passes and one
+level-1 failure has a level-0 problem, and an average would hide it. A level
+with no checks in it does not count as passed. `all()` over an empty iterator
+is true, so without that rule an untested level would report the best possible
+answer.
 
 ## The panel change
 
 `nixos/pkgs/patches/gnome-control-center/0002-firmware-security-report-os-level-checks.patch`
 does three things:
 
-- Adds a third D-Bus proxy, to `io.losos.Security1`, alongside the two fwupd
+- Adds a third D-Bus proxy, to `io.losos.Security1`, beside the two fwupd
   ones, and files its reply into a separate table through the existing parser.
-- Makes the page's availability a count rather than a single callback's
-  decision. The two providers reply in either order, so neither can conclude on
-  its own that there is nothing to show; the "unavailable" page appears only
-  when both have failed. The fwupd failure path now counts itself, which
-  upstream never needed to do — without it a machine with the OS provider and
-  no fwupd waits forever for a verdict. A provider that answered also overrides
-  the page hiding itself on a virtual machine, where a firmware index means
-  nothing and the OS checks still do.
-- Lists the checks in the dialog. Upstream keeps them inside the copied
-  technical report only, which is defensible while every check is about
-  firmware the reader cannot change from here. It stops being defensible once
-  the list includes a lockdown mode and four sysctls, which can be fixed by
-  someone who is told which one failed.
+- Counts replies to decide whether the page is available, instead of leaving
+  it to one callback. The two providers can reply in either order, so neither
+  can decide alone that there is nothing to show. The "unavailable" page
+  appears only when both have failed. The fwupd failure path now counts
+  itself, which upstream never needed. Without that, a machine with the OS
+  provider and no fwupd would wait forever for a verdict. Upstream hides the
+  page on a virtual machine, where a firmware index means nothing. If any
+  provider answered, the page shows anyway, because the OS checks still apply
+  there.
+- Lists the checks in the dialog. Upstream shows them only inside the copied
+  technical report. That made sense while every check was about firmware the
+  reader cannot change from here. This list includes a lockdown mode and four
+  sysctls, and a reader who is told which one failed can fix it.
 
 ## Running it
 
@@ -102,12 +99,12 @@ losos-security --json
 losos-security --root ./fixture   # every check against a fixture tree
 ```
 
-The service itself is bus-activated, not enabled: the unit has no `[Install]`
-section, and `io.losos.Security1.service` in `dbus-1/system-services` names
-`SystemdService=` so dbus-daemon hands the start to systemd and the sandbox in
-`losos-security.service` applies. It runs as root — two of the paths above are
-not world-readable — and then gives back everything a root process could
-otherwise do: no capabilities, no writable filesystem, no network namespace,
-`AF_UNIX` only, `@system-service` and nothing else. A security reporter that is
-itself an attack surface has subtracted from the security of the machine it
-reports on.
+The service is bus-activated, not enabled. The unit has no `[Install]`
+section. `io.losos.Security1.service` in `dbus-1/system-services` names
+`SystemdService=`, so dbus-daemon hands the start to systemd and the sandbox
+in `losos-security.service` applies. It runs as root, because two of the paths
+above are not world-readable. The sandbox then takes away everything else a
+root process could do. It has no capabilities, no writable filesystem and no
+network namespace, may open only `AF_UNIX` sockets, and may make only the
+`@system-service` system calls. A security checker that an attacker could
+exploit would make the machine less safe.

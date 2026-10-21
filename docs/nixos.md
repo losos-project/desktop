@@ -1,9 +1,9 @@
 # Where the sections of nixos.md went
 
-This file used to hold all of the build documentation in one page. Each of
+This file used to hold all of the build documentation on one page. Each of
 its sections is now a page of its own. Comments in `nixos/`, `tools/` and the
-workflows still cite it as `docs/nixos.md`, "Section"; this table finds the
-section.
+workflows still cite it as `docs/nixos.md`, "Section", and this table says
+where each section went.
 
 | Section | Now |
 |---|---|

@@ -1,17 +1,18 @@
 # losos-desktop
 
-A [derisk](https://github.com/losos-project/derisk) desktop operating system
-that uses systemd for everything it can and installs as an image. It is a
-NixOS configuration, `flake.nix` plus the modules in `nixos/`, on nixpkgs'
-stock glibc packages for `x86_64-linux` and `aarch64-linux`, and it also
+A [derisk](https://github.com/losos-project/derisk) desktop operating system.
+It uses systemd for everything it can and installs as an image. The OS is a
+NixOS configuration, `flake.nix` plus the modules in `nixos/`, built on
+nixpkgs' stock glibc packages for `x86_64-linux` and `aarch64-linux`. It also
 builds as one generic system image for Android phones and tablets over
-[Halium](https://halium.org), which the
-[web flasher](https://losos-project.github.io/losos-desktop/flasher/) installs.
+[Halium](https://halium.org), and the
+[web flasher](https://losos-project.github.io/losos-desktop/flasher/) installs
+that.
 
 The documentation is on the
 [website](https://losos-project.github.io/losos-desktop/) and in the
 [wiki](https://github.com/losos-project/losos-desktop/wiki). Both are
-generated from [`docs/`](docs/index.md), which is where to edit it.
+generated from [`docs/`](docs/index.md), so edit it there.
 
 ## Building
 
