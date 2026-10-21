@@ -758,9 +758,13 @@ jobs:
           done
           echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+          # The GPU driver where NixOS keeps it. The runner has no GPU, so
+          # it is Mesa's, drawing with llvmpipe on the processor, through
+          # the same path a PC's GPU driver takes.
+          sudo ln -sfn "$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#mesa)" /run/opengl-driver
       - name: Set Android up, install an app and open it in a window
         run: |
-          nix shell nixpkgs#xvfb nixpkgs#xdotool nixpkgs#xorg.xprop nixpkgs#imagemagick nixpkgs#jq \
+          nix shell nixpkgs#xvfb nixpkgs#xdotool nixpkgs#xprop nixpkgs#imagemagick nixpkgs#jq \
             --inputs-from . -c tools/android-app-support-test "$RUNNER_TEMP/android"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

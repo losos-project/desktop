@@ -15,7 +15,7 @@ makes a Pixel 10 Pro. It runs on x86-64 only, and it needs KVM.
 | The device | Android Studio's Pixel 10 Pro profile: a 1280 by 2856 screen at 480 dpi, its buttons and sensors |
 | Each app's window | a scrcpy window onto a display of the Pixel's made for that app alone |
 | Sound | the emulator's own output, to the person's PipeWire |
-| Graphics | the host's GPU through the emulator's gfxstream when there is one, SwiftShader on the processor when not |
+| Graphics | the PC's GPU, through the emulator's gfxstream and the GPU's own driver; SwiftShader on the processor when there is no GPU |
 
 The emulator and Android are Google's, under the Android SDK licence. It
 lets a person download and use them and lets nobody hand them on, so the
@@ -101,6 +101,52 @@ FFmpeg. Typing, the pointer and the clipboard go back the other way.
 
 **Show phone** on the Home page opens the Pixel's own screen, home screen
 and all.
+
+If the Pixel is slow to make an app's display, scrcpy gives up on starting
+the app there and the window shows an empty home screen. `android-app-support
+run` reads scrcpy's log for that and then starts the app on the display
+itself.
+
+## The GPU
+
+The Pixel draws with the PC's GPU. Android's OpenGL ES and Vulkan calls,
+from its compositor and from every app, go through the emulator's
+gfxstream to the GPU's own driver on the PC, the one in
+`/run/opengl-driver`, so they run on the GPU at its speed. No Android
+driver or patched system image is needed: the system image's own
+`emulation` EGL and `ranchu` Vulkan drivers speak gfxstream.
+
+The emulator reaches the PC's OpenGL through GLX, which on the desktop is
+Xwayland's. So the Pixel's unit starts after `xwayland-satellite`, which
+puts `DISPLAY` into the user manager's environment. The unit's log says
+which mode it chose:
+
+- `-gpu host`, the GPU, when the PC has a render node in `/dev/dri` and
+  Xwayland is running;
+- `-gpu swiftshader_indirect`, the emulator's SwiftShader on the processor,
+  when either is missing.
+
+`android-app-support gpu` shows what Android itself got. On a PC with a GPU
+its first line names it:
+
+```
+GLES: Google (AMD), Android Emulator OpenGL ES Translator (AMD Radeon 780M (radeonsi, ...)), OpenGL ES 3.0 (...)
+```
+
+With a package, `android-app-support gpu org.fdroid.fdroid`, it also gives
+that app's frame times since it started, from Android's own frame
+statistics.
+
+`ANDROID_APP_SUPPORT_GPU` in the user manager's environment chooses the
+mode instead (`host` or `swiftshader_indirect`), and
+`ANDROID_APP_SUPPORT_EMULATOR_FLAGS` adds to the emulator's command line.
+
+CI's runners have KVM but no GPU, so the `android` job puts Mesa at
+`/run/opengl-driver` and runs the Pixel with `-gpu host` on Mesa's llvmpipe,
+the same path a GPU's driver takes. It fails unless Android's renderer names
+llvmpipe rather than SwiftShader. llvmpipe's Vulkan cannot export the memory
+gfxstream asks for, so that run turns the emulator's Vulkan off with
+`-feature -Vulkan`. A GPU's driver can, and keeps it.
 
 ## The Pixel's units
 

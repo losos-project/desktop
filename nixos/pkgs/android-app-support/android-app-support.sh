@@ -8,6 +8,8 @@
 #   android-app-support phone           the whole phone's screen in a window
 #   android-app-support install APK...  install apps from APK files
 #   android-app-support sync            list the apps again, with icons
+#   android-app-support gpu [PACKAGE]   what the Pixel draws with, and how
+#                                       fast an app's frames came
 #
 # and, for the user units in modules/android-apps.nix: `emulator`, the
 # Pixel itself, `shutdown`, its clean stop, and `watch`, which keeps the
@@ -226,19 +228,53 @@ EOF
 
 # The emulator, as the user unit android-app-support.service runs it: the
 # Pixel's screen goes nowhere, since each app's window comes through scrcpy
-# instead (cmd_run), and its sound to the person's PipeWire. With a GPU it
-# draws through it (the emulator's gfxstream renders the guest's GL and
-# Vulkan with the host's driver); without one, through SwiftShader on the
-# processor. A clean stop (cmd_shutdown) saves a snapshot, which the next
-# start resumes in seconds.
+# instead (cmd_run), and its sound to the person's PipeWire. A clean stop
+# (cmd_shutdown) saves a snapshot, which the next start resumes in seconds.
+#
+# With a GPU it draws through it: the emulator's gfxstream renders the
+# guest's OpenGL ES and Vulkan with the host's own driver, from
+# /run/opengl-driver, so Android's compositor and every app's drawing run
+# on the GPU (docs/android-apps.md, "The GPU"). The emulator reaches the
+# host's OpenGL through GLX, which on the desktop is Xwayland's, so it
+# needs DISPLAY; the unit starts after xwayland-satellite has set it.
+# Without a GPU, or without Xwayland, it draws with SwiftShader on the
+# processor. ANDROID_APP_SUPPORT_GPU names the mode instead, and
+# ANDROID_APP_SUPPORT_EMULATOR_FLAGS adds to the emulator's command line:
+# CI sets `host` on Mesa's llvmpipe, whose Vulkan cannot export the memory
+# gfxstream asks for, with `-feature -Vulkan`.
 cmd_emulator() {
   set_up || { say "android-app-support: not set up yet; run android-app-support setup"; exit 1; }
-  local gpu=swiftshader_indirect
-  if compgen -G '/dev/dri/renderD*' > /dev/null; then gpu=host; fi
+  local gpu=${ANDROID_APP_SUPPORT_GPU:-}
+  if [ -z "$gpu" ]; then
+    gpu=swiftshader_indirect
+    if compgen -G '/dev/dri/renderD*' > /dev/null && [ -n "${DISPLAY:-}" ]; then gpu=host; fi
+  fi
+  local -a flags
+  read -ra flags <<< "${ANDROID_APP_SUPPORT_EMULATOR_FLAGS:-}"
+  echo "android-app-support: drawing with -gpu $gpu"
   rm -f "$avd"/pixel.avd/*.lock
   exec @emulatorEnv@ "$sdk/emulator/emulator" -avd pixel -port "$port" \
-    -no-window -no-boot-anim -no-metrics -gpu "$gpu" \
+    -no-window -no-boot-anim -no-metrics -gpu "$gpu" "${flags[@]}" \
     -netdelay none -netspeed full
+}
+
+# What the Pixel draws with, read inside Android: the renderer its
+# compositor got, which names the host's GPU and driver when the emulator
+# draws on it ("Android Emulator OpenGL ES Translator (AMD Radeon ...)")
+# and SwiftShader when not, and how Android's graphics reach the host.
+# With a package, also how long that app's frames took to draw, from its
+# own frame statistics since it started.
+cmd_gpu() {
+  local package=${1:-}
+  cmd_start
+  adb -s "$serial" shell dumpsys SurfaceFlinger | tr -d '\r' | grep -E '^GLES:' || true
+  adb -s "$serial" shell getprop | tr -d '\r' |
+    grep -E '^\[(ro\.hardware\.(egl|vulkan)|ro\.opengles\.version|ro\.boot\.(qemu\.gltransport|hardwareegl|hardware\.vulkan)|debug\.hwui\.renderer|ro\.boot\.debug\.hwui\.renderer)\]' || true
+  if [ -n "$package" ]; then
+    echo "Frames of $package:"
+    adb -s "$serial" shell dumpsys gfxinfo "$package" | tr -d '\r' |
+      grep -E 'Total frames rendered|Janky frames|(50|90|95|99)th percentile|Pipeline=' || true
+  fi
 }
 
 cmd_shutdown() {
@@ -358,7 +394,35 @@ cmd_run() {
   SDL_APP_ID=android.$package exec scrcpy -s "$serial" \
     --new-display=@windowWidth@x@windowHeight@/@windowDensity@ --flex-display \
     --start-app="$package" --no-audio \
-    --window-title="${name:-$package}" --stay-awake
+    --window-title="${name:-$package}" --stay-awake \
+    > >(start_late "$package" >&2) 2>&1
+}
+
+# scrcpy's server waits a second for its new display before starting the
+# app, and gives up with "No known display id" when Android takes longer to
+# make it, as a busy or freshly resumed Pixel does. The window then shows
+# the display's empty home screen. This passes scrcpy's log on to the
+# journal and, when that happens, starts the app on the display once scrcpy
+# names it.
+start_late() {
+  local package=$1 line missed='' display='' activity
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    case $line in
+      *"No known display id to start app"*) missed=1 ;;
+      *"New display:"*"(id="*")"*)
+        display=${line##*(id=}
+        display=${display%%)*}
+        ;;
+    esac
+    if [ -n "$missed" ] && [ -n "$display" ]; then
+      # adb shell forwards its input, which here is scrcpy's log.
+      activity=$(adb -s "$serial" shell cmd package resolve-activity --brief \
+        -c android.intent.category.LAUNCHER "$package" < /dev/null | tr -d '\r' | tail -1)
+      adb -s "$serial" shell am start --display "$display" -n "$activity" < /dev/null > /dev/null || true
+      missed=''
+    fi
+  done
 }
 
 # The phone's own screen, home screen and all, as the Pixel shows it.
@@ -381,11 +445,11 @@ cmd_install() {
 command=${1:-status}
 shift || true
 case $command in
-  status | setup | start | stop | run | phone | install | sync | emulator | shutdown | watch)
+  status | setup | start | stop | run | phone | install | sync | gpu | emulator | shutdown | watch)
     "cmd_$command" "$@"
     ;;
   *)
-    say "usage: android-app-support status|setup|start|stop|run PACKAGE|phone|install APK...|sync"
+    say "usage: android-app-support status|setup|start|stop|run PACKAGE|phone|install APK...|sync|gpu [PACKAGE]"
     exit 2
     ;;
 esac

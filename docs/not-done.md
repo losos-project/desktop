@@ -215,8 +215,10 @@
   Nix store, so an extension can add a program but cannot replace one.
 - **Android app support.** [Android app support](android-apps.md) boots
   its Pixel and opens an app's display in CI, on a runner with KVM and no
-  GPU, so the Pixel drew in software there. Drawing through a real GPU with
-  `-gpu host` has not been tried. Google Play needs a person to sign in to
+  GPU. CI's Pixel draws with `-gpu host` through Mesa's llvmpipe, the same
+  path a GPU's driver takes, but no CI run has had a real GPU, and Vulkan
+  through gfxstream is only on with one ([The GPU](android-apps.md#the-gpu)).
+  Google Play needs a person to sign in to
   a Google account on the Pixel before it installs anything. The Pixel has
   no camera, and no USB passthrough. Its windows have no colour of their
   own, since they come from scrcpy on the desktop rather than from a

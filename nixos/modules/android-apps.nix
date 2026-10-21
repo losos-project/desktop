@@ -32,7 +32,8 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
       "android-app-support-install.desktop";
   };
 
-  # The emulator draws through the GPU when there is one.
+  # The emulator draws with the GPU's own driver when there is one, from
+  # /run/opengl-driver.
   hardware.graphics.enable = true;
 
   # Each person's own units. The Android app support app starts the setup
@@ -51,6 +52,10 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
     android-app-support = {
       description = "The Pixel Android app support runs apps in";
       wants = [ "android-app-support-apps.service" ];
+      # The emulator draws on the GPU through Xwayland's GLX, so it starts
+      # once xwayland-satellite has put DISPLAY into the user manager's
+      # environment (android-app-support.sh, cmd_emulator).
+      after = [ "xwayland-satellite.service" ];
       serviceConfig = {
         Type = "exec";
         ExecStart = "${lib.getExe pkgs.android-app-support} emulator";
