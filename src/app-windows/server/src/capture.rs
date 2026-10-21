@@ -13,7 +13,7 @@
 //! VideoToolbox session: H.264, real time, no reordered frames, so every
 //! picture can be shown the moment it arrives.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,6 +71,11 @@ use crate::server::{Hub, Tracked};
 /// How often the window list is read: often enough that a menu shows
 /// about when it would on a Mac.
 const TICK: Duration = Duration::from_millis(100);
+
+/// How long a window ScreenCaptureKit did not offer waits before it is
+/// asked about again.
+const RETRY: Duration = Duration::from_millis(200);
+const RETRY_MAX: Duration = Duration::from_secs(10);
 
 /// The most pictures a second any window sends.
 const FPS: i32 = 60;
@@ -303,7 +308,12 @@ struct Stream {
 pub fn track(hub: &Arc<Hub>) {
     let mut streams: HashMap<u32, Stream> = HashMap::new();
     let mut bundles: HashMap<i32, Option<String>> = HashMap::new();
-    let mut unshareable: HashSet<u32> = HashSet::new();
+    // Windows ScreenCaptureKit did not offer, and when to ask again: it
+    // learns of a new window a moment after the window server does, and a
+    // menu is often asked about within that moment. One that stays
+    // unoffered, as every window does without Screen Recording, is asked
+    // about less and less often.
+    let mut unshareable: HashMap<u32, (Instant, Duration)> = HashMap::new();
     loop {
         thread::sleep(TICK);
         let scale = scale();
@@ -419,13 +429,18 @@ pub fn track(hub: &Arc<Hub>) {
             }
             keep
         });
-        unshareable.retain(|id| current.contains_key(id));
+        unshareable.retain(|id, _| current.contains_key(id));
         if !watched {
             continue;
         }
         let missing: Vec<u32> = current
             .keys()
-            .filter(|id| !streams.contains_key(id) && !unshareable.contains(id))
+            .filter(|id| {
+                !streams.contains_key(id)
+                    && unshareable
+                        .get(id)
+                        .is_none_or(|(at, wait)| at.elapsed() >= *wait)
+            })
             .copied()
             .collect();
         if !missing.is_empty() {
@@ -434,7 +449,10 @@ pub fn track(hub: &Arc<Hub>) {
                 let Some(window) = shareable.windows.get(&id) else {
                     // ScreenCaptureKit does not offer every window the
                     // window server lists (without Screen Recording, none).
-                    unshareable.insert(id);
+                    let wait = unshareable
+                        .get(&id)
+                        .map_or(RETRY, |(_, w)| (*w * 2).min(RETRY_MAX));
+                    unshareable.insert(id, (Instant::now(), wait));
                     continue;
                 };
                 let Some(tracked) = hub.window(id) else {
@@ -450,7 +468,10 @@ pub fn track(hub: &Arc<Hub>) {
                     }
                     Err(e) => {
                         eprintln!("capturing window {id}: {e}");
-                        unshareable.insert(id);
+                        let wait = unshareable
+                            .get(&id)
+                            .map_or(RETRY, |(_, w)| (*w * 2).min(RETRY_MAX));
+                        unshareable.insert(id, (Instant::now(), wait));
                     }
                 }
             }
