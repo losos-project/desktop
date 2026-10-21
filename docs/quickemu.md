@@ -1,8 +1,8 @@
 # Trying it in quickemu
 
 [quickemu](https://github.com/quickemu-project/quickemu) runs a VM from a
-short config file. `quickemu/` has one for each architecture, both set up as
-the PC LosOS expects rather than the least it boots on:
+short config file. `quickemu/` has one for each architecture. Both describe
+the PC LosOS expects, not the smallest one it boots on:
 
 | | |
 | --- | --- |
@@ -21,12 +21,12 @@ the PC LosOS expects rather than the least it boots on:
 > [security report](security-report.md) finds both and the VM is the machine a
 > laptop would be. Like every machine it never [hibernates](hibernation.md).
 
-The disk is what first boot lays out ([Where the OS lives](layout.md)): the
-ESP, two 8 GB `/usr` slots with their verity halves, root from 8 GB, `/home`
-from 4 GB and swap the size of RAM, which comes to about 29 GB plus RAM.
-64 GB is what the [Windows installer](windows-installer.md) offers by
-default, and leaves `/home` most of the rest. 8 GB of RAM is twice what
-`nix run .#vm` gives. More RAM wants more disk, since swap grows with it.
+First boot lays out the disk as [Where the OS lives](layout.md) describes.
+It makes the ESP, two 8 GB `/usr` slots with their verity halves, root from
+8 GB, `/home` from 4 GB, and swap the size of RAM, about 29 GB plus RAM in
+all. 64 GB is what the [Windows installer](windows-installer.md) offers by
+default, and it leaves most of the rest to `/home`. 8 GB of RAM is twice what
+`nix run .#vm` gives. More RAM needs more disk, since swap grows with it.
 
 ## Running it
 
@@ -51,15 +51,15 @@ boots the installed system. On an aarch64 host, use
 
 > [!WARNING]
 > quickemu will also run it on an x86_64 host, emulated, but that is too
-> slow to install from: tried that way, the installer's initrd gave up
+> slow to install from. In one try, the installer's initrd gave up
 > waiting for its CD after 90 seconds.
 
 The TPM only counts if the firmware can use it too. quickemu takes OVMF
-from the host, and nixpkgs builds the one quickemu picks with Secure Boot off
-without TPM support: the system then finds the TPM, but nothing measured the
-boot, and `bootctl status` in the VM says `TPM2 Support: driver only,
-firmware unavailable` and `Measured UKI: no`. On NixOS, run a quickemu built
-with a TPM-enabled OVMF instead:
+from the host, and nixpkgs builds the OVMF that quickemu picks for Secure
+Boot off without TPM support. The system then finds the TPM, but nothing
+measured the boot, and `bootctl status` in the VM says
+`TPM2 Support: driver only, firmware unavailable` and `Measured UKI: no`. On
+NixOS, run a quickemu built with a TPM-enabled OVMF instead:
 
 ```nix
 pkgs.quickemu.override {
