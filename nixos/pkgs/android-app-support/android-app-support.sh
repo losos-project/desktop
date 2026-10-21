@@ -54,6 +54,11 @@ json() {
     '{state: $state, detail: $detail, serial: $serial}'
 }
 
+# The Pixel's data partition, where its apps and their data live, in GiB.
+# The emulator makes it at its first start and refuses to unless a fifth
+# more than its size is free, so it is not as large as a phone's.
+data_partition=8
+
 set_up() { [ -e "$avd/pixel.ini" ] && [ -e "$sdk/$system_image/system.img" ]; }
 
 active() { systemctl --user -q is-active "$1"; }
@@ -118,7 +123,8 @@ fetch() {
 cmd_setup() {
   local downloads=$data/downloads
   mkdir -p "$downloads"
-  need=$(( (@imageSize@ * 3 + @emulatorSize@ * 3) / 1024 ))
+  # The downloads, unpacked beside them, and the data partition.
+  need=$(( (@imageSize@ * 3 + @emulatorSize@ * 3) / 1024 + data_partition * 1024 * 1024 * 6 / 5 ))
   free=$(df --output=avail -k "$data" | tail -1)
   if [ "$free" -lt "$need" ]; then
     progress "Android needs $(numfmt --to=iec $((need * 1024))) free, and this computer has $(numfmt --to=iec $((free * 1024)))."
@@ -216,7 +222,7 @@ hw.gpu.mode=auto
 image.sysdir.1=$system_image/
 tag.id=@imageTag@
 tag.display=@imageTagDisplay@
-disk.dataPartition.size=32G
+disk.dataPartition.size=${data_partition}G
 sdcard.size=512M
 showDeviceFrame=no
 skin.dynamic=yes
@@ -252,6 +258,11 @@ cmd_emulator() {
   local -a flags
   read -ra flags <<< "${ANDROID_APP_SUPPORT_EMULATOR_FLAGS:-}"
   echo "android-app-support: drawing with -gpu $gpu"
+  # The emulator takes a directory as an SDK only when it has
+  # platform-tools, and runs adb from there to tell the person's adb
+  # server about the Pixel. This package's adb is that one.
+  mkdir -p "$sdk/platform-tools"
+  ln -sfn "$(command -v adb)" "$sdk/platform-tools/adb"
   rm -f "$avd"/pixel.avd/*.lock
   exec @emulatorEnv@ "$sdk/emulator/emulator" -avd pixel -port "$port" \
     -no-window -no-boot-anim -no-metrics -gpu "$gpu" "${flags[@]}" \

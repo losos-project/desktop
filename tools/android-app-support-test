@@ -51,7 +51,22 @@ systemctl --user set-environment DISPLAY="$DISPLAY" ANDROID_APP_SUPPORT_GPU=host
   "ANDROID_APP_SUPPORT_EMULATOR_FLAGS=-feature -Vulkan"
 
 data=${XDG_DATA_HOME:-$HOME/.local/share}/android-app-support
-journal() { journalctl --user --no-pager -o short-monotonic -u 'android-app-support*' > "$out/journal.txt" || true; }
+# The units' log, kept with the screenshots and, when a step fails, printed
+# here too, since the emulator's own reasons for stopping are only there.
+# The runner's journald may keep a user's log only in the system journal.
+journal() {
+  local status=$?
+  journalctl --user --no-pager -o short-monotonic -u 'android-app-support*' > "$out/journal.txt" 2>&1 || true
+  if ! grep -q 'android-app-support' "$out/journal.txt"; then
+    # shellcheck disable=SC2024 # the file is the runner user's, as it should be
+    sudo -n journalctl --no-pager -o short-monotonic "_UID=$(id -u)" > "$out/journal.txt" 2>&1 || true
+  fi
+  if [ "$status" -ne 0 ]; then
+    echo "::group::The units' log"
+    tail -n 300 "$out/journal.txt"
+    echo "::endgroup::"
+  fi
+}
 trap journal EXIT
 
 step "Setting Android up, as the Android app does the first time"

@@ -37,14 +37,16 @@ entry's `TryExec`.
 For a person with no Pixel yet, the app starts their user unit
 `android-app-support-setup`, which runs `android-app-support setup`:
 
-1. It checks for KVM and for room: the download unpacks to about 9 GB.
+1. It checks for KVM and for room: about 9 GB while the download unpacks,
+   and 10 GB for the Pixel's data partition.
 2. It downloads the emulator, 350 MB, and Android, 2.5 GB, into
    `~/.local/share/android-app-support/`. A stopped download resumes, and a
    file that does not match its hash is deleted and fetched again.
 3. It makes the Pixel, an Android Virtual Device in the same folder. Its
    memory is a quarter of the PC's, between 3 and 8 GiB. It has half the
-   PC's processors, between 2 and 8, and a 32 GB data partition, a sparse
-   file that grows as apps fill it.
+   PC's processors, between 2 and 8, and an 8 GiB data partition for its
+   apps. The emulator will not make the partition unless a fifth more than
+   its size is free, so it is smaller than a phone's.
 4. It starts the Pixel, waits for Android to finish its first boot, lists
    its apps, and sends a notification that Android is ready.
 
