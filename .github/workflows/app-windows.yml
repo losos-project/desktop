@@ -50,6 +50,26 @@ jobs:
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
           cargo clippy -p macos-app-server --locked --target aarch64-apple-darwin -- -D warnings
           cargo clippy -p macos-app-server --locked --target x86_64-apple-darwin -- -D warnings
+      # The client for the LosOS VM below, with every library it links, run
+      # through the loader it came with: the released image has no
+      # app-windows yet, and its libraries are not Ubuntu's.
+      - name: The Linux client, bundled
+        run: |
+          cargo build --release --locked -p app-windows
+          b=$RUNNER_TEMP/bundle
+          mkdir -p "$b/lib"
+          cp target/release/app-windows "$b/"
+          ldd target/release/app-windows | awk '$2 == "=>" && $3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' |
+            xargs -I{} cp -L {} "$b/lib/"
+          printf '%s\n' '#!/bin/sh' 'd=$(dirname "$0")' \
+            'exec "$d/lib/ld-linux-x86-64.so.2" --library-path "$d/lib" "$d/app-windows" "$@"' >"$b/run.sh"
+          chmod +x "$b/run.sh"
+          tar -cf "$RUNNER_TEMP/app-windows-linux.tar" -C "$b" .
+          "$b/run.sh" 2>&1 | head -2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-windows-linux
+          path: ${{ runner.temp }}/app-windows-linux.tar
 
   macos:
     needs: linux
@@ -74,4 +94,35 @@ jobs:
         with:
           name: app-windows-${{ matrix.runner }}
           path: ${{ runner.temp }}/app-windows-${{ matrix.runner }}
+          if-no-files-found: warn
+
+  # LosOS Desktop booted in a VM on each kind of Mac, using that Mac's apps
+  # as its own windows, live (src/app-windows/tests/losos-vm.sh). Emulated
+  # where the runner gives no hardware virtualisation, so it takes a while.
+  losos-vm:
+    needs: linux
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: FFmpeg for the client
+        run: brew install ffmpeg pkgconf
+      - run: cargo build --release --locked -p macos-app-server
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-windows-linux
+          path: ${{ runner.temp }}
+      - name: LosOS in a VM, using this Mac's apps
+        run: tests/losos-vm.sh "$RUNNER_TEMP/app-windows-linux.tar" "$RUNNER_TEMP/losos-vm-${{ matrix.runner }}"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: losos-vm-${{ matrix.runner }}
+          path: ${{ runner.temp }}/losos-vm-${{ matrix.runner }}
           if-no-files-found: warn
