@@ -6,7 +6,10 @@
 //! A window it has not seen before gets a ScreenCaptureKit stream of its
 //! own (`SCContentFilter(desktopIndependentWindow:)`), which sees the window
 //! whole whatever covers it on macOS's screen, and only sends a picture when
-//! the window's content changed. Each picture is encoded by its own
+//! the window's content changed. A popup is captured from the display
+//! instead, cut to its own frame with nothing but it in the picture: menus
+//! are drawn over a backdrop of the whole screen, which a window-alone
+//! capture squeezes into the menu's size. Each picture is encoded by its own
 //! VideoToolbox session: H.264, real time, no reordered frames, so every
 //! picture can be shown the moment it arrives.
 
@@ -25,7 +28,9 @@ use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass};
-use objc2_core_foundation::{CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+use objc2_core_foundation::{
+    CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize,
+};
 use objc2_core_graphics::{
     kCGWindowAlpha, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
     kCGWindowOwnerPID, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
@@ -44,8 +49,8 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString,
 };
 use objc2_screen_capture_kit::{
-    SCContentFilter, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamDelegate,
-    SCStreamFrameInfoStatus, SCStreamOutput, SCStreamOutputType, SCWindow,
+    SCContentFilter, SCDisplay, SCShareableContent, SCStream, SCStreamConfiguration,
+    SCStreamDelegate, SCStreamFrameInfoStatus, SCStreamOutput, SCStreamOutputType, SCWindow,
 };
 use objc2_video_toolbox::{
     kVTCompressionPropertyKey_AllowFrameReordering, kVTCompressionPropertyKey_AverageBitRate,
@@ -69,6 +74,12 @@ const TICK: Duration = Duration::from_millis(100);
 
 /// The most pictures a second any window sends.
 const FPS: i32 = 60;
+
+/// The smallest window that is an app's own, in points. macOS 15 puts a
+/// small window of the app's over the corner of every window being
+/// captured, and apps keep tiny helper windows of their own; neither is
+/// anything a person would open.
+const SMALLEST: (f64, f64) = (60.0, 30.0);
 
 /// Apps whose windows are macOS's own furniture, never an app's window: the
 /// Dock, the menu bar's extras, notifications, Spotlight, the wallpaper.
@@ -203,8 +214,14 @@ struct Sendable<T>(T);
 unsafe impl<T> Send for Sendable<T> {}
 
 /// ScreenCaptureKit's handle on each window, which is what a stream
-/// captures, by window number.
-fn shareable_windows() -> HashMap<u32, Retained<SCWindow>> {
+/// captures, by window number, and on each display, which popups are cut
+/// from.
+struct Shareable {
+    windows: HashMap<u32, Retained<SCWindow>>,
+    displays: Vec<Retained<SCDisplay>>,
+}
+
+fn shareable() -> Shareable {
     let (tx, rx) = mpsc::channel();
     let block = RcBlock::new(
         move |content: *mut SCShareableContent, error: *mut NSError| {
@@ -224,13 +241,49 @@ fn shareable_windows() -> HashMap<u32, Retained<SCWindow>> {
         );
     }
     let Ok(Sendable(Some(content))) = rx.recv_timeout(Duration::from_secs(5)) else {
-        return HashMap::new();
+        return Shareable {
+            windows: HashMap::new(),
+            displays: Vec::new(),
+        };
     };
     let windows = unsafe { content.windows() };
-    windows
+    Shareable {
+        windows: windows
+            .iter()
+            .map(|w| (unsafe { w.windowID() }, w))
+            .collect(),
+        displays: unsafe { content.displays() }.iter().collect(),
+    }
+}
+
+/// Where a popup is on its display, in the display's own points, and the
+/// display's origin among all displays.
+fn cut(info: &WindowInfo, display: CGRect) -> CGRect {
+    CGRect {
+        origin: CGPoint {
+            x: info.x - display.origin.x,
+            y: info.y - display.origin.y,
+        },
+        size: CGSize {
+            width: info.width,
+            height: info.height,
+        },
+    }
+}
+
+/// The display a window's top left corner is on.
+fn display_of(displays: &[Retained<SCDisplay>], info: &WindowInfo) -> Option<Retained<SCDisplay>> {
+    displays
         .iter()
-        .map(|w| (unsafe { w.windowID() }, w))
-        .collect()
+        .find(|d| {
+            let f = unsafe { d.frame() };
+            info.x >= f.origin.x
+                && info.y >= f.origin.y
+                && info.x < f.origin.x + f.size.width
+                && info.y < f.origin.y + f.size.height
+        })
+        .or(displays.first())
+        .cloned()
 }
 
 /// One window's stream and what encodes it.
@@ -240,6 +293,10 @@ struct Stream {
     /// The size in pixels the stream was last configured for.
     width: usize,
     height: usize,
+    /// For a popup, the frame of the display it is cut from and the part
+    /// cut, last configured.
+    display: Option<CGRect>,
+    source: Option<CGRect>,
 }
 
 /// The window thread: forever, the window list, its changes, the streams.
@@ -262,6 +319,9 @@ pub fn track(hub: &Arc<Hub>) {
             if w.width < 1.0 || w.height < 1.0 {
                 continue;
             }
+            if kind == WindowKind::Normal && (w.width < SMALLEST.0 || w.height < SMALLEST.1) {
+                continue;
+            }
             let bundle = bundles
                 .entry(w.pid)
                 .or_insert_with(|| apps::bundle_of(w.pid))
@@ -274,7 +334,10 @@ pub fn track(hub: &Arc<Hub>) {
                 WindowKind::Normal => None,
                 WindowKind::Popup => {
                     let behind = listed[i + 1..].iter().find(|o| {
-                        o.pid == w.pid && kind_for_layer(o.layer) == Some(WindowKind::Normal)
+                        o.pid == w.pid
+                            && kind_for_layer(o.layer) == Some(WindowKind::Normal)
+                            && o.width >= SMALLEST.0
+                            && o.height >= SMALLEST.1
                     });
                     match behind {
                         Some(o) => Some(o.id),
@@ -366,9 +429,9 @@ pub fn track(hub: &Arc<Hub>) {
             .copied()
             .collect();
         if !missing.is_empty() {
-            let shareable = shareable_windows();
+            let shareable = shareable();
             for id in missing {
-                let Some(window) = shareable.get(&id) else {
+                let Some(window) = shareable.windows.get(&id) else {
                     // ScreenCaptureKit does not offer every window the
                     // window server lists (without Screen Recording, none).
                     unshareable.insert(id);
@@ -377,7 +440,11 @@ pub fn track(hub: &Arc<Hub>) {
                 let Some(tracked) = hub.window(id) else {
                     continue;
                 };
-                match start(hub, window, &tracked) {
+                let display = match tracked.info.kind {
+                    WindowKind::Popup => display_of(&shareable.displays, &tracked.info),
+                    WindowKind::Normal => None,
+                };
+                match start(hub, window, display.as_deref(), &tracked) {
                     Ok(stream) => {
                         streams.insert(id, stream);
                     }
@@ -393,10 +460,12 @@ pub fn track(hub: &Arc<Hub>) {
                 continue;
             };
             let (width, height) = pixel_size(info);
-            if (width, height) != (stream.width, stream.height) {
+            let source = stream.display.map(|d| cut(info, d));
+            if (width, height) != (stream.width, stream.height) || source != stream.source {
                 stream.width = width;
                 stream.height = height;
-                let config = configuration(width, height);
+                stream.source = source;
+                let config = configuration(width, height, source);
                 unsafe {
                     stream
                         .stream
@@ -413,11 +482,18 @@ fn pixel_size(info: &WindowInfo) -> (usize, usize) {
     (even(info.width).max(2), even(info.height).max(2))
 }
 
-fn configuration(width: usize, height: usize) -> Retained<SCStreamConfiguration> {
+fn configuration(
+    width: usize,
+    height: usize,
+    source: Option<CGRect>,
+) -> Retained<SCStreamConfiguration> {
     unsafe {
         let config = SCStreamConfiguration::new();
         config.setWidth(width);
         config.setHeight(height);
+        if let Some(source) = source {
+            config.setSourceRect(source);
+        }
         config.setMinimumFrameInterval(CMTime {
             value: 1,
             timescale: FPS,
@@ -438,7 +514,12 @@ fn configuration(width: usize, height: usize) -> Retained<SCStreamConfiguration>
     }
 }
 
-fn start(hub: &Arc<Hub>, window: &SCWindow, tracked: &Tracked) -> Result<Stream, String> {
+fn start(
+    hub: &Arc<Hub>,
+    window: &SCWindow,
+    display: Option<&SCDisplay>,
+    tracked: &Tracked,
+) -> Result<Stream, String> {
     let (width, height) = pixel_size(&tracked.info);
     let output = WindowOutput::new(OutputIvars {
         window: tracked.info.window,
@@ -448,9 +529,19 @@ fn start(hub: &Arc<Hub>, window: &SCWindow, tracked: &Tracked) -> Result<Stream,
         epoch: Instant::now(),
     });
     unsafe {
-        let filter =
-            SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window);
-        let config = configuration(width, height);
+        let display_frame = display.map(|d| d.frame());
+        let source = display_frame.map(|d| cut(&tracked.info, d));
+        let filter = match display {
+            Some(display) => SCContentFilter::initWithDisplay_includingWindows(
+                SCContentFilter::alloc(),
+                display,
+                &NSArray::from_slice(&[window]),
+            ),
+            None => {
+                SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window)
+            }
+        };
+        let config = configuration(width, height, source);
         let delegate = ProtocolObject::<dyn SCStreamDelegate>::from_ref(&*output);
         let stream = SCStream::initWithFilter_configuration_delegate(
             SCStream::alloc(),
@@ -481,6 +572,8 @@ fn start(hub: &Arc<Hub>, window: &SCWindow, tracked: &Tracked) -> Result<Stream,
             output,
             width,
             height,
+            display: display_frame,
+            source,
         })
     }
 }

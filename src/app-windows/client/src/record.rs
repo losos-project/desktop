@@ -380,7 +380,9 @@ impl Run {
                     w.windows
                         .values()
                         .filter(|i| i.app == app && i.kind == WindowKind::Normal)
-                        .find(|i| w.pictures.contains_key(&i.window))
+                        .filter(|i| w.pictures.contains_key(&i.window))
+                        // The app's main window, not a palette beside it.
+                        .max_by(|a, b| (a.width * a.height).total_cmp(&(b.width * b.height)))
                         .map(|i| i.window)
                 };
                 if !self.pump(seconds(args.get(1).copied())?, |w| found(w).is_some()) {
