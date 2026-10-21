@@ -85,6 +85,11 @@ public final class Apps {
      * The system context an app_process program can have, the way scrcpy's
      * server gets one: an ActivityThread of its own made current, then
      * asked. ActivityThread is not in the SDK, so it is reached by name.
+     *
+     * The thread also gets an Application on that context: an adaptive
+     * icon reads the icon shape from the current Application's resources
+     * as it inflates, and without one Settings, Files and every other icon
+     * of that kind fails to load.
      */
     private static Context systemContext() throws Exception {
         Class<?> threadClass = Class.forName("android.app.ActivityThread");
@@ -95,6 +100,13 @@ public final class Apps {
         current.setAccessible(true);
         current.set(null, thread);
         Method getSystemContext = threadClass.getDeclaredMethod("getSystemContext");
-        return (Context) getSystemContext.invoke(thread);
+        Context context = (Context) getSystemContext.invoke(thread);
+        Method newApplication = Class.forName("android.app.Instrumentation")
+            .getMethod("newApplication", Class.class, Context.class);
+        Object application = newApplication.invoke(null, Class.forName("android.app.Application"), context);
+        Field initial = threadClass.getDeclaredField("mInitialApplication");
+        initial.setAccessible(true);
+        initial.set(thread, application);
+        return context;
     }
 }
