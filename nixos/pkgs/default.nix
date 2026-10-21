@@ -140,6 +140,18 @@ in
   # front end: virt-viewer draws a machine's screen, and the VM tests run
   # headless.
   qemu = plain.qemu;
+  # QEMU's vmapple machine under TCG, an M1 Mac's arm64 macOS guest on any
+  # PC (docs/macos-arm64.md): steelbrain's 27on86 changes, which boot
+  # macOS 13 there, then an apple-m1 CPU and Apple's paravirtual pointer
+  # authentication, so signatures are checked and macOS 26 gets past its
+  # first PAC hypercall. Only the aarch64 system emulator and nothing to
+  # draw with, since the guest runs headless until a GPU joins it.
+  qemu-vmapple =
+    (withPatches (plain.qemu.override {
+      minimal = true;
+      hostCpuTargets = [ "aarch64-softmmu" ];
+    }) ./patches/qemu-vmapple).overrideAttrs
+      { pname = "qemu-vmapple"; };
   # libsecret too. Only its test suite reaches the patched GTK, through gjs,
   # so ours differed from nixpkgs' in a check input alone, compiled in CI,
   # and failed there in test-collection when the test's D-Bus service

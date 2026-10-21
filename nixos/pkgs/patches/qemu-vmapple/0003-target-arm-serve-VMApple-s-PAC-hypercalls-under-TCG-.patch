@@ -1,0 +1,439 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matus <dichhead@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 17:14:42 +0000
+Subject: [PATCH 3/3] target/arm: serve VMApple's PAC hypercalls under TCG and
+ check signatures
+
+---
+ hw/vmapple/vmapple.c          |  30 +++++++-
+ target/arm/cpu.h              |  19 +++++
+ target/arm/internals.h        |   7 ++
+ target/arm/machine.c          |  21 ++++++
+ target/arm/tcg/apple-pac.c    | 135 ++++++++++++++++++++++++++++++++++
+ target/arm/tcg/meson.build    |   1 +
+ target/arm/tcg/pauth_helper.c |  36 ++++++++-
+ target/arm/tcg/psci.c         |   6 ++
+ 8 files changed, 249 insertions(+), 6 deletions(-)
+ create mode 100644 target/arm/tcg/apple-pac.c
+
+diff --git a/hw/vmapple/vmapple.c b/hw/vmapple/vmapple.c
+index e0e9f0ba06..cfaf502bb5 100644
+--- a/hw/vmapple/vmapple.c
++++ b/hw/vmapple/vmapple.c
+@@ -77,6 +77,7 @@ struct VMAppleMachineState {
+ #endif
+     uint64_t uuid;
+     bool run_installer;
++    bool pac_auth;
+     int64_t tcg_smp_final_shift;
+     QEMUTimer *tcg_smp_shift_timer;
+     bool tcg_smp_all_powered;
+@@ -592,7 +593,13 @@ static void mach_vmapple_init(MachineState *machine)
+             isar1 = FIELD_DP64(isar1, ID_AA64ISAR1, APA, 1);
+             isar1 = FIELD_DP64(isar1, ID_AA64ISAR1, API, 1);
+             SET_IDREG(&arm_cpu->isar, ID_AA64ISAR1, isar1);
+-            arm_cpu->pauth_impdef_compat = true;
++            /*
++             * Apple's hypervisor hands the guest its keys through
++             * hypercalls; serve them here.  With pac-auth=off every
++             * authentication passes, as this machine first booted macOS 13.
++             */
++            arm_cpu->apple_pac = true;
++            arm_cpu->pauth_impdef_compat = !vms->pac_auth;
+             object_property_set_int(cpu, "cntfrq", VMAPPLE_TIMEBASE_HZ,
+                                     &error_fatal);
+         }
+@@ -714,7 +721,8 @@ static GlobalProperty vmapple_compat_defaults[] = {
+ 
+ static const char *vmapple_get_default_cpu_type(const MachineState *ms)
+ {
+-    return tcg_enabled() ? ARM_CPU_TYPE_NAME("max")
++    /* Under TCG, the M1 a guest of Apple's hypervisor would run on. */
++    return tcg_enabled() ? ARM_CPU_TYPE_NAME("apple-m1")
+                          : ARM_CPU_TYPE_NAME("host");
+ }
+ 
+@@ -749,11 +757,22 @@ static void vmapple_set_run_installer(Object *obj, bool value, Error **errp)
+     VMAPPLE_MACHINE(obj)->run_installer = value;
+ }
+ 
++static bool vmapple_get_pac_auth(Object *obj, Error **errp)
++{
++    return VMAPPLE_MACHINE(obj)->pac_auth;
++}
++
++static void vmapple_set_pac_auth(Object *obj, bool value, Error **errp)
++{
++    VMAPPLE_MACHINE(obj)->pac_auth = value;
++}
++
+ static void vmapple_instance_init(Object *obj)
+ {
+     VMAppleMachineState *vms = VMAPPLE_MACHINE(obj);
+ 
+     vms->irqmap = irqmap;
++    vms->pac_auth = true;
+ 
+     object_property_add_uint64_ptr(obj, "uuid", &vms->uuid,
+                                    OBJ_PROP_FLAG_READWRITE);
+@@ -765,6 +784,13 @@ static void vmapple_instance_init(Object *obj)
+     object_property_set_description(obj, "run-installer",
+                                     "Boot the installer environment");
+ 
++    object_property_add_bool(obj, "pac-auth",
++                             vmapple_get_pac_auth,
++                             vmapple_set_pac_auth);
++    object_property_set_description(obj, "pac-auth",
++                                    "Check pointer authentication codes "
++                                    "under TCG (off accepts every one)");
++
+     object_property_add(obj, "tcg-smp-final-shift", "int",
+                         vmapple_get_tcg_smp_final_shift,
+                         vmapple_set_tcg_smp_final_shift, NULL, NULL);
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index 69633ba226..809d2f6b87 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -721,6 +721,20 @@ typedef struct CPUArchState {
+         ARMPACKey apga;
+     } keys;
+ 
++    /*
++     * Apple's paravirtual pointer authentication, as VMApple guests see
++     * it.  The guest never writes the key registers itself; it asks the
++     * hypervisor through the hypercalls in target/arm/tcg/apple-pac.c.
++     * Besides the architected A, B and G keys there is one more key, the
++     * EL0 diversifier, which gives EL0 its own A and B keys.  EL1 uses it
++     * too while el0_key_at_el1 is set, so the kernel can sign and check
++     * a process's pointers.
++     */
++    struct {
++        ARMPACKey el0_key;
++        bool el0_key_at_el1;
++    } apple_pac;
++
+     uint64_t scxtnum_el[4];
+ 
+     struct {
+@@ -1127,6 +1141,11 @@ struct ArchCPU {
+     bool prop_pauth_qarma3;
+     bool prop_pauth_qarma5;
+     bool pauth_impdef_compat;
++    /*
++     * Serve the VMApple PAC hypercalls and give EL0 its diversified keys
++     * (env->apple_pac).  Set by the vmapple machine under TCG.
++     */
++    bool apple_pac;
+     bool prop_lpa2;
+ 
+     /* GM blocksize, in log_2(words), ie low 4 bits of GMID_EL0 */
+diff --git a/target/arm/internals.h b/target/arm/internals.h
+index 4026f67579..2c432f874b 100644
+--- a/target/arm/internals.h
++++ b/target/arm/internals.h
+@@ -714,6 +714,13 @@ bool arm_is_psci_call(ARMCPU *cpu, int excp_type);
+ /* Actually handle a PSCI call */
+ void arm_handle_psci_call(ARMCPU *cpu);
+ 
++/*
++ * VMApple's paravirtual pointer authentication hypercalls (tcg/apple-pac.c):
++ * whether this HVC function ID is one, and serve it.
++ */
++bool arm_is_apple_pac_call(ARMCPU *cpu, uint64_t fid);
++void arm_handle_apple_pac_call(ARMCPU *cpu);
++
+ /**
+  * arm_clear_exclusive: clear the exclusive monitor
+  * @env: CPU env
+diff --git a/target/arm/machine.c b/target/arm/machine.c
+index 89127e5d83..c46ad00770 100644
+--- a/target/arm/machine.c
++++ b/target/arm/machine.c
+@@ -979,6 +979,26 @@ static const VMStateDescription vmstate_fpmr = {
+     },
+ };
+ 
++static bool apple_pac_needed(void *opaque)
++{
++    ARMCPU *cpu = opaque;
++
++    return cpu->apple_pac;
++}
++
++static const VMStateDescription vmstate_apple_pac = {
++    .name = "cpu/apple_pac",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .needed = apple_pac_needed,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT64(env.apple_pac.el0_key.lo, ARMCPU),
++        VMSTATE_UINT64(env.apple_pac.el0_key.hi, ARMCPU),
++        VMSTATE_BOOL(env.apple_pac.el0_key_at_el1, ARMCPU),
++        VMSTATE_END_OF_LIST()
++    },
++};
++
+ static int cpu_pre_save(void *opaque)
+ {
+     ARMCPU *cpu = opaque;
+@@ -1343,6 +1363,7 @@ const VMStateDescription vmstate_arm_cpu = {
+         &vmstate_pstate64,
+         &vmstate_event,
+         &vmstate_fpmr,
++        &vmstate_apple_pac,
+         NULL
+     }
+ };
+diff --git a/target/arm/tcg/apple-pac.c b/target/arm/tcg/apple-pac.c
+new file mode 100644
+index 0000000000..394c4b83fa
+--- /dev/null
++++ b/target/arm/tcg/apple-pac.c
+@@ -0,0 +1,135 @@
++/*
++ * Apple's paravirtual pointer authentication for VMApple guests under TCG
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ *
++ * An arm64 macOS guest of Apple's hypervisor never programs its pointer
++ * authentication keys.  XNU's VMAPPLE kernel (HAS_PARAVIRTUALIZED_PAC)
++ * asks for them through the "Apple CPU service" hypercalls instead, and
++ * from macOS 26 on it spins on "cbnz x0, ." when one does not return 0.
++ * The function numbers and registers are XNU's (osfmk/arm64/hv_hvc.h,
++ * pac_asm.h, machine_routines_asm.s); the default keys and the way a key
++ * fills its register group (x, x+1, ...) are what Apple's hypervisor was
++ * seen to do on Asahi Linux KVM (aquarat/qemu-reims-vgpu, kvm-vmapple.c).
++ *
++ *   0x00  SET_INITIAL_STATE       all keys to their defaults, EL1 keys
++ *   0x01  GET_DEFAULT_KEYS        A, B, EL0 and G defaults in x1..x4
++ *   0x02  SET_A_KEYS     x1       APIA, APDA from x1
++ *   0x03  SET_B_KEYS     x1       APIB, APDB from x1 (each thread's ROP key)
++ *   0x04  SET_EL0_DIVERSIFIER x1  EL0's own A and B keys (its JOP key)
++ *   0x05  SET_EL0_DIVERSIFIER_AT_EL1 x1, x2
++ *                                 the EL0 key from x2, and whether EL1
++ *                                 uses it too (x1), so the kernel can sign
++ *                                 a process's pointers for it
++ *   0x06  SET_G_KEY      x1       APGA from x1
++ *   0xf0  NOP                     probed to tell a current host from an
++ *                                 old one; an old one answers 0xffffffff
++ *
++ * On Apple silicon the EL0 key is the KERNKEY register pair and APCTL
++ * says which exception levels mix it in (Asahi's register notes,
++ * m1n1 hv_sprr.c).  The cipher itself is Apple's and nobody outside has
++ * it, so pauth_helper.c mixes the EL0 key into QEMU's own algorithm.  A
++ * guest cannot tell: it only ever compares signatures this CPU made.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "cpu.h"
++#include "internals.h"
++
++#define APPLE_PAC_SERVICE   0xc1000000ULL
++#define APPLE_PAC_FN_MASK   0xffULL
++
++enum {
++    APPLE_PAC_SET_INITIAL_STATE = 0x00,
++    APPLE_PAC_GET_DEFAULT_KEYS = 0x01,
++    APPLE_PAC_SET_A_KEYS = 0x02,
++    APPLE_PAC_SET_B_KEYS = 0x03,
++    APPLE_PAC_SET_EL0_DIVERSIFIER = 0x04,
++    APPLE_PAC_SET_EL0_DIVERSIFIER_AT_EL1 = 0x05,
++    APPLE_PAC_SET_G_KEY = 0x06,
++    APPLE_PAC_NOP = 0xf0,
++};
++
++/* SMCCC's NOT_SUPPORTED, as a 64-bit return. */
++#define SMCCC_NOT_SUPPORTED ((uint64_t)-1)
++
++/* Every default key is an offset from one constant, as on Apple's host. */
++#define APPLE_PAC_KEY_BASE 0xfeedfacefeedfacfULL
++#define APPLE_PAC_DEFAULT_A   (APPLE_PAC_KEY_BASE + 6)
++#define APPLE_PAC_DEFAULT_B   (APPLE_PAC_KEY_BASE + 0)
++#define APPLE_PAC_DEFAULT_EL0 (APPLE_PAC_KEY_BASE + 4)
++#define APPLE_PAC_DEFAULT_G   (APPLE_PAC_KEY_BASE + 10)
++
++bool arm_is_apple_pac_call(ARMCPU *cpu, uint64_t fid)
++{
++    return cpu->apple_pac && (fid & ~APPLE_PAC_FN_MASK) == APPLE_PAC_SERVICE;
++}
++
++static void set_pair(ARMPACKey *key, uint64_t seed)
++{
++    key->lo = seed;
++    key->hi = seed + 1;
++}
++
++static void set_a_keys(CPUARMState *env, uint64_t seed)
++{
++    set_pair(&env->keys.apia, seed);
++    set_pair(&env->keys.apda, seed + 2);
++}
++
++static void set_b_keys(CPUARMState *env, uint64_t seed)
++{
++    set_pair(&env->keys.apib, seed);
++    set_pair(&env->keys.apdb, seed + 2);
++}
++
++void arm_handle_apple_pac_call(ARMCPU *cpu)
++{
++    CPUARMState *env = &cpu->env;
++    unsigned fn = env->xregs[0] & APPLE_PAC_FN_MASK;
++    uint64_t x1 = env->xregs[1];
++    uint64_t x2 = env->xregs[2];
++    uint64_t ret = 0;
++
++    switch (fn) {
++    case APPLE_PAC_SET_INITIAL_STATE:
++        set_a_keys(env, APPLE_PAC_DEFAULT_A);
++        set_b_keys(env, APPLE_PAC_DEFAULT_B);
++        set_pair(&env->keys.apga, APPLE_PAC_DEFAULT_G);
++        set_pair(&env->apple_pac.el0_key, APPLE_PAC_DEFAULT_EL0);
++        env->apple_pac.el0_key_at_el1 = false;
++        break;
++    case APPLE_PAC_GET_DEFAULT_KEYS:
++        /* XNU keeps x2 as its default ROP key and x3 as its JOP key. */
++        env->xregs[1] = APPLE_PAC_DEFAULT_A;
++        env->xregs[2] = APPLE_PAC_DEFAULT_B;
++        env->xregs[3] = APPLE_PAC_DEFAULT_EL0;
++        env->xregs[4] = APPLE_PAC_DEFAULT_G;
++        break;
++    case APPLE_PAC_SET_A_KEYS:
++        set_a_keys(env, x1);
++        break;
++    case APPLE_PAC_SET_B_KEYS:
++        set_b_keys(env, x1);
++        break;
++    case APPLE_PAC_SET_EL0_DIVERSIFIER:
++        set_pair(&env->apple_pac.el0_key, x1);
++        break;
++    case APPLE_PAC_SET_EL0_DIVERSIFIER_AT_EL1:
++        set_pair(&env->apple_pac.el0_key, x2);
++        env->apple_pac.el0_key_at_el1 = x1 != 0;
++        break;
++    case APPLE_PAC_SET_G_KEY:
++        set_pair(&env->keys.apga, x1);
++        break;
++    case APPLE_PAC_NOP:
++        break;
++    default:
++        qemu_log_mask(LOG_UNIMP, "Apple PAC hypercall %#" PRIx64
++                      " not implemented\n", env->xregs[0]);
++        ret = SMCCC_NOT_SUPPORTED;
++        break;
++    }
++    env->xregs[0] = ret;
++}
+diff --git a/target/arm/tcg/meson.build b/target/arm/tcg/meson.build
+index cbfac0036e..6b4f32fe73 100644
+--- a/target/arm/tcg/meson.build
++++ b/target/arm/tcg/meson.build
+@@ -85,6 +85,7 @@ arm_common_user_system_ss.add(when: 'TARGET_AARCH64', if_true: files(
+ ))
+ 
+ arm_common_system_ss.add(files(
++  'apple-pac.c',
+   'cpregs-at.c',
+   'gicv5-cpuif.c',
+   'psci.c',
+diff --git a/target/arm/tcg/pauth_helper.c b/target/arm/tcg/pauth_helper.c
+index a7b24ae124..78b0362b88 100644
+--- a/target/arm/tcg/pauth_helper.c
++++ b/target/arm/tcg/pauth_helper.c
+@@ -336,8 +336,32 @@ static uint64_t pauth_computepac(CPUARMState *env, uint64_t data,
+     }
+ }
+ 
++/*
++ * The key an A or B instruction really uses on a VMApple CPU.  EL0, and
++ * EL1 while the kernel borrows a process's keys, mix in the EL0
++ * diversifier (target/arm/tcg/apple-pac.c), so a pointer EL0 signed does
++ * not authenticate at EL1 and the other way round.
++ */
++static const ARMPACKey *pauth_apple_key(CPUARMState *env,
++                                        const ARMPACKey *key,
++                                        ARMPACKey *mixed)
++{
++    int el;
++
++    if (!env_archcpu(env)->apple_pac) {
++        return key;
++    }
++    el = arm_current_el(env);
++    if (el != 0 && !(el == 1 && env->apple_pac.el0_key_at_el1)) {
++        return key;
++    }
++    mixed->lo = key->lo ^ env->apple_pac.el0_key.lo;
++    mixed->hi = key->hi ^ env->apple_pac.el0_key.hi;
++    return mixed;
++}
++
+ static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
+-                             ARMPACKey *key, bool data)
++                             const ARMPACKey *key, bool data)
+ {
+     ARMCPU *cpu = env_archcpu(env);
+     ARMMMUIdx mmu_idx = arm_stage1_mmu_idx(env);
+@@ -345,6 +369,7 @@ static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
+     ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
+     uint64_t pac, ext_ptr, ext, test;
+     int bot_bit, top_bit;
++    ARMPACKey mixed;
+ 
+     /* If tagged pointers are in use, use ptr<55>, otherwise ptr<63>.  */
+     if (param.tbi) {
+@@ -365,7 +390,8 @@ static uint64_t pauth_addpac(CPUARMState *env, uint64_t ptr, uint64_t modifier,
+         ext_ptr = deposit64(ext_ptr, 60, 4, ext);
+     }
+ 
+-    pac = pauth_computepac(env, ext_ptr, modifier, *key);
++    pac = pauth_computepac(env, ext_ptr, modifier,
++                           *pauth_apple_key(env, key, &mixed));
+ 
+     /*
+      * Check if the ptr has good extension bits and corrupt the
+@@ -430,7 +456,7 @@ void pauth_fail_exception(CPUARMState *env, bool data,
+ }
+ 
+ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
+-                           ARMPACKey *key, bool data, int keynumber,
++                           const ARMPACKey *key, bool data, int keynumber,
+                            uintptr_t ra, bool is_combined)
+ {
+     ARMCPU *cpu = env_archcpu(env);
+@@ -439,6 +465,7 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
+     ARMPauthFeature pauth_feature = cpu_isar_feature(pauth_feature, cpu);
+     int bot_bit, top_bit;
+     uint64_t pac, orig_ptr, cmp_mask;
++    ARMPACKey mixed;
+ 
+     orig_ptr = pauth_original_ptr(ptr, param);
+ 
+@@ -451,7 +478,8 @@ static uint64_t pauth_auth(CPUARMState *env, uint64_t ptr, uint64_t modifier,
+         return orig_ptr;
+     }
+ 
+-    pac = pauth_computepac(env, orig_ptr, modifier, *key);
++    pac = pauth_computepac(env, orig_ptr, modifier,
++                           *pauth_apple_key(env, key, &mixed));
+     bot_bit = 64 - param.tsz;
+     top_bit = 64 - 8 * param.tbi;
+ 
+diff --git a/target/arm/tcg/psci.c b/target/arm/tcg/psci.c
+index 56754bde95..3b14bc61a6 100644
+--- a/target/arm/tcg/psci.c
++++ b/target/arm/tcg/psci.c
+@@ -83,6 +83,12 @@ void arm_handle_psci_call(ARMCPU *cpu)
+     trace_arm_psci_call(param[0], param[1], param[2], param[3],
+                         arm_cpu_mp_affinity(cpu));
+ 
++    /* The same conduit carries Apple's PAC service on a VMApple machine. */
++    if (is_a64(env) && arm_is_apple_pac_call(cpu, param[0])) {
++        arm_handle_apple_pac_call(cpu);
++        return;
++    }
++
+     if ((param[0] & QEMU_PSCI_0_2_64BIT) && !is_a64(env)) {
+         ret = QEMU_PSCI_RET_NOT_SUPPORTED;
+         goto err;

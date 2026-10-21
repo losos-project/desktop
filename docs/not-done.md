@@ -1,5 +1,9 @@
 # What is not done
 
+- **arm64 macOS on a PC.** `qemu-vmapple` runs `vmapple` under TCG with an
+  M1 CPU and Apple's pointer authentication, and its check passes. Nobody
+  has booted macOS on it yet, it has no GPU, and nothing in derisk starts
+  it. [arm64 macOS machines](macos-arm64.md) lists the rest.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
