@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Move every lockfile this repository owns to what its manifests allow now,
 # and re-pin the fixed-output hashes that follow from them. The `lockfiles`
-# workflow runs it weekly and proposes the result (docs/trust.md, "Keeping
-# the pins current").
+# workflow runs it weekly and pushes the result to main (docs/trust.md,
+# "Keeping the pins current").
 #
 #   tools/update-lockfiles > summary.md
 #
@@ -13,10 +13,18 @@
 # - Then tools/nix-refresh-hashes, for losos-docs' npm deps and anything
 #   else whose fetch the above changed.
 #
-# components/ is left alone: each submodule's commit is a pin someone moves
-# on purpose, and its own repository updates its lockfiles. cargo and npm come
-# from the updated nixpkgs, so a lock is resolved by the toolchain that will
-# build it. Progress goes to stderr; stdout is a Markdown summary.
+# - components/derisk and components/pm: each to its repository's newest
+#   weekly release, which that repository cut at 02:17 UTC the same day
+#   (its .github/release); components/mcsapi to the revision derisk's
+#   Cargo.lock names at that release, so the two agree (docs/trust.md, "The
+#   components/ submodules"). A pin only moves forward: one someone moved
+#   past the release by hand stays. This needs gh and a token for the
+#   release and compare APIs; without them the submodules stay where they are.
+#
+# Inside components/ nothing else moves: each repository updates its own
+# lockfiles the same way. cargo and npm come from the updated nixpkgs, so a
+# lock is resolved by the toolchain that will build it. Progress goes to
+# stderr; stdout is a Markdown summary.
 set -euo pipefail
 
 [ $# = 0 ] || { sed -n 's/^#   //p' "$0" >&2; exit 2; }
@@ -27,6 +35,78 @@ trap 'rm -rf "$work"' EXIT
 
 echo "Listing the pinned fixed outputs before anything moves" >&2
 tools/nix-refresh-hashes --list > "$work/before"
+
+# "<owner>/<repo>" of a submodule, from the URL .gitmodules gives it.
+repository() {
+  git config -f .gitmodules "submodule.components/$1.url" |
+    sed -E 's|^https://github.com/||; s|\.git$||'
+}
+
+# Moves components/NAME to REV, which LABEL describes, when REV is newer than
+# the pin. GitHub's compare says which way REV lies from the pin; a pin on a
+# commit main does not hold ("diverged") is someone's on purpose, so it stays.
+: > "$work/submodules"
+move_submodule() {
+  local name=$1 rev=$2 label=$3 repo pin status
+  repo=$(repository "$name")
+  # Inside a submodule that was never initialised, git would act on this
+  # repository instead.
+  if [ "$(git -C "components/$name" rev-parse --show-toplevel 2>/dev/null)" != "$(pwd -P)/components/$name" ]; then
+    echo "warning: components/$name is not checked out (git submodule update --init); it stays" >&2
+    return 0
+  fi
+  # The checkout, not the commit recorded here, so a newer commit checked
+  # out by hand is not moved back.
+  pin=$(git -C "components/$name" rev-parse HEAD)
+  [ "$pin" = "$rev" ] && { echo "components/$name is at $label already" >&2; return 0; }
+  if ! status=$(gh api "repos/$repo/compare/$pin...$rev" --jq .status); then
+    echo "warning: could not compare components/$name with $label; it stays" >&2
+    return 0
+  fi
+  if [ "$status" != ahead ]; then
+    echo "components/$name stays at ${pin:0:12}, which $label is not ahead of ($status)" >&2
+    return 0
+  fi
+  echo "components/$name: ${pin:0:12} to $label" >&2
+  git -C "components/$name" fetch --quiet --depth=1 origin "$rev"
+  git -C "components/$name" checkout --quiet --detach "$rev"
+  # The flake reads submodules from the index (self.submodules), so the new
+  # pin has to be staged to be evaluated.
+  git add "components/$name"
+  echo "- \`components/$name\`: \`${pin:0:12}\` to $label" >> "$work/submodules"
+}
+
+# The newest weekly release of a submodule's repository, as "<tag> <commit>".
+newest_weekly() {
+  local repo tag
+  repo=$(repository "$1")
+  tag=$(gh release list --repo "$repo" --limit 1000 --exclude-drafts --json tagName \
+    --jq '.[].tagName | select(test("^weekly-[0-9]{8}T[0-9]{4}$"))' | sort | tail -n 1)
+  [ -n "$tag" ] || return 1
+  echo "$tag $(gh api "repos/$repo/commits/$tag" --jq .sha)"
+}
+
+if command -v gh > /dev/null && gh auth status > /dev/null 2>&1; then
+  for name in derisk pm; do
+    if release=$(newest_weekly "$name"); then
+      read -r tag rev <<<"$release"
+      move_submodule "$name" "$rev" "[\`$tag\`](https://github.com/$(repository "$name")/releases/tag/$tag)"
+    else
+      echo "warning: $(repository "$name") has no weekly release yet; components/$name stays" >&2
+    fi
+  done
+  # The mcsapi revision derisk's lock fetches, under either name the
+  # repository has had.
+  rev=$(git -C components/derisk show HEAD:Cargo.lock 2>/dev/null |
+    sed -nE 's|^source = "git\+https://github.com/[^/]+/mcsapi(\?[^#]*)?#([0-9a-f]{40})"$|\2|p' | sort -u)
+  if [ "$(grep -c . <<<"$rev")" = 1 ]; then
+    move_submodule mcsapi "$rev" "\`${rev:0:12}\`, the revision components/derisk's Cargo.lock names"
+  else
+    echo "warning: components/derisk's Cargo.lock names ${rev:-no} mcsapi revision(s); components/mcsapi stays" >&2
+  fi
+else
+  echo "warning: gh is not signed in, so the submodules stay where they are" >&2
+fi
 
 nix flake update 2>&1 | tee "$work/flake" >&2
 
@@ -63,6 +143,10 @@ echo
 git diff --numstat -- ':(glob)**/Cargo.lock' ':(glob)**/package-lock.json' |
   awk '{ printf "- `%s`: +%s -%s lines\n", $3, $1, $2 }'
 git diff --quiet -- ':(glob)**/Cargo.lock' ':(glob)**/package-lock.json' && echo "No lock moved."
+echo
+echo "### Submodules"
+echo
+if [ -s "$work/submodules" ]; then cat "$work/submodules"; else echo "No submodule moved."; fi
 echo
 echo "### Pinned hashes"
 echo

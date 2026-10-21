@@ -90,6 +90,9 @@ already names the tree. Running `tools/nix-refresh-hashes --list > before.txt`
 before the move and `tools/nix-refresh-hashes before.txt` after it finds and
 rewrites that `cargoHash`. derisk's own `Cargo.lock` still fetches mcsapi by
 git revision, so move `components/mcsapi` to the revision that lock names.
+Every Monday the lockfile update moves all three to releases ([Keeping the
+pins current](#keeping-the-pins-current)), and a move by hand in between
+stays.
 
 ## Keeping the pins current
 
@@ -101,6 +104,15 @@ three things:
 - `cargo update` moves every `Cargo.lock` outside `components/`, and
   `npm update --package-lock-only` every `package-lock.json`, each only as
   far as its manifest allows, with cargo and npm from the new nixpkgs.
+- The submodules move to releases. derisk, mcsapi and pm publish GitHub
+  releases on the same cadences as the OS ([Release
+  cadences](releases.md#release-cadences)), and cut their weekly ones at
+  02:17 UTC, before this runs. `components/derisk` and `components/pm` move
+  to their repository's newest weekly release, and `components/mcsapi` to
+  the revision derisk's `Cargo.lock` names at that release, so the two
+  agree. A pin only moves forward, so one moved past the release by hand stays
+  until a newer release passes it. Inside the submodules nothing else
+  moves, since each repository updates its own lockfiles the same way.
 - `tools/nix-refresh-hashes` then re-fetches every fixed output pinned in
   this repository whose derivation those changes touched, and writes back
   the hash it really has. It has to re-fetch, because a stale hash still
@@ -108,21 +120,19 @@ three things:
   builds with it and never notices. losos-docs' npm hash moves this way
   whenever `website/package-lock.json` does.
 
-The result is a pull request on an `automation/lockfiles-<date>` branch. It
-merges itself with a merge commit once every check on it has passed and no
-VM test warned. Otherwise it waits for a person, with a comment saying which
-check stopped it. A newer week's pull request closes the older one. The
-submodules stay where they are, because derisk, mcsapi and pm each update
-their own lockfiles the same way, and moving a pin is a deliberate
-decision.
+The result is one commit, `chore(deps): update lockfiles`, pushed straight
+to main with no pull request. Main's own `ci` run on it is the check, so a
+lockfile that breaks the build shows there as any other push would, and a
+green one publishes that night's release. If main moved while the update
+ran, the commit is rebased onto it first. If the two touched the same lock,
+nothing is pushed and the run fails, and running it again starts afresh.
 
 > [!IMPORTANT]
-> The workflow opens and merges with `LOCKFILE_UPDATE_TOKEN`, a fine-grained
-> token with Contents and Pull requests write. GitHub starts no workflow for
-> a pull request or push made with Actions' own token, so with that token
-> neither the pull request's checks nor main's run after the merge would
-> start. Without the secret the branch is still pushed, and the run's summary
-> links the page that opens its pull request.
+> The workflow pushes with `LOCKFILE_UPDATE_TOKEN`, a fine-grained token with
+> Contents write. GitHub starts no workflow for a push made with Actions' own
+> token, so without the secret the update still lands on main but `ci` does
+> not run on it until the next push. A branch rule that refuses direct pushes
+> to main has to let the token's owner, or Actions, bypass it.
 
 android_translation_layer stays a `fetchgit` pin. It is an upstream fork,
 off by default, and its tree is close to half a gigabyte, which the flake

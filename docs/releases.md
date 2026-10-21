@@ -81,6 +81,15 @@ earlier release's name used is not picked again until every verb has been
 used. If the word list cannot be fetched, the release is published without a
 name.
 
+derisk, mcsapi and pm release on the same cadences, each through its own
+`.github/release`: every commit on its default branch that passes CI is a
+nightly, and at 02:17 UTC the newest nightly becomes the weekly, monthly or
+yearly release that is due, with the same commit and files, since nothing
+in them depends on the cadence. Their releases are named the same way, from
+their own earlier names. Every Monday the OS's lockfile update moves its
+submodules to their weekly releases ([Keeping the pins
+current](trust.md#keeping-the-pins-current)).
+
 ## Choosing a cadence
 
 Settings, System, Updates offers all four cadences. The choice applies to the
