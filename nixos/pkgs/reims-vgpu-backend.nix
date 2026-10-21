@@ -10,6 +10,7 @@
   rustPlatform,
   fetchFromGitHub,
   makeWrapper,
+  llvm,
   spirv-tools,
   vulkan-loader,
 }:
@@ -43,13 +44,20 @@ rustPlatform.buildRustPackage {
 
   # ash opens libvulkan.so.1 at run time, so the loader goes on the
   # binary's search path; the driver is the host's (VK_DRIVER_FILES).
-  # metal2vulkan checks every SPIR-V module it emits with spirv-val, and
-  # without it on PATH every shader translation fails.
+  # metal2vulkan reads each of the guest's AIR shaders with llvm-dis and
+  # checks every SPIR-V module it emits with spirv-val; without either on
+  # PATH every shader translation fails, and the guest draws nothing. Any
+  # LLVM reads AIR: metal2vulkan's CI uses Ubuntu's 18 and Homebrew's newest.
   postFixup = ''
     patchelf --add-rpath ${lib.makeLibraryPath [ vulkan-loader ]} \
       $out/bin/reims-vgpu-backend
     wrapProgram $out/bin/reims-vgpu-backend \
-      --prefix PATH : ${lib.makeBinPath [ spirv-tools ]}
+      --prefix PATH : ${
+        lib.makeBinPath [
+          llvm
+          spirv-tools
+        ]
+      }
   '';
 
   meta = {
