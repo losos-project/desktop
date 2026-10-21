@@ -421,6 +421,10 @@ name_of() {
 # StartupWMClass names, so the desktop shows it with the app's name and
 # icon. Closing it closes the display and the app with it.
 #
+# The display has no system decorations: Android 17 gives a display that
+# has them its own home screen and taskbar, which came up over the app,
+# and the window showed the Pixel's wallpaper instead of the app.
+#
 # Sound comes from the emulator itself, so no window forwards it: every
 # window would forward all of it.
 cmd_run() {
@@ -430,7 +434,7 @@ cmd_run() {
   name=$(name_of "$package")
   SDL_APP_ID=android.$package exec scrcpy -s "$serial" \
     --new-display=@windowWidth@x@windowHeight@/@windowDensity@ --flex-display \
-    --start-app="$package" --no-audio \
+    --no-vd-system-decorations --start-app="$package" --no-audio \
     --window-title="${name:-$package}" --stay-awake \
     > >(start_late "$package" >&2) 2>&1
 }
