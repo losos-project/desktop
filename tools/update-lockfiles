@@ -49,7 +49,15 @@ repository() {
 move_submodule() {
   local name=$1 rev=$2 label=$3 repo pin status
   repo=$(repository "$name")
-  pin=$(git rev-parse "HEAD:components/$name")
+  # Inside a submodule that was never initialised, git would act on this
+  # repository instead.
+  if [ "$(git -C "components/$name" rev-parse --show-toplevel 2>/dev/null)" != "$(pwd -P)/components/$name" ]; then
+    echo "warning: components/$name is not checked out (git submodule update --init); it stays" >&2
+    return 0
+  fi
+  # The checkout, not the commit recorded here, so a newer commit checked
+  # out by hand is not moved back.
+  pin=$(git -C "components/$name" rev-parse HEAD)
   [ "$pin" = "$rev" ] && { echo "components/$name is at $label already" >&2; return 0; }
   if ! status=$(gh api "repos/$repo/compare/$pin...$rev" --jq .status); then
     echo "warning: could not compare components/$name with $label; it stays" >&2
