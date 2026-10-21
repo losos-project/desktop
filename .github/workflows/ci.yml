@@ -717,10 +717,63 @@ jobs:
       # Builds the module the handler tests load, then runs them.
       - run: npm test
 
+  # Android app support end to end (docs/android-apps.md), on the runner
+  # itself: the x86_64 runner has KVM, which the Pixel needs and a VM test's
+  # guest would not have. tools/android-app-support-test runs the image's
+  # own package and user units under the runner's systemd user manager. It
+  # downloads Android from Google as a person's setup does, so it builds
+  # nothing big and needs neither the image nor the project's cache.
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      NIX_VERSION: "2.34.8"
+      NIX_INSTALLER_SHA256: "96c10e102c88809dd9ec0bee89200c4a51eae4c9f6d8698c26b16788d131e078"
+    steps:
+      - *free-disk
+      - name: Install Nix
+        run: |
+          curl -sSfL --proto '=https' \
+            "https://releases.nixos.org/nix/nix-$NIX_VERSION/install" -o install-nix
+          echo "$NIX_INSTALLER_SHA256  install-nix" | sha256sum -c -
+          sh install-nix --daemon --yes --no-channel-add
+          echo "experimental-features = nix-command flakes" | sudo tee -a /etc/nix/nix.conf
+          sudo systemctl restart nix-daemon
+          echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, submodules: true }
+      # The emulator runs in the bubblewrap sandbox that gives it its
+      # libraries, which Ubuntu's AppArmor would stop making a user
+      # namespace. KVM is open to every user on a LosOS PC, as here. The
+      # runner's user gets a user manager of its own, as a person signed in
+      # to the desktop has.
+      - name: Give the runner's user what a person on the desktop has
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo chmod 0666 /dev/kvm
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 30); do
+            [ -S "/run/user/$(id -u)/bus" ] && break
+            sleep 1
+          done
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Set Android up, install an app and open it in a window
+        run: |
+          nix shell nixpkgs#xvfb nixpkgs#xdotool nixpkgs#xorg.xprop nixpkgs#imagemagick nixpkgs#jq \
+            --inputs-from . -c tools/android-app-support-test "$RUNNER_TEMP/android"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: android-app-support
+          path: ${{ runner.temp }}/android/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # The one check branch protection looks for, so a skipped or cancelled job
   # never reads as green.
   ci:
-    needs: [prebuild, flake, format, proxy]
+    needs: [prebuild, flake, format, proxy, android]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -731,11 +784,13 @@ jobs:
           FLAKE: ${{ needs.flake.result }}
           FORMAT: ${{ needs.format.result }}
           PROXY: ${{ needs.proxy.result }}
+          ANDROID: ${{ needs.android.result }}
         run: |
           test "$PREBUILD" = success
           test "$FLAKE" = success
           test "$FORMAT" = success
           test "$PROXY" = success
+          test "$ANDROID" = success
 
   # release-name checked a tag given to a run started by hand, back when a
   # release could have any name. Every tag is now `<cadence>-<stamp>`, made

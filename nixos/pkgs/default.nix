@@ -111,9 +111,13 @@ in
   android-headers = callWithMold ./android-headers.nix { };
   libhybris = callWithMold ./libhybris.nix { };
   halium-gsi = final.callPackage ./halium-gsi.nix { };
-  # The Android Translation Layer (nixos/modules/atl.nix), which nixpkgs does
-  # not carry either; only in the closure when losos.android.enable is set.
-  android-translation-layer = callWithMold ./android-translation-layer.nix { };
+  # Android app support (android-apps.nix): a virtual Pixel of each
+  # person's own and its apps as windows. scrcpy and the emulator's sandbox
+  # come from nixpkgs' own set: SDL's window decorations would link the
+  # patched GTK.
+  android-app-support = final.callPackage ./android-app-support.nix {
+    inherit (plain) scrcpy buildFHSEnv;
+  };
   # Danube (danube.nix), the web browser, on WPE WebKit (wpewebkit.nix),
   # which nixpkgs does not carry. WebKit is built from nixpkgs' own package
   # set: from this one, GStreamer's plugins would link the patched GTK and
