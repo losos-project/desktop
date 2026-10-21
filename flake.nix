@@ -313,6 +313,19 @@
         }
       );
 
+      # VM tests that need the internet, which the sandbox `checks` build
+      # in has none of. CI's android-desktop job builds each one's driver
+      # and runs it outside the sandbox.
+      networkTests = forAllSystems (
+        system: pkgs:
+        lib.optionalAttrs (system == "x86_64-linux") {
+          # Android app support in the booted image: the Pixel set up and
+          # booted inside it, and an app as a window of the desktop's
+          # (android-apps.nix).
+          android-apps = pkgs.testers.runNixOSTest (import ./nixos/tests/android-apps.nix { inherit self; });
+        }
+      );
+
       apps = forAllSystems (
         system: pkgs:
         let

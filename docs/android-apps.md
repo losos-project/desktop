@@ -150,6 +150,15 @@ llvmpipe rather than SwiftShader. llvmpipe's Vulkan cannot export the memory
 gfxstream asks for, so that run turns the emulator's Vulkan off with
 `-feature -Vulkan`. A GPU's driver can, and keeps it.
 
+The `android-desktop` job runs the whole thing inside the image
+(`nixos/tests/android-apps.nix`). The image boots in a VM and a person
+signs in to its desktop. The Android app support window sets the Pixel
+up, and the Pixel boots inside that VM, on KVM that the runner passes on
+to it. F-Droid then installs and opens from its desktop entry as one of
+the desktop's windows. The setup downloads from Google, so the test runs
+outside the Nix sandbox, and it is in the flake's `networkTests` rather
+than `checks`. Its screenshots are the job's `android-desktop` artifact.
+
 ## The Pixel's units
 
 Three of each person's user units, from `nixos/modules/android-apps.nix`:

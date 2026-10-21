@@ -774,10 +774,44 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Android app support in the booted image (nixos/tests/android-apps.nix):
+  # the image boots in a VM, a person signs in to its desktop, the Pixel is
+  # set up and booted inside that VM, and an Android app opens as one of the
+  # desktop's windows. The setup downloads from Google, so the test's driver
+  # runs here, outside the Nix sandbox, and the Pixel runs on the VM's KVM,
+  # which the runner's own KVM passes on to it. The image builds from the
+  # project's cache like `flake`'s, compiling only what this change touched.
+  android-desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env: *nix-env
+    steps:
+      - *free-disk
+      - *install-nix
+      - *checkout
+      - *serve-cache
+      - *serve-cache-start
+      - name: Build the test and the image it boots
+        run: |
+          echo "Nested KVM on the runner: $(cat /sys/module/kvm_*/parameters/nested)"
+          nix build --impure -L --max-jobs 1 --out-link android-desktop \
+            .#networkTests.x86_64-linux.android-apps.driver
+      - name: Boot the image, set Android up in it and open an app
+        run: |
+          timeout --signal=INT --kill-after=2m 150m \
+            ./android-desktop/bin/nixos-test-driver --output-directory "$RUNNER_TEMP/android-desktop"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: android-desktop
+          path: ${{ runner.temp }}/android-desktop/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # The one check branch protection looks for, so a skipped or cancelled job
   # never reads as green.
   ci:
-    needs: [prebuild, flake, format, proxy, android]
+    needs: [prebuild, flake, format, proxy, android, android-desktop]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -789,12 +823,14 @@ jobs:
           FORMAT: ${{ needs.format.result }}
           PROXY: ${{ needs.proxy.result }}
           ANDROID: ${{ needs.android.result }}
+          ANDROID_DESKTOP: ${{ needs.android-desktop.result }}
         run: |
           test "$PREBUILD" = success
           test "$FLAKE" = success
           test "$FORMAT" = success
           test "$PROXY" = success
           test "$ANDROID" = success
+          test "$ANDROID_DESKTOP" = success
 
   # release-name checked a tag given to a run started by hand, back when a
   # release could have any name. Every tag is now `<cadence>-<stamp>`, made
