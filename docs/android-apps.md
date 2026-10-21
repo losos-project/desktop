@@ -169,7 +169,11 @@ from their UID. adb's server listens on a socket in the person's runtime
 directory instead of TCP port 5037. Otherwise one server would serve
 everyone on the computer, and another person's adb could reach this
 person's Pixel with this person's key. Google Play's Android also asks
-adb for that key, and the key stays in the person's data.
+adb for that key, and the key stays in the person's data. A server looks
+for emulators once, as it starts, and afterwards hears of one only when
+the emulator tells it on port 5037. While the Pixel starts,
+`android-app-support` sends the server that same request over its socket,
+so a Pixel that starts after the server is still found.
 
 ## What was here before
 

@@ -30,6 +30,7 @@
   gnugrep,
   jq,
   libnotify,
+  socat,
   systemd,
   unzip,
   findutils,
@@ -239,6 +240,7 @@ let
       gnugrep
       jq
       libnotify
+      socat
       systemd
       unzip
     ];

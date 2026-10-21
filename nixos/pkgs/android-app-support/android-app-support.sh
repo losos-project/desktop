@@ -292,11 +292,25 @@ cmd_shutdown() {
   adb -s "$serial" emu kill > /dev/null 2>&1 || true
 }
 
+# Tells adb's server where the Pixel is. The server looks for emulators
+# on their ports once, as it starts, and after that only hears of one that
+# tells it on TCP port 5037, which is not where this server listens. So a
+# Pixel that starts after the server is told about by hand, with the
+# request the emulator would have sent: host:emulator and its adb port.
+# Telling it again about a Pixel it knows does nothing.
+register() {
+  local request="host:emulator:$((port + 1))"
+  adb start-server > /dev/null 2>&1 || return 0
+  printf '%04x%s' "${#request}" "$request" |
+    socat -t 2 - "UNIX-CONNECT:${ADB_SERVER_SOCKET#localfilesystem:}" 2> /dev/null || true
+}
+
 # Waits for Android to have started, for at most `seconds`.
 wait_booted() {
   local seconds=$1 start=$SECONDS
   while [ $((SECONDS - start)) -lt "$seconds" ]; do
     active android-app-support.service || return 1
+    register
     booted && return 0
     sleep 2
   done
