@@ -33,6 +33,7 @@
   socat,
   systemd,
   unzip,
+  util-linux,
   findutils,
 }:
 
@@ -243,6 +244,7 @@ let
       socat
       systemd
       unzip
+      util-linux
     ];
     text = script;
   };

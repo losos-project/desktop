@@ -14,7 +14,7 @@
 #
 #   tools/android-app-support-test OUT
 #
-# OUT gets the screenshots and the logs. Needs: Nix, /dev/kvm, a user
+# OUT gets the screenshots and the logs. Needs: Nix, adb, /dev/kvm, a user
 # manager (loginctl enable-linger), unprivileged user namespaces, and Mesa
 # at /run/opengl-driver.
 set -euo pipefail

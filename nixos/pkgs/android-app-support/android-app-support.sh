@@ -340,7 +340,19 @@ cmd_stop() {
 # reads them. The app grid gets the apps the person installed, and Google
 # Play to install more; the apps the phone came with (Settings, Contacts,
 # Chrome) are in the Android app support app, so the grid has one Settings.
+#
+# One at a time: the setup, an install and the watcher below each list the
+# apps, and two at once wrote over each other's files, here and on the
+# Pixel.
 cmd_sync() {
+  mkdir -p "$data"
+  (
+    flock 9
+    sync_apps
+  ) 9> "$data/sync.lock"
+}
+
+sync_apps() {
   local apps=$data/apps.tsv icons=$data/icons remote=/data/local/tmp/losos-apps
   local applications=${XDG_DATA_HOME:-$HOME/.local/share}/applications
   adb -s "$serial" push @appsDex@ "$remote.dex" > /dev/null
