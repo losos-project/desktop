@@ -2,8 +2,9 @@
 
 macOS 26 is the last release for Intel Macs. Every macOS after it runs on
 Apple silicon only, so a macOS machine that keeps getting updates has to be
-an arm64 one. This page covers the emulator that runs one on a PC:
-`qemu-vmapple`, QEMU's `vmapple` machine under TCG with an emulated M1 CPU.
+an arm64 one. This page covers `qemu-vmapple`, the QEMU that runs one:
+QEMU's `vmapple` machine under TCG with an emulated M1 CPU on any PC, or
+under KVM on an arm64 host, with a GPU from Reims on either.
 
 > [!WARNING]
 > Apple's licence lets macOS run in a virtual machine only on Apple
@@ -11,11 +12,12 @@ an arm64 one. This page covers the emulator that runs one on a PC:
 > repository or the image contains macOS or Apple's boot ROM, and CI never
 > boots macOS. Whoever boots it supplies both, from their own Mac.
 
-## Two routes
+## Where it runs
 
 | Host | How the guest runs | State |
 | --- | --- | --- |
-| An Apple silicon Mac running LosOS | KVM, as Asahi Linux runs it, with two KVM patches | LosOS does not boot on these Macs yet |
+| An Apple silicon Mac running Linux | `qemu-vmapple` under KVM, as Asahi Linux runs it; macOS needs two host-kernel patches | KVM checked on an emulated arm64 host, not yet on a Mac |
+| Another arm64 machine with KVM and pointer authentication | `qemu-vmapple` under KVM | the same check, with EL0 sharing EL1's keys |
 | Any PC, x86-64 or arm64 | `qemu-vmapple`, every instruction translated by TCG | the emulator and its check are built, macOS not yet booted on it |
 
 `vmapple` is the virtual Mac that Apple's own hypervisor
@@ -40,6 +42,9 @@ the CPU is what an M1 shows it, plus a few hypercalls.
   `vmapple`'s default under TCG.
 - **0003** answers Apple's pointer authentication hypercalls and checks
   signatures again.
+- **0004** runs `vmapple` under KVM (see "Under KVM").
+- **0005** adds `apv-gpu-proxy`, a GPU served by another process (see
+  "A GPU").
 
 ### The apple-m1 CPU
 
@@ -99,6 +104,65 @@ CPU made. What it does rely on now holds:
 accepts every signature. That is for comparing against a guest that
 booted before 0003.
 
+## Under KVM
+
+On an arm64 Linux host, `-machine vmapple,accel=kvm` runs the guest on the
+host's own CPU. 0004 is aquarat's KVM support from
+[qemu-reims-vgpu](https://github.com/aquarat/qemu-reims-vgpu), which runs
+macOS 13 and 26 guests on Asahi Linux every day:
+
+- KVM passes Apple's pointer authentication hypercalls up to QEMU through
+  an SMCCC filter (Linux 6.4 or later), and QEMU writes the vCPU's key
+  registers.
+- PSCI, the GIC and the timers stay in the kernel. Every timer, the GIC
+  maintenance interrupt and the PMU get their PPIs, and KVM's PMU is set up
+  before the first run.
+
+The EL0 key needs Apple's `KERNKEY` and `APCTL` registers, which only an
+Apple silicon CPU has. KVM shows them to QEMU only with aquarat's VM-key
+patch in the host kernel. On any other arm64 host, and on a Mac without
+the patch, QEMU says so once and EL0 shares EL1's keys. The guest still
+signs and checks its pointers consistently, but one process could forge
+another's.
+
+A macOS guest under KVM also stores to its GIC with instructions that give
+KVM no syndrome. aquarat's second host-kernel patch emulates those. Both
+patches are in
+[apple-macos-arm64-vm-guest](https://github.com/aquarat/apple-macos-arm64-vm-guest)
+(`patches/linux-7.1.13-*`). A Linux guest needs neither.
+
+The guest sees the host's CPU, not `apple-m1`: KVM cannot change what
+the CPU it runs on does.
+
+## A GPU
+
+macOS already has a driver for `vmapple`'s paravirtual GPU,
+`AppleParavirtGPU.kext`. On a Mac, Apple's ParavirtualizedGraphics
+framework serves it. On Linux,
+[Reims](https://github.com/aquarat/reims-vgpu) does: it decodes the
+driver's command stream and runs the guest's Metal on the host's Vulkan,
+translating Metal's compiled shaders to SPIR-V with metal2vulkan. Nothing
+is installed in the guest and the image is not patched.
+
+Reims runs as its own process, `reims-vgpu-backend` (in the overlay), and
+0005's `apv-gpu-proxy` device connects `vmapple`'s GPU slot to it. Guest
+RAM must be shared memory so the backend can map it:
+
+```sh
+reims-vgpu-backend --socket /run/user/$UID/gpu.sock &
+qemu-system-aarch64 \
+  -machine vmapple,gfx-device=apv-gpu-proxy,aux-ram-share=on,memory-backend=ram \
+  -object memory-backend-memfd,id=ram,size=8G,share=on \
+  -global apv-gpu-proxy.socket=/run/user/$UID/gpu.sock \
+  ...
+```
+
+The backend uses whatever Vulkan driver the host has (`VK_DRIVER_FILES`
+picks one). On Asahi, aquarat renders on Honeykrisp with patches to Mesa.
+On a PC it is the PC's own driver. If the backend dies, the guest stops with the reason, so a
+host driver crash does not take QEMU down with it. `gfx-device=none`
+keeps 27on86's inert windows for a headless guest.
+
 ## Running a guest
 
 You need three things from a Mac, none of which the image carries:
@@ -133,15 +197,23 @@ needs no Apple software and no KVM, so it runs on both architectures'
 builders. The same firmware on the unpatched fork fails the feature checks
 and the first three hypercalls.
 
+Built with `-DGENERIC_KVM_HOST`, the firmware is for KVM on an arm64 host
+that is not a Mac. It skips the CPU checks and the six that need separate
+EL0 keys. CI has no arm64 host with KVM, so this one is run by hand: on an
+emulated Neoverse V1 running Linux with KVM, all 28 checks pass.
+
 ## What is not done
 
 - **Booting macOS on it.** Nobody has booted a macOS guest on these
   patches yet. The next steps are 27on86's macOS 13 guest with
-  authentication on, then macOS 26.
+  authentication on, then macOS 26, then the same under KVM on a Mac.
 - **Installing macOS without a Mac.** The restore needs Virtualization.framework.
-- **A GPU.** The guest is headless. Reims draws `vmapple`'s paravirtual
-  GPU through Vulkan in aquarat's QEMU on Asahi. That device is not in
-  this build.
+- **Metal from a guest.** Reims and the device are built, and Reims' own
+  Vulkan suites pass on lavapipe, but no macOS guest has drawn through
+  them in this build. Under TCG on a PC the device and the backend
+  connect and map guest RAM, but nothing has drawn through them yet.
+- **The host-kernel patches.** LosOS does not boot on an Apple silicon Mac
+  yet, so it carries no kernel for one.
 - **Speed.** TCG translates every instruction, so expect a guest many
   times slower than on a Mac.
 - **A machine in derisk.** Nothing creates or starts this guest from the

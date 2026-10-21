@@ -148,6 +148,7 @@ in
       hostCpuTargets = [ "aarch64-softmmu" ];
     }) ./patches/qemu-vmapple).overrideAttrs
       { pname = "qemu-vmapple"; };
+  reims-vgpu-backend = callWithMold ./reims-vgpu-backend.nix { };
   # libsecret too. Only its test suite reaches the patched GTK, through gjs,
   # so ours differed from nixpkgs' in a check input alone, compiled in CI,
   # and failed there in test-collection when the test's D-Bus service
