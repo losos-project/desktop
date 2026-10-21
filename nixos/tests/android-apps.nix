@@ -46,12 +46,13 @@ in
       uid = 60001
       runtime = f"/run/user/{uid}"
 
+      # As alice, in her session's user manager. The image has no su
+      # (accounts.nix), so runuser, as boot.nix uses.
       def alice(command, **kwargs):
           return machine.succeed(
-              "su -l alice -c "
-              + shlex.quote(
-                  f"XDG_RUNTIME_DIR={runtime} DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus {command}"
-              ),
+              f"runuser -u alice -- env XDG_RUNTIME_DIR={runtime}"
+              f" DBUS_SESSION_BUS_ADDRESS=unix:path={runtime}/bus sh -c "
+              + shlex.quote(command),
               **kwargs,
           )
 
@@ -118,7 +119,8 @@ in
           else:
               raise Exception("the Pixel was not running after an hour")
           machine.screenshot("android-app-support-running")
-          print(alice(f"ADB_SERVER_SOCKET=localfilesystem:{runtime}/android-app-support-adb adb -s {status()['serial']} shell getprop ro.build.version.release"))
+          # What Android draws with, and that it is Google's Android 17.
+          print(alice("android-app-support gpu"))
 
       with subtest("an Android app opens as a window of the desktop's"):
           alice(
@@ -130,19 +132,13 @@ in
               " | sha256sum -c -"
           )
           alice("android-app-support install /tmp/fdroid.apk")
-          alice("test -e ~/.local/share/applications/android-org.fdroid.fdroid.desktop")
+          alice("test -e /home/alice/.local/share/applications/android-org.fdroid.fdroid.desktop")
           # As the app grid opens it: by its desktop entry.
           alice("derisk launch android-org.fdroid.fdroid.desktop")
           machine.wait_until_succeeds("pgrep -u alice -f 'scrcpy.*org.fdroid.fdroid'", timeout=300)
           machine.sleep(60)
           machine.screenshot("f-droid-window")
-          print(
-              alice(
-                  f"ADB_SERVER_SOCKET=localfilesystem:{runtime}/android-app-support-adb"
-                  f" adb -s {status()['serial']} shell dumpsys activity activities"
-                  " | grep -E 'Display #|org.fdroid.fdroid' | head -20"
-              )
-          )
+          # The app's frames, drawn on its own display of the Pixel's.
           print(alice("android-app-support gpu org.fdroid.fdroid"))
     '';
 }
