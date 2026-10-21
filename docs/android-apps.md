@@ -97,6 +97,9 @@ FFmpeg. Typing, the pointer and the clipboard go back the other way.
 - The window's Wayland app_id is `android.PACKAGE`, which the desktop
   entry's `StartupWMClass` names. So the desktop shows the window with the
   app's name and icon.
+- The display has no system decorations
+  (`--no-vd-system-decorations`). Android 17 gives a display that has
+  them a home screen and taskbar of its own, which covered the app.
 - Closing the window closes that display, and the app with it.
 - No window forwards sound, since each would forward all of it. The
   emulator plays the Pixel's sound itself.

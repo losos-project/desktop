@@ -14,7 +14,7 @@
 #
 #   tools/android-app-support-test OUT
 #
-# OUT gets the screenshots and the logs. Needs: Nix, /dev/kvm, a user
+# OUT gets the screenshots and the logs. Needs: Nix, adb, /dev/kvm, a user
 # manager (loginctl enable-linger), unprivileged user namespaces, and Mesa
 # at /run/opengl-driver.
 set -euo pipefail
@@ -145,6 +145,10 @@ echo "Displays on the Pixel: $displays"
 sleep 20
 adb -s "$serial" shell dumpsys activity activities | grep -E 'Display #|org.fdroid.fdroid' | head -20 | tee "$out/activities.txt"
 grep -q 'org.fdroid.fdroid' "$out/activities.txt" || fail "F-Droid is not running"
+# Running is not showing: with Android's home screen on its display, F-Droid
+# ran behind it and the window showed the wallpaper.
+grep -Eq 'A=[0-9]+:org.fdroid.fdroid .*visible=true' "$out/activities.txt" ||
+  fail "F-Droid is not visible on its display"
 import -window root "$out/f-droid-window.png"
 geometry=$(xdotool getwindowgeometry "$window")
 echo "$geometry" | tee -a "$out/window.txt"

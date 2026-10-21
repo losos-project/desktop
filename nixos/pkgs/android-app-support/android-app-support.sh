@@ -340,7 +340,19 @@ cmd_stop() {
 # reads them. The app grid gets the apps the person installed, and Google
 # Play to install more; the apps the phone came with (Settings, Contacts,
 # Chrome) are in the Android app support app, so the grid has one Settings.
+#
+# One at a time: the setup, an install and the watcher below each list the
+# apps, and two at once wrote over each other's files, here and on the
+# Pixel.
 cmd_sync() {
+  mkdir -p "$data"
+  (
+    flock 9
+    sync_apps
+  ) 9> "$data/sync.lock"
+}
+
+sync_apps() {
   local apps=$data/apps.tsv icons=$data/icons remote=/data/local/tmp/losos-apps
   local applications=${XDG_DATA_HOME:-$HOME/.local/share}/applications
   adb -s "$serial" push @appsDex@ "$remote.dex" > /dev/null
@@ -409,6 +421,10 @@ name_of() {
 # StartupWMClass names, so the desktop shows it with the app's name and
 # icon. Closing it closes the display and the app with it.
 #
+# The display has no system decorations: Android 17 gives a display that
+# has them its own home screen and taskbar, which came up over the app,
+# and the window showed the Pixel's wallpaper instead of the app.
+#
 # Sound comes from the emulator itself, so no window forwards it: every
 # window would forward all of it.
 cmd_run() {
@@ -418,7 +434,7 @@ cmd_run() {
   name=$(name_of "$package")
   SDL_APP_ID=android.$package exec scrcpy -s "$serial" \
     --new-display=@windowWidth@x@windowHeight@/@windowDensity@ --flex-display \
-    --start-app="$package" --no-audio \
+    --no-vd-system-decorations --start-app="$package" --no-audio \
     --window-title="${name:-$package}" --stay-awake \
     > >(start_late "$package" >&2) 2>&1
 }
