@@ -31,18 +31,21 @@ usage() {
 
 # "<derivation> <hash>" for every fixed-output derivation in this
 # architecture's release whose hash is written in one of this repository's
-# own .nix files (components/ has its own).
+# own .nix files (components/ has its own). x2mcsapi is listed beside the
+# release: nothing in the image builds it, but its cargoHash follows
+# components/mcsapi's Cargo.lock as derisk's follows derisk's.
 list() {
-  local system drv
+  local system release x2mcsapi
   system=$(nix eval --raw --impure --expr builtins.currentSystem)
-  drv=$(nix eval --raw ".#packages.$system.release.drvPath")
+  release=$(nix eval --raw ".#packages.$system.release.drvPath")
+  x2mcsapi=$(nix eval --raw ".#legacyPackages.$system.x2mcsapi.drvPath")
   git ls-files -z '*.nix' ':!:components/' |
     xargs -0 grep -oh 'sha256-[A-Za-z0-9+/]\{43\}=' | sort -u > "$work/pinned"
-  nix derivation show -r "$drv" |
+  nix derivation show -r "$release" "$x2mcsapi" |
     jq -r '.derivations | to_entries[]
       | select(.value.outputs.out.hash? != null)
       | "/nix/store/\(.key) \(.value.outputs.out.hash)"' |
-    awk 'NR == FNR { pinned[$1]; next } $2 in pinned' "$work/pinned" - | sort
+    awk 'NR == FNR { pinned[$1]; next } $2 in pinned' "$work/pinned" - | sort -u
 }
 
 work=$(mktemp -d)
