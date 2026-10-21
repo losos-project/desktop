@@ -1,0 +1,36 @@
+# TextEdit, through everything a person does with a window: typing by key
+# and as text, menus, the clipboard, a context menu, resizing, key repeat,
+# and how long a key takes to show.
+launch com.apple.TextEdit
+window com.apple.TextEdit 60
+shot 01-opened
+keys Hello from LosOS!
+expect-change 5
+shot 02-typed
+text  Ünïcödé ✓
+expect-change 5
+shot 03-unicode
+key cmd+a
+expect-menus Format 15
+menu Format > Font > Bold
+expect-change 5
+shot 04-bold
+key cmd+c
+expect-clipboard Hello from LosOS! Ünïcödé ✓ 5
+clipboard pasted from the host
+key right
+key return
+key cmd+v
+expect-change 5
+shot 05-pasted
+click 120 90 right
+shot-popup 06-context-menu 10
+key escape
+resize 720 460
+expect-size 720 460 10
+shot 07-resized
+key return
+hold . 2000
+expect-rate 10
+shot 08-held
+latency 20

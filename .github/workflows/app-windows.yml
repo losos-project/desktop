@@ -1,0 +1,77 @@
+# Test src/app-windows (docs/app-windows.md): the protocol and the client on
+# Linux, and the whole path on real Macs. GitHub's macOS runners are Apple
+# hardware, the only place macOS may run, so macos-app-server runs there
+# with real apps and the client drives it from the same machine
+# (src/app-windows/tests/macos-ci.sh). What each run saw is kept as an
+# artifact: every window's decoded pictures, a report with frame rates and
+# key latency, and a recording `app-windows replay` shows on a desktop.
+#
+# It shares nothing with ci.yml. The image builds app-windows from Nix, and
+# that build runs the same tests.
+name: app-windows
+
+on:
+  push:
+    branches: [main, claude/project-thread-4ckxwv]
+    paths: [src/app-windows/**, .github/workflows/app-windows.yml]
+  pull_request:
+    paths: [src/app-windows/**, .github/workflows/app-windows.yml]
+  workflow_dispatch:
+
+# A pull request's run executes branch code, and nothing here publishes.
+#
+# Every action is pinned to a commit, with its tag beside it, as in ci.yml.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: src/app-windows
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: FFmpeg and xkbcommon to build against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libavcodec-dev libavutil-dev libswscale-dev libxkbcommon-dev libclang-dev pkg-config
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      # The server's macOS code, type-checked for both kinds of Mac before
+      # the slower jobs below build it there.
+      - run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo clippy -p macos-app-server --locked --target aarch64-apple-darwin -- -D warnings
+          cargo clippy -p macos-app-server --locked --target x86_64-apple-darwin -- -D warnings
+
+  macos:
+    needs: linux
+    strategy:
+      fail-fast: false
+      matrix:
+        # Apple silicon, which every Mac Apple sells now is, and Intel,
+        # which dockur/macos runs on PCs.
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: FFmpeg for the client
+        run: brew install ffmpeg pkgconf
+      - run: cargo build --release --locked
+      - run: cargo test --workspace --locked
+      - name: Drive TextEdit and Calculator through the server
+        run: tests/macos-ci.sh "$RUNNER_TEMP/app-windows-${{ matrix.runner }}"
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-windows-${{ matrix.runner }}
+          path: ${{ runner.temp }}/app-windows-${{ matrix.runner }}
+          if-no-files-found: warn
