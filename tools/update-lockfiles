@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Move every lockfile this repository owns to what its manifests allow now,
 # and re-pin the fixed-output hashes that follow from them. The `lockfiles`
-# workflow runs it weekly and proposes the result (docs/trust.md, "Keeping
-# the pins current").
+# workflow runs it weekly and pushes the result to main (docs/trust.md,
+# "Keeping the pins current").
 #
 #   tools/update-lockfiles > summary.md
 #

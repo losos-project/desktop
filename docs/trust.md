@@ -118,18 +118,19 @@ runs `tools/update-lockfiles`, which a person can run the same way:
   with it and never notices. losos-docs' npm hash moves this way whenever
   `website/package-lock.json` does.
 
-The result is a pull request on an `automation/lockfiles-<date>` branch that
-merges itself with a merge commit once every check on it has passed and no
-VM test warned; otherwise it waits for a person, with a comment saying
-which check stopped it. A newer week's pull request closes the older one.
+The result is one commit, `chore(deps): update lockfiles`, pushed straight
+to main with no pull request. Main's own `ci` run on it is the check, so a
+lockfile that breaks the build shows there as any other push would, and a
+green one publishes that night's release. If main moved while the update
+ran, the commit is rebased onto it first; if the two touched the same lock,
+nothing is pushed and the run fails, and running it again starts afresh.
 
 > [!IMPORTANT]
-> The workflow opens and merges with `LOCKFILE_UPDATE_TOKEN`, a fine-grained
-> token with Contents and Pull requests write. GitHub starts no workflow for
-> a pull request or push made with Actions' own token, so with that token
-> neither the pull request's checks nor main's run after the merge would
-> start. Without the secret the branch is still pushed, and the run's summary
-> links the page that opens its pull request.
+> The workflow pushes with `LOCKFILE_UPDATE_TOKEN`, a fine-grained token with
+> Contents write. GitHub starts no workflow for a push made with Actions' own
+> token, so without the secret the update still lands on main but `ci` does
+> not run on it until the next push. A branch rule that refuses direct pushes
+> to main has to let the token's owner, or Actions, bypass it.
 
 android_translation_layer stays a `fetchgit` pin: it is an upstream fork, off
 by default, and its tree is close to half a gigabyte, which the flake would
