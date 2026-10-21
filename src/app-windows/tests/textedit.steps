@@ -13,7 +13,9 @@ shot 03-unicode
 key cmd+a
 expect-menus Format 15
 menu Format > Font > Bold
-expect-change 5
+# A menu item is picked through Accessibility, which on GitHub's Intel
+# Macs takes seconds (reading the menus above took 4.6 s there).
+expect-change 15
 shot 04-bold
 key cmd+c
 expect-clipboard Hello from LosOS! Ünïcödé ✓ 5

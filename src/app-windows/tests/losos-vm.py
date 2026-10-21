@@ -379,10 +379,7 @@ def start_client(machine, run):
     )
     if not run.step("fetched app-windows into the VM", status == 0, out[-300:]):
         return False
-    status, out = machine.sh(
-        f"{PATH}; systemd-run --user -M {USER}@ -u aw --setenv=WAYLAND_DISPLAY=wayland-1 "
-        f"/run/current-system/sw/bin/sh {CLIENT} --exec '{CLIENT}' show"
-    )
+    status, out = client(machine, f"--exec '{CLIENT}'", "show", unit="aw")
     if not run.step("started app-windows in the session", status == 0, out[-300:]):
         return False
     end = time.time() + 300
@@ -391,16 +388,35 @@ def start_client(machine, run):
             break
         time.sleep(10)
     else:
-        return run.step("macOS apps listed in LosOS", False, run.client_log()[-500:])
+        run.step("macOS apps listed in LosOS", False, run.client_log()[-500:])
+        with open(os.path.join(run.out, "why.log"), "w") as f:
+            f.write(why(machine, "aw"))
+        return False
     time.sleep(30)
     return run.step("macOS apps listed in LosOS", True)
 
 
 def client(machine, *arguments, unit):
+    # The bundle's libxkbcommon looks for keyboard layouts and compose
+    # tables where Ubuntu keeps them, and crashes building a compose table
+    # when they are not there; the image has them in the store.
     return machine.sh(
-        f"{PATH}; systemd-run --user -M {USER}@ -u {unit} --setenv=WAYLAND_DISPLAY=wayland-1 "
+        f"{PATH}; xkb=$(ls -d /nix/store/*-xkeyboard-config-*/share/X11/xkb | head -1); "
+        "locale=$(ls -d /nix/store/*-libx11-*/share/X11/locale | head -1); "
+        f"systemd-run --user -M {USER}@ -u {unit} --setenv=WAYLAND_DISPLAY=wayland-1 "
+        "--setenv=XKB_CONFIG_ROOT=$xkb --setenv=XLOCALEDIR=$locale --setenv=RUST_BACKTRACE=1 "
         f"/run/current-system/sw/bin/sh {CLIENT} " + " ".join(arguments)
     )
+
+
+def why(machine, unit):
+    """What became of a client that stopped: its unit, and what the
+    kernel and systemd-coredump saw."""
+    return machine.sh(
+        f"{PATH}; systemctl --user -M {USER}@ status {unit} --no-pager -l | tail -n 15; "
+        "journalctl -b -k --no-pager | tail -n 15; coredumpctl --no-pager list | tail -n 5",
+        timeout=60,
+    )[1]
 
 
 def window(run, app, settle=60):
