@@ -13,6 +13,8 @@
   pkg-config,
   ffmpeg-headless,
   libxkbcommon,
+  copyDesktopItems,
+  makeDesktopItem,
 }:
 
 rustPlatform.buildRustPackage {
@@ -38,6 +40,7 @@ rustPlatform.buildRustPackage {
   nativeBuildInputs = [
     pkg-config
     rustPlatform.bindgenHook
+    copyDesktopItems
   ];
   # The headless FFmpeg: no SDL or X, nothing that would link the overlay's
   # GTK, and still VA-API, which is what decodes on the GPU.
@@ -46,8 +49,27 @@ rustPlatform.buildRustPackage {
     libxkbcommon
   ];
 
+  # "Open" on a disk image or installer package in Files hands it to macOS,
+  # which mounts or installs it (docs/app-windows.md, "Mac packages").
+  # Not an app of its own, so not in the app grid; modules/app-windows.nix
+  # makes it those types' default.
+  desktopItems = [
+    (makeDesktopItem {
+      name = "app-windows-open-macos";
+      desktopName = "Open in macOS";
+      exec = "app-windows send %F";
+      icon = "computer";
+      mimeTypes = [
+        "application/x-apple-diskimage"
+        "application/x-xar"
+      ];
+      noDisplay = true;
+    })
+  ];
+
   # The protocol, the desktop entries, the key tables, recordings played
-  # back and a stand-in derisk; no guest or Wayland needed. The macOS
+  # back, files handed over and a stand-in derisk; no guest or Wayland
+  # needed. The macOS
   # workflow (.github/workflows/app-windows.yml) drives real Macs.
   doCheck = true;
 

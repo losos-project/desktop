@@ -12,7 +12,8 @@
 //! where it has one. Input comes back as Linux key codes and pointer
 //! positions in the window, and goes in through CGEvent; windows are raised,
 //! resized and closed, and their menus read and picked, through
-//! Accessibility.
+//! Accessibility. A file the host sends, such as an installer downloaded
+//! there, lands in Downloads and opens.
 //!
 //! macOS asks the person once to allow Screen Recording and Accessibility
 //! for it; until then a client is told what is missing (`Welcome::missing`).
@@ -23,6 +24,9 @@ mod apps;
 mod ax;
 #[cfg(target_os = "macos")]
 mod capture;
+// Plain file handling, tested on any system.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod files;
 #[cfg(target_os = "macos")]
 mod input;
 // Plain tables, tested on any system.

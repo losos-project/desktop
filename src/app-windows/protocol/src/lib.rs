@@ -239,6 +239,42 @@ pub struct Clipboard {
     pub text: String,
 }
 
+/// Host: a file for the guest, such as an installer downloaded here, whose
+/// bytes follow in [`Message::FileData`] pieces and then
+/// [`Message::FileEnd`]. The guest keeps it in its own downloads.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileStart {
+    /// The host's number for it, which the pieces and the answer carry.
+    pub file: u32,
+    /// Its name without a folder, which the guest may change to keep it
+    /// from replacing another file.
+    pub name: String,
+    pub size: u64,
+    /// Whether the guest should open it once it is all there, as a double
+    /// click would: a disk image mounts, an installer package starts.
+    pub open: bool,
+}
+
+/// The next piece of a file, at most [`FILE_PIECE`] bytes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileData {
+    pub file: u32,
+    pub data: Vec<u8>,
+}
+
+/// Guest: a file is all there.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileSaved {
+    pub file: u32,
+    /// Where it is on the guest.
+    pub path: String,
+    /// Whether it was opened as asked; an [`Message::Error`] says why not.
+    pub opened: bool,
+}
+
+/// How much of a file one [`Message::FileData`] carries.
+pub const FILE_PIECE: usize = 1 << 20;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
     /// Host: the first message, before anything else is answered.
@@ -280,6 +316,17 @@ pub enum Message {
     ActivateMenu(ActivateMenu),
 
     Clipboard(Clipboard),
+
+    FileStart(FileStart),
+    FileData(FileData),
+    /// Host: the last piece of the file has been sent.
+    FileEnd(FileRef),
+    FileSaved(FileSaved),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileRef {
+    pub file: u32,
 }
 
 mod kind {
@@ -306,6 +353,10 @@ mod kind {
     pub const MENUS: u8 = 0x40;
     pub const ACTIVATE_MENU: u8 = 0x41;
     pub const CLIPBOARD: u8 = 0x50;
+    pub const FILE_START: u8 = 0x60;
+    pub const FILE_DATA: u8 = 0x61;
+    pub const FILE_END: u8 = 0x62;
+    pub const FILE_SAVED: u8 = 0x63;
 }
 
 /// The fixed part of a video message: window, width, height, flags, time.
@@ -358,6 +409,15 @@ impl Message {
             Message::Menus(m) => json(kind::MENUS, m),
             Message::ActivateMenu(m) => json(kind::ACTIVATE_MENU, m),
             Message::Clipboard(m) => json(kind::CLIPBOARD, m),
+            Message::FileStart(m) => json(kind::FILE_START, m),
+            Message::FileData(m) => {
+                let mut body = Vec::with_capacity(4 + m.data.len());
+                body.extend_from_slice(&m.file.to_le_bytes());
+                body.extend_from_slice(&m.data);
+                frame(kind::FILE_DATA, &body)
+            }
+            Message::FileEnd(m) => json(kind::FILE_END, m),
+            Message::FileSaved(m) => json(kind::FILE_SAVED, m),
         }
     }
 
@@ -406,6 +466,21 @@ impl Message {
             kind::MENUS => Message::Menus(json(body)?),
             kind::ACTIVATE_MENU => Message::ActivateMenu(json(body)?),
             kind::CLIPBOARD => Message::Clipboard(json(body)?),
+            kind::FILE_START => Message::FileStart(json(body)?),
+            kind::FILE_DATA => {
+                if body.len() < 4 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "short file message",
+                    ));
+                }
+                Message::FileData(FileData {
+                    file: u32::from_le_bytes(body[..4].try_into().unwrap()),
+                    data: body[4..].to_vec(),
+                })
+            }
+            kind::FILE_END => Message::FileEnd(json(body)?),
+            kind::FILE_SAVED => Message::FileSaved(json(body)?),
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -505,6 +580,22 @@ mod tests {
             keyframe: true,
             micros: 1 << 40,
             data: vec![0, 0, 0, 1, 0x67],
+        }));
+        round_trip(Message::FileStart(FileStart {
+            file: 1,
+            name: "Rectangle.dmg".into(),
+            size: 3 << 20,
+            open: true,
+        }));
+        round_trip(Message::FileData(FileData {
+            file: 1,
+            data: vec![0x78, 0x01, 0x73],
+        }));
+        round_trip(Message::FileEnd(FileRef { file: 1 }));
+        round_trip(Message::FileSaved(FileSaved {
+            file: 1,
+            path: "/Users/admin/Downloads/Rectangle.dmg".into(),
+            opened: true,
         }));
         round_trip(Message::Key(Key {
             window: 7,

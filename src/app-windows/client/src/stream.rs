@@ -76,6 +76,10 @@ const DECODE_QUEUE: usize = 2;
 pub struct Options {
     pub hardware: bool,
     pub recording: Option<File>,
+    /// Decode every picture, waiting for the decoder rather than skipping
+    /// ahead. A recording played back has no guest to send a keyframe
+    /// after a skip, so it waits instead; it can, being a file.
+    pub every_picture: bool,
 }
 
 /// Reads the guest until it hangs up. `link` asks for keyframes when a
@@ -129,7 +133,10 @@ pub fn run(
                         sink.clone(),
                     )
                 });
-                if let Err(TrySendError::Full(video)) = tx.try_send(video) {
+                if options.every_picture {
+                    // Only fails once the decoder has given up.
+                    let _ = tx.send(video);
+                } else if let Err(TrySendError::Full(video)) = tx.try_send(video) {
                     // Every picture after this one depends on it, so the
                     // decoder waits for the keyframe asked for here.
                     if !video.keyframe {

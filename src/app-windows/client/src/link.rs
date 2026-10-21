@@ -42,6 +42,12 @@ impl Link {
         // A closed connection is noticed by the reader, which reports it.
         let _ = self.tx.send(message);
     }
+
+    /// How many messages wait to be written, for a sender of something
+    /// big to keep from holding all of it in memory at once.
+    pub fn backlog(&self) -> usize {
+        self.tx.len()
+    }
 }
 
 pub type Reader = BufReader<TcpStream>;

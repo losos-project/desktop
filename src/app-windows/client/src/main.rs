@@ -9,6 +9,10 @@
 //!                                            run a test script with no screen (record.rs)
 //!     app-windows [OPTIONS] replay FILE [SPEED]
 //!                                            show a recording's windows, timed as they came
+//!     app-windows [OPTIONS] send FILE...     hand files to the guest and open them there
+//!     app-windows [OPTIONS] watch DIR [EXTENSION...]
+//!                                            hand over each such file that lands in DIR
+//!                                            (dmg, pkg and mpkg when none are named)
 //!
 //!     --server HOST:PORT   the guest's app server (127.0.0.1:7180)
 //!     --token-file PATH    its secret ($XDG_CONFIG_HOME/app-windows/PREFIX/token)
@@ -23,6 +27,7 @@ mod decode;
 #[cfg(unix)]
 mod derisk;
 mod entries;
+mod files;
 mod link;
 mod record;
 mod stream;
@@ -39,6 +44,7 @@ use app_windows_protocol::{self as protocol, AppInfo, Launch, Message};
 
 use crate::link::Target;
 
+#[derive(Clone)]
 struct Options {
     target: Target,
     prefix: String,
@@ -54,6 +60,7 @@ fn usage() -> ExitCode {
     );
     eprintln!("                   [--exec COMMAND] [--wait SECONDS] [--software]");
     eprintln!("                   show | apps | open ID | record SCRIPT OUT | replay FILE [SPEED]");
+    eprintln!("                   | send FILE... | watch DIR [EXTENSION...]");
     ExitCode::from(2)
 }
 
@@ -161,6 +168,29 @@ fn main() -> ExitCode {
             Ok(false) => Err("the script failed; see the report".into()),
             Err(e) => Err(e),
         },
+        ["send", paths @ ..] if !paths.is_empty() => {
+            let paths: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+            // What "Open in macOS" runs, so it waits for a guest that is
+            // still starting.
+            connect_waiting(&options)
+                .and_then(|(_, link, mut reader)| files::send(&link, &mut reader, &paths, true))
+                .map(|saved| {
+                    for there in saved {
+                        println!("{there}");
+                    }
+                })
+        }
+        ["watch", folder, extensions @ ..] => {
+            let extensions: Vec<String> = if extensions.is_empty() {
+                files::MAC_PACKAGES.iter().map(|x| x.to_string()).collect()
+            } else {
+                extensions
+                    .iter()
+                    .map(|x| x.trim_start_matches('.').to_owned())
+                    .collect()
+            };
+            files::watch(&options.target, Path::new(folder), &extensions)
+        }
         ["replay", file] => replay(&options, Path::new(file), 1.0),
         ["replay", file, speed] => match speed.parse() {
             Ok(speed) if speed > 0.0 => replay(&options, Path::new(file), speed),
@@ -272,19 +302,7 @@ fn show(options: &Options) -> Result<(), String> {
     }
     let hardware = options.hardware;
     let reading = link.clone();
-    let (prefix, name, exec) = (
-        options.prefix.clone(),
-        options.name.clone(),
-        options.exec.clone(),
-    );
-    let sync_options = Options {
-        target: options.target.clone(),
-        prefix,
-        name,
-        exec,
-        wait: options.wait,
-        hardware,
-    };
+    let sync_options = options.clone();
     let shown = wayland::Options {
         prefix: options.prefix.clone(),
         exit_when_lost: true,
@@ -297,6 +315,7 @@ fn show(options: &Options) -> Result<(), String> {
                 let options = stream::Options {
                     hardware,
                     recording: None,
+                    every_picture: false,
                 };
                 stream::run(reader, reading, options, frames, Arc::default(), sink);
             })
@@ -313,16 +332,20 @@ fn replay(options: &Options, file: &Path, speed: f64) -> Result<(), String> {
     let link = link::Link::detached();
     let reading = link.clone();
     let hardware = options.hardware;
+    // The recorded guest's apps go in the app grid, as `show` puts a live
+    // guest's there.
+    let sync_options = options.clone();
     let shown = wayland::Options {
         prefix: options.prefix.clone(),
         exit_when_lost: false,
-        on_apps: Box::new(|_| {}),
+        on_apps: Box::new(move |apps| sync(&sync_options, apps)),
     };
     wayland::show(link, shown, move |frames, sink| {
         thread::spawn(move || {
             let options = stream::Options {
                 hardware,
                 recording: None,
+                every_picture: true,
             };
             stream::run(source, reading, options, frames, Arc::default(), sink);
         });

@@ -21,7 +21,7 @@ use app_windows_protocol::{
 };
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
-use crate::{apps, ax, capture, input};
+use crate::{apps, ax, capture, files, input};
 
 /// Room for messages waiting to be written to one connection: a few
 /// seconds of pictures for a handful of windows.
@@ -305,8 +305,11 @@ fn connection(hub: &Arc<Hub>, stream: TcpStream) {
     hub.sessions.lock().unwrap().push(session.clone());
     eprintln!("{peer}: connected as {}", session.id);
 
-    let mut pointer = input::PointerState::default();
-    let mut keyboard = input::Keyboard::default();
+    let mut state = Connection {
+        pointer: input::PointerState::default(),
+        keyboard: input::Keyboard::default(),
+        incoming: files::Incoming::new(files::downloads()),
+    };
     loop {
         let message = match protocol::read(&mut reader) {
             Ok(m) => m,
@@ -315,22 +318,28 @@ fn connection(hub: &Arc<Hub>, stream: TcpStream) {
                 break;
             }
         };
-        handle(hub, &session, &mut pointer, &mut keyboard, message);
+        handle(hub, &session, &mut state, message);
     }
     // Keys a host that went away was holding would stay down on the Mac.
-    keyboard.release_all();
+    state.keyboard.release_all();
     hub.remove(session.id);
     drop(session);
     let _ = writer.join();
 }
 
-fn handle(
-    hub: &Arc<Hub>,
-    session: &Arc<Session>,
-    pointer: &mut input::PointerState,
-    keyboard: &mut input::Keyboard,
-    message: Message,
-) {
+/// What one connection keeps between its messages.
+struct Connection {
+    pointer: input::PointerState,
+    keyboard: input::Keyboard,
+    incoming: files::Incoming,
+}
+
+fn handle(hub: &Arc<Hub>, session: &Arc<Session>, state: &mut Connection, message: Message) {
+    let Connection {
+        pointer,
+        keyboard,
+        incoming,
+    } = state;
     let reply = |m: Message| {
         let _ = session.tx.send_timeout(m.encode(), STALL);
     };
@@ -435,6 +444,33 @@ fn handle(
             *hub.clipboard.lock().unwrap() = Some(c.text.clone());
             apps::set_clipboard(&c.text);
         }
+        Message::FileStart(start) => {
+            let name = start.name.clone();
+            match incoming.start(start) {
+                Ok(()) => eprintln!("connection {}: receiving {name}", session.id),
+                Err(message) => reply(Message::Error(ErrorMessage { message })),
+            }
+        }
+        Message::FileData(data) => {
+            if let Err(message) = incoming.data(data) {
+                reply(Message::Error(ErrorMessage { message }));
+            }
+        }
+        Message::FileEnd(protocol::FileRef { file }) => match incoming.end(file) {
+            Ok((saved, failed)) => {
+                eprintln!(
+                    "connection {}: saved {}{}",
+                    session.id,
+                    saved.path,
+                    if saved.opened { " and opened it" } else { "" }
+                );
+                reply(Message::FileSaved(saved));
+                if let Some(message) = failed {
+                    reply(Message::Error(ErrorMessage { message }));
+                }
+            }
+            Err(message) => reply(Message::Error(ErrorMessage { message })),
+        },
         other => eprintln!("connection {}: ignoring {other:?}", session.id),
     }
 }

@@ -53,6 +53,16 @@ done
 "$bin/macos-app-server" apps >"$out/apps.json"
 echo "$(grep -c '"id"' "$out/apps.json") apps listed"
 
+# This Mac stands in for the host as well: a folder for the host's
+# Downloads, which `watch` hands Mac packages from, as the image's
+# app-windows-downloads unit does. packages.steps downloads into it.
+work=$(mktemp -d)
+export WORK=$work DOWNLOADS=$work/downloads
+mkdir -p "$DOWNLOADS"
+"$bin/app-windows" --token-file "$token_dir/token" watch "$DOWNLOADS" >"$out/watch.log" 2>&1 &
+watcher=$!
+trap 'kill $server $watcher 2>/dev/null' EXIT
+
 failed=0
 for script in tests/*.steps; do
 	name=$(basename "$script" .steps)

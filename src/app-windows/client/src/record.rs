@@ -29,6 +29,8 @@
 //!     expect-rate 20                   pictures per second during the last hold
 //!     close                            close the window as its close button would
 //!     expect-closed [s]
+//!     run curl -o "$DOWNLOADS/x.dmg" URL  run a command here, as a person here would
+//!     send $WORK/x.pkg [s]             hand a file to the guest, which opens it
 //!     wait 500
 //!
 //! Everything goes in the output folder: the pictures, `report.json` with
@@ -48,6 +50,7 @@ use crossbeam_channel::{unbounded, Receiver};
 use serde::Serialize;
 
 use crate::decode::Picture;
+use crate::files;
 use crate::link::{self, Link, Target};
 use crate::stream::{self, Event, Frames, Stats};
 
@@ -66,6 +69,8 @@ struct World {
     pictures: HashMap<u32, Seen>,
     menus: HashMap<u32, Vec<Menu>>,
     clipboard: Option<String>,
+    /// Files the guest has saved, by the number `send` gave them.
+    saved: HashMap<u32, String>,
     errors: Vec<String>,
     lost: Option<String>,
 }
@@ -84,6 +89,7 @@ struct Run {
     /// Pictures and time of the last `hold`, for `expect-rate`.
     last_hold: Option<(u64, Duration)>,
     latencies: Vec<f64>,
+    files_sent: u32,
 }
 
 #[derive(Serialize)]
@@ -140,6 +146,7 @@ pub fn main(target: &Target, script: &Path, out: &Path, hardware: bool) -> Resul
         let options = stream::Options {
             hardware,
             recording: Some(recording),
+            every_picture: false,
         };
         thread::Builder::new()
             .name("read".into())
@@ -155,6 +162,9 @@ pub fn main(target: &Target, script: &Path, out: &Path, hardware: bool) -> Resul
             })
             .map_err(|e| e.to_string())?;
     }
+    // The app list first, so the recording carries it and `replay` puts
+    // the apps in the app grid as `show` would.
+    link.send(Message::ListApps);
     link.send(Message::Watch);
     let mut run = Run {
         link,
@@ -167,6 +177,7 @@ pub fn main(target: &Target, script: &Path, out: &Path, hardware: bool) -> Resul
         last_shot: None,
         last_hold: None,
         latencies: Vec::new(),
+        files_sent: 0,
     };
 
     let mut steps = Vec::new();
@@ -287,6 +298,9 @@ impl Run {
                 world.menus.insert(m.window, m.menus);
             }
             Event::Message(Message::Clipboard(c)) => world.clipboard = Some(c.text),
+            Event::Message(Message::FileSaved(f)) => {
+                world.saved.insert(f.file, f.path);
+            }
             Event::Message(Message::Error(e)) => {
                 eprintln!("          the guest says: {}", e.message);
                 world.errors.push(e.message);
@@ -713,6 +727,39 @@ impl Run {
                 }
                 Ok(())
             }
+            "run" => {
+                let output = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(rest)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if !output.status.success() {
+                    return Err(format!(
+                        "{}: {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ));
+                }
+                Ok(())
+            }
+            "send" => {
+                let (path, within) = trailing_seconds(rest);
+                let path = expand(&path);
+                self.files_sent += 1;
+                let file = self.files_sent;
+                let errors = self.world.errors.len();
+                files::send_one(&self.link, file, Path::new(&path), true)?;
+                if !self.pump(within, |w| {
+                    w.saved.contains_key(&file) || w.errors.len() > errors
+                }) {
+                    return Err(format!("{path} was not saved"));
+                }
+                if let Some(e) = self.world.errors.get(errors) {
+                    return Err(e.clone());
+                }
+                eprintln!("          saved as {}", self.world.saved[&file]);
+                Ok(())
+            }
             "wait" => {
                 self.pump(
                     Duration::from_millis(number(args.first().copied())? as u64),
@@ -726,6 +773,23 @@ impl Run {
 }
 
 /// Text with an optional number of seconds after it.
+/// `$NAME` in a step, as its value in this program's environment.
+fn expand(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('$') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let end = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after.len());
+        out.push_str(&std::env::var(&after[..end]).unwrap_or_default());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn trailing_seconds(rest: &str) -> (String, Duration) {
     match rest.rsplit_once(' ') {
         Some((text, s)) if s.parse::<f64>().is_ok() => (
@@ -857,6 +921,14 @@ pub fn save_png(picture: &Picture, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn steps_name_environment_variables() {
+        std::env::set_var("APP_WINDOWS_TEST_DIR", "/tmp/x");
+        assert_eq!(expand("$APP_WINDOWS_TEST_DIR/a.pkg"), "/tmp/x/a.pkg");
+        assert_eq!(expand("costs $5"), "costs ");
+        assert_eq!(expand("plain"), "plain");
+    }
 
     #[test]
     fn us_keys_are_linux_codes() {
