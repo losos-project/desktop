@@ -63,7 +63,10 @@ journal() {
   fi
   if [ "$status" -ne 0 ]; then
     echo "::group::The units' log"
-    tail -n 300 "$out/journal.txt"
+    # Without leaving out the line the emulator's libunwind writes each
+    # time llvmpipe compiles a shader, which is most of the log on a
+    # runner with no GPU.
+    grep -v '__unw_add_dynamic_fde' "$out/journal.txt" | tail -n 300
     echo "::endgroup::"
   fi
 }

@@ -3,7 +3,7 @@
 # test script that gives it that disk.
 { self }:
 
-{
+rec {
   node =
     { lib, ... }:
     {
@@ -49,7 +49,8 @@
 
   # A copy-on-write disk backed by the image, grown so first boot has room
   # for slot B, root, /home and swap.
-  disk = machine: ''
+  disk = diskOfSize "32G";
+  diskOfSize = size: machine: ''
     import os
     import subprocess
     import tempfile
@@ -59,7 +60,7 @@
       "${machine.virtualisation.qemu.package}/bin/qemu-img", "create",
       "-f", "qcow2", "-F", "raw",
       "-b", "${machine.system.build.disk}/${machine.image.filePath}",
-      tmp.name, "32G",
+      tmp.name, "${size}",
     ], check=True)
     os.environ["NIX_DISK_IMAGE"] = tmp.name
   '';
