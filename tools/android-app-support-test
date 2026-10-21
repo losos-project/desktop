@@ -4,13 +4,19 @@
 # and boots the Pixel, an APK installs and joins the app grid, the app
 # opens in a window of its own, and the Pixel stops and starts again from
 # its snapshot. It runs the image's own package and the image's own user
-# units, under the runner's own systemd user manager, with Xvfb for the
-# app's window.
+# units, under the runner's own systemd user manager, with Xvfb standing in
+# for Xwayland.
+#
+# The Pixel draws through the host's driver as on a PC with a GPU
+# (docs/android-apps.md, "The GPU"): a runner has none, so the driver is
+# Mesa's llvmpipe from /run/opengl-driver, and Android's renderer must name
+# it rather than the emulator's SwiftShader.
 #
 #   tools/android-app-support-test OUT
 #
 # OUT gets the screenshots and the logs. Needs: Nix, /dev/kvm, a user
-# manager (loginctl enable-linger), and unprivileged user namespaces.
+# manager (loginctl enable-linger), unprivileged user namespaces, and Mesa
+# at /run/opengl-driver.
 set -euo pipefail
 
 out=$(realpath -m "${1:?usage: android-app-support-test OUT}")
@@ -34,6 +40,15 @@ for unit in android-app-support.service android-app-support-setup.service androi
   install -m 0644 "$file/$unit" "$units/$unit"
 done
 systemctl --user daemon-reload
+
+# The desktop's Xwayland, which the emulator draws through with GLX, and
+# what the user manager would have from xwayland-satellite.
+export DISPLAY=:99
+Xvfb "$DISPLAY" -screen 0 1600x1200x24 -nolisten tcp &
+xvfb=$!
+sleep 2
+systemctl --user set-environment DISPLAY="$DISPLAY" ANDROID_APP_SUPPORT_GPU=host \
+  "ANDROID_APP_SUPPORT_EMULATOR_FLAGS=-feature -Vulkan"
 
 data=${XDG_DATA_HOME:-$HOME/.local/share}/android-app-support
 journal() { journalctl --user --no-pager -o short-monotonic -u 'android-app-support*' > "$out/journal.txt" || true; }
@@ -97,10 +112,6 @@ grep -qx 'StartupWMClass=android.org.fdroid.fdroid' "$entry" || fail "F-Droid's 
 cp "$data/icons/org.fdroid.fdroid.png" "$out/icons/"
 
 step "Opening F-Droid in a window of its own"
-export DISPLAY=:99
-Xvfb "$DISPLAY" -screen 0 1600x1200x24 -nolisten tcp &
-xvfb=$!
-sleep 2
 android-app-support run org.fdroid.fdroid > "$out/scrcpy.log" 2>&1 &
 window_pid=$!
 window=
@@ -119,6 +130,19 @@ grep -q 'org.fdroid.fdroid' "$out/activities.txt" || fail "F-Droid is not runnin
 import -window root "$out/f-droid-window.png"
 geometry=$(xdotool getwindowgeometry "$window")
 echo "$geometry" | tee -a "$out/window.txt"
+
+step "What it drew with"
+# Some frames to time: scrolling F-Droid's list through the window.
+xdotool mousemove --window "$window" 200 400
+for _ in $(seq 10); do
+  xdotool click --window "$window" --repeat 5 5
+  xdotool click --window "$window" --repeat 5 4
+done
+sleep 5
+journalctl --user --no-pager -o cat -u android-app-support.service |
+  grep -E 'drawing with|Graphics (Adapter|API)' | tee "$out/gpu.txt"
+android-app-support gpu org.fdroid.fdroid | tee -a "$out/gpu.txt"
+grep -q '^GLES: .*Translator (llvmpipe' "$out/gpu.txt" || fail "Android does not draw through the host's driver"
 
 step "Resizing the window resizes the app's display"
 xdotool windowsize "$window" 1000 700
