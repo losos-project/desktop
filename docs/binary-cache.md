@@ -8,9 +8,10 @@ fetches. It serves four things from this project's GHCR namespace:
   one OCI artifact, `nix-cache:<store hash>`, holding its signed narinfo and
   its NAR. The proxy answers `/<hash>.narinfo`, with its `URL:` pointed back
   at the proxy, and redirects `/nar/<hash>/<file>` to GHCR's blob storage, so
-  a NAR never passes through it. The tests in `proxy/test/` run a real
-  `nix copy` through it against a fake registry, which pulls and verifies a
-  signed path.
+  a NAR never passes through it. A real `nix copy` once pulled and verified
+  a signed path through it against a fake registry. The automated tests in
+  `proxy/test/` run the handler against a fake fetch that answers like the
+  registry, with no Nix involved.
 - **Build caches.** `/build-cache/<name>/<arch>/<part>` redirects to one
   part of a compiler cache that CI keeps in GHCR. The one cache, `losos`, is
   for the overlay's patched GTK and Qt and lives at `losos-ccache:<arch>`.
