@@ -212,8 +212,14 @@ impl Decoder {
                 );
                 self.scaler_for = (width, height, format);
             }
-            let stride = width as usize * 4;
-            let mut pixels = vec![0u8; stride * height as usize];
+            // swscale's SIMD code writes whole vectors, past the end of a
+            // row whose width is not a multiple of them, and so past the
+            // end of the last row: FFmpeg 6 overran the buffer and
+            // corrupted the heap. Rows of a multiple of 64 bytes and one
+            // spare row leave it room.
+            let stride = (width as usize * 4).next_multiple_of(64);
+            let size = stride * height as usize;
+            let mut pixels = vec![0u8; size + stride];
             let destination = [
                 pixels.as_mut_ptr(),
                 ptr::null_mut(),
@@ -230,6 +236,7 @@ impl Decoder {
                 destination.as_ptr(),
                 strides.as_ptr(),
             );
+            pixels.truncate(size);
             Ok(Picture {
                 width: width as u32,
                 height: height as u32,
