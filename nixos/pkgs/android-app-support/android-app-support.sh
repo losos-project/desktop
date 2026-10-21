@@ -252,6 +252,11 @@ cmd_emulator() {
   local -a flags
   read -ra flags <<< "${ANDROID_APP_SUPPORT_EMULATOR_FLAGS:-}"
   echo "android-app-support: drawing with -gpu $gpu"
+  # The emulator takes a directory as an SDK only when it has
+  # platform-tools, and runs adb from there to tell the person's adb
+  # server about the Pixel. This package's adb is that one.
+  mkdir -p "$sdk/platform-tools"
+  ln -sfn "$(command -v adb)" "$sdk/platform-tools/adb"
   rm -f "$avd"/pixel.avd/*.lock
   exec @emulatorEnv@ "$sdk/emulator/emulator" -avd pixel -port "$port" \
     -no-window -no-boot-anim -no-metrics -gpu "$gpu" "${flags[@]}" \
