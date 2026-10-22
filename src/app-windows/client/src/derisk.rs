@@ -19,7 +19,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use app_windows_protocol::{ActivateMenu, Menu, Message};
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
@@ -133,8 +133,13 @@ fn request(
     answers: &Receiver<Value>,
     request: Value,
 ) -> Result<Value, String> {
+    // An answer that came after its request gave up would otherwise be
+    // taken for this one's.
+    while answers.try_recv().is_ok() {}
     writeln!(stream, "{request}").map_err(|e| e.to_string())?;
-    match answers.recv_timeout(Duration::from_secs(2)) {
+    // derisk answers from its own loop, which can be busy for seconds while
+    // a new window maps on a slow machine.
+    match answers.recv_timeout(Duration::from_secs(10)) {
         Ok(answer) if answer["ok"] == true => Ok(answer["result"].clone()),
         Ok(answer) => Err(answer["error"].as_str().unwrap_or("refused").to_owned()),
         Err(RecvTimeoutError::Timeout) => Err("derisk did not answer".into()),
@@ -155,7 +160,8 @@ fn find(state: &Value, app_id: &str, title: &str) -> Option<u64> {
 
 /// derisk's id for the guest's `window`: the one it was found as before,
 /// or the one `state` shows for its app id and title. A window derisk has
-/// not mapped yet is not in its state; it will be within a few frames.
+/// not mapped yet is not in its state; it will be once its first picture
+/// is drawn, which takes seconds on a slow machine.
 fn derisk_window(
     stream: &mut UnixStream,
     answers: &Receiver<Value>,
@@ -171,7 +177,8 @@ fn derisk_window(
     if known.is_some() {
         return Ok(known);
     }
-    for _ in 0..10 {
+    let end = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < end {
         let state = request(stream, answers, json!({"method": "state"}))?;
         if let Some(found) = find(&state, app_id, title) {
             windows.lock().unwrap().insert(found, window);
@@ -203,9 +210,11 @@ fn send(
             let found =
                 match derisk_window(&mut stream, &answers, windows, (window, &app_id, &title)) {
                     Ok(found) => found,
+                    // One slow answer drops only this job, not the jobs
+                    // that come after it.
                     Err(e) => {
                         eprintln!("app-windows: derisk: {e}");
-                        return;
+                        continue;
                     }
                 };
             let Some(derisk_window) = found else { continue };
