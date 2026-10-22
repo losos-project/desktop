@@ -223,9 +223,14 @@ in
     # libvirt's NAT.
     losos.captivePortal.enable = false;
 
-    # Hack Nerd Font for derisk-terminal, as on the host (modules/desktop.nix).
+    # Hack Nerd Font for derisk-terminal, and Inter as sans-serif, so a
+    # guest's windows are lettered like the host's (modules/desktop.nix).
     fonts.enableDefaultPackages = true;
-    fonts.packages = [ pkgs.nerd-fonts.hack ];
+    fonts.packages = [
+      pkgs.inter
+      pkgs.nerd-fonts.hack
+    ];
+    fonts.fontconfig.defaultFonts.sansSerif = [ "Inter" ];
 
     environment.systemPackages = [
       guestRun
