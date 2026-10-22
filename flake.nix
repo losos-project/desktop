@@ -260,6 +260,9 @@
             inherit pkgs;
             inherit (self.legacyPackages.${system}) qemu-vmapple;
           };
+          # Reims' GPU backend for those guests. Nothing in the image uses
+          # it, so without this nothing would build it.
+          reims-vgpu-backend = self.legacyPackages.${system}.reims-vgpu-backend;
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           # Every GSI module and assertion, libhybris's build, and the
