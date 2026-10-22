@@ -70,8 +70,10 @@ desktop's logical pixels, whatever the guest's scale.
 The guest draws its own title bar, so the windows have none here.
 Dragging the guest's title bar moves the window on this desktop. A size the
 desktop gives a window, when it tiles or maximizes it, is asked of the
-guest. Until the guest's window has that size, its picture is stretched to
-fit.
+guest. A window that does not take that size, as a dialog or Calculator
+never does, keeps its shape in the middle of it, with black bars beside it,
+rather than being stretched. A click on a bar lands on the window's nearest
+edge.
 
 Under derisk, a guest window's menus go in the top bar and the palette,
 through derisk's agent socket. A pick there goes back to the guest as the
@@ -153,6 +155,17 @@ open. A step fails when its picture, size, title, menus or
 clipboard never comes. Each run keeps every picture, a report with frame
 rates and key latency, and a recording, which `app-windows replay` shows on
 a desktop.
+
+The same workflow's `losos-vm` job runs LosOS itself on those Macs: the
+newest nightly image boots under QEMU, signs in, and fetches `app-windows`
+from the runner (`src/app-windows/tests/losos-vm.sh` and `losos-vm.py`).
+From inside LosOS it finds Chess through the palette, types into TextEdit,
+works out a sum in Calculator, and downloads a disk image with curl and
+sends it. Every step waits for the window or picture it expects, and the
+job keeps pictures of both screens. The machines are the other way round
+from a LosOS PC, where macOS would be the guest: Apple's licence lets macOS
+run only on Apple hardware, so here the Mac is the host. The client and the
+server see the same network connection either way.
 
 ## What it does not do yet
 
