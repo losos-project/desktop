@@ -287,6 +287,13 @@ EOF
 # ANDROID_APP_SUPPORT_EMULATOR_FLAGS adds to the emulator's command line:
 # CI sets `host` on Mesa's llvmpipe, whose Vulkan cannot export the memory
 # gfxstream asks for, with `-feature -Vulkan`.
+#
+# $state/swiftshader, which wait_booted leaves when the emulator died before
+# Android had started, makes this one start draw with SwiftShader whatever
+# was asked for: gfxstream sometimes gets no OpenGL context from the host's
+# GLX, logs "error null ctx" on every call and then crashes reading the
+# missing renderer's name (CI's runners on llvmpipe, 10-22). The file goes
+# with the start that read it, so the next one tries the GPU again.
 cmd_emulator() {
   set_up || { say "android-app-support: not set up yet; run android-app-support setup"; exit 1; }
   local gpu=${ANDROID_APP_SUPPORT_GPU:-}
@@ -294,9 +301,14 @@ cmd_emulator() {
     gpu=swiftshader_indirect
     if compgen -G '/dev/dri/renderD*' > /dev/null && [ -n "${DISPLAY:-}" ]; then gpu=host; fi
   fi
+  if [ -e "$state/swiftshader" ]; then
+    rm -f "$state/swiftshader"
+    gpu=swiftshader_indirect
+  fi
   local -a flags
   read -ra flags <<< "${ANDROID_APP_SUPPORT_EMULATOR_FLAGS:-}"
   echo "android-app-support: drawing with -gpu $gpu"
+  echo "$gpu" > "$state/gpu"
   # The emulator takes a directory as an SDK only when it has
   # platform-tools, and runs adb from there to tell the person's adb
   # server about the Pixel. This package's adb is that one.
@@ -344,11 +356,23 @@ register() {
     socat -t 2 - "UNIX-CONNECT:${ADB_SERVER_SOCKET#localfilesystem:}" 2> /dev/null || true
 }
 
-# Waits for Android to have started, for at most `seconds`.
+# Waits for Android to have started, for at most `seconds`. An emulator
+# that died on the GPU before then is started once more on SwiftShader
+# (cmd_emulator); one that was stopped, or died on SwiftShader, is not.
 wait_booted() {
-  local seconds=$1 start=$SECONDS
+  local seconds=$1 start=$SECONDS retried=
   while [ $((SECONDS - start)) -lt "$seconds" ]; do
-    active android-app-support.service || return 1
+    if ! active android-app-support.service; then
+      [ -z "$retried" ] || return 1
+      [ "$(systemctl --user show -P Result android-app-support.service)" != success ] || return 1
+      [ "$(cat "$state/gpu" 2> /dev/null)" = host ] || return 1
+      retried=1
+      say "android-app-support: the Pixel stopped on the GPU before it started; starting it with SwiftShader"
+      touch "$state/swiftshader"
+      systemctl --user reset-failed android-app-support.service 2> /dev/null || true
+      systemctl --user start android-app-support.service || return 1
+      continue
+    fi
     register
     booted && return 0
     sleep 2
