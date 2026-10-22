@@ -26,6 +26,11 @@ portal backend gives them its theme, screenshots and the wallpaper, and asks
 for consent in its own dialog, `derisk-gpui ask`, drawn with the same toolkit
 as derisk's GPUI apps. GTK's backend covers the file chooser and the rest.
 
+The desktop is lettered in Inter, the font of the LosOS web interface. It is
+derisk's default theme font and the system's sans-serif, so apps that never
+read derisk's theme, web pages among them, use it too. A theme can name any
+installed font instead.
+
 The web browser is [Danube](danube.md), WPE WebKit inside an mcsapi window.
 [Ad blocking](adblock.md) works from filter lists and covers every app. The
 terminal is [derisk's own](terminal.md), `derisk-terminal`. It draws the

@@ -155,10 +155,21 @@ in
   # Font build, the same letters with the icons prompts and TUIs print. Hack
   # is the theme's default; the symbols-only Nerd Font gives the icons to a
   # theme that names another family.
+  #
+  # Inter is the theme's interface font, the one the LosOS web interface is
+  # drawn in. That interface asks for the system UI font, and fontconfig
+  # answers sans-serif, so making Inter sans-serif here also gives it to
+  # what does not read derisk's theme: Danube's pages, Flatpak apps and
+  # every `system-ui` stylesheet. derisk's egui apps load it themselves
+  # through mcsapi. Before it, the theme named Ubuntu, which only egui's
+  # built-in copy drew; the image had no sans-serif font at all, so
+  # everything else was lettered in whatever fontconfig had, Hack among it.
   fonts.packages = [
+    pkgs.inter
     pkgs.nerd-fonts.hack
     pkgs.nerd-fonts.symbols-only
   ];
+  fonts.fontconfig.defaultFonts.sansSerif = [ "Inter" ];
 
   # What GNOME's module used to switch on, kept where something in the session
   # still uses it. Audio for every app. udisks2 and upower are bus-activated

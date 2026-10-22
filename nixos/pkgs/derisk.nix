@@ -55,7 +55,7 @@ let
     src = lib.cleanSource ../../components/derisk;
   };
 
-  cargoHash = "sha256-fYGLZ6AyOoCt3XW5l+xFZGjMx3LTGLwasKoD1cVl6tA=";
+  cargoHash = "sha256-bikPaaIjLjd/MZCT3L2EradIYTDrlKDik/eHlk89S+g=";
 
   # Fat LTO (Cargo.toml: lto = true) compiles every dependency as bitcode
   # (-C linker-plugin-lto) and links it in one rustc. That link is killed on
