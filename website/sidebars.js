@@ -46,6 +46,7 @@ module.exports = {
         'choice-screens',
         'losos-boxes',
         'windows-apps',
+        'android-apps',
         'macos-arm64',
         'backup',
       ],

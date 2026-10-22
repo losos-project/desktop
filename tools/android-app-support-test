@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# Android app support end to end, on a CI runner with KVM, as a person's
+# first day with it (docs/android-apps.md): the setup downloads Android
+# and boots the Pixel, an APK installs and joins the app grid, the app
+# opens in a window of its own, and the Pixel stops and starts again from
+# its snapshot. It runs the image's own package and the image's own user
+# units, under the runner's own systemd user manager, with Xvfb standing in
+# for Xwayland.
+#
+# The Pixel draws through the host's driver as on a PC with a GPU
+# (docs/android-apps.md, "The GPU"): a runner has none, so the driver is
+# Mesa's llvmpipe from /run/opengl-driver, and Android's renderer must name
+# it rather than the emulator's SwiftShader.
+#
+#   tools/android-app-support-test OUT
+#
+# OUT gets the screenshots and the logs. Needs: Nix, adb, /dev/kvm, a user
+# manager (loginctl enable-linger), unprivileged user namespaces, and Mesa
+# at /run/opengl-driver.
+set -euo pipefail
+
+out=$(realpath -m "${1:?usage: android-app-support-test OUT}")
+mkdir -p "$out"
+cd "$(dirname "$(dirname "$(realpath "$0")")")"
+config=".#nixosConfigurations.losos-desktop-x86_64.config"
+
+step() { printf '\n== %s\n' "$*"; }
+fail() {
+  printf '::error::%s\n' "$*"
+  exit 1
+}
+
+step "Building the image's android-app-support and its user units"
+package=$(nix build --no-link --print-out-paths .#legacyPackages.x86_64-linux.android-app-support)
+export PATH=$package/bin:$PATH
+units=$HOME/.config/systemd/user
+mkdir -p "$units"
+for unit in android-app-support.service android-app-support-setup.service android-app-support-apps.service android-app-support-adb.service; do
+  file=$(nix build --no-link --print-out-paths "$config.systemd.user.units.\"$unit\".unit")
+  install -m 0644 "$file/$unit" "$units/$unit"
+done
+systemctl --user daemon-reload
+
+# The desktop's Xwayland, which the emulator draws through with GLX, and
+# what the user manager would have from xwayland-satellite.
+export DISPLAY=:99
+Xvfb "$DISPLAY" -screen 0 1600x1200x24 -nolisten tcp &
+xvfb=$!
+sleep 2
+systemctl --user set-environment DISPLAY="$DISPLAY" ANDROID_APP_SUPPORT_GPU=host \
+  "ANDROID_APP_SUPPORT_EMULATOR_FLAGS=-feature -Vulkan"
+
+data=${XDG_DATA_HOME:-$HOME/.local/share}/android-app-support
+# The units' log, kept with the screenshots and, when a step fails, printed
+# here too, since the emulator's own reasons for stopping are only there.
+# The runner's journald may keep a user's log only in the system journal.
+journal() {
+  local status=$?
+  journalctl --user --no-pager -o short-monotonic -u 'android-app-support*' > "$out/journal.txt" 2>&1 || true
+  if ! grep -q 'android-app-support' "$out/journal.txt"; then
+    # shellcheck disable=SC2024 # the file is the runner user's, as it should be
+    sudo -n journalctl --no-pager -o short-monotonic "_UID=$(id -u)" > "$out/journal.txt" 2>&1 || true
+  fi
+  if [ "$status" -ne 0 ]; then
+    echo "::group::The units' log"
+    # Without leaving out the line the emulator's libunwind writes each
+    # time llvmpipe compiles a shader, which is most of the log on a
+    # runner with no GPU.
+    grep -v '__unw_add_dynamic_fde' "$out/journal.txt" | tail -n 300
+    echo "::endgroup::"
+  fi
+}
+trap journal EXIT
+
+step "Setting Android up, as the Android app does the first time"
+android-app-support status
+systemctl --user start android-app-support-setup.service
+start=$SECONDS
+last=
+while :; do
+  status=$(android-app-support status)
+  state=$(jq -r .state <<< "$status")
+  detail=$(jq -r .detail <<< "$status")
+  if [ "$state $detail" != "$last" ]; then
+    printf '[%4ds] %s: %s\n' $((SECONDS - start)) "$state" "$detail"
+    last="$state $detail"
+  fi
+  case $state in
+    running) break ;;
+    failed | unsupported) fail "the setup stopped: $detail" ;;
+  esac
+  [ $((SECONDS - start)) -lt 2400 ] || fail "the setup took more than 40 minutes"
+  sleep 5
+done
+echo "Set up and booted in $((SECONDS - start)) s"
+systemctl --user is-active android-app-support-setup.service && fail "the setup unit is still running after the Pixel booted"
+
+step "What the Pixel is"
+serial=$(android-app-support status | jq -r .serial)
+export ADB_SERVER_SOCKET=localfilesystem:$XDG_RUNTIME_DIR/android-app-support-adb
+adb -s "$serial" shell getprop | grep -E 'ro.build.version.(release|sdk)|ro.product.(model|brand)|ro.kernel.qemu|page_size' | tee "$out/getprop.txt"
+adb -s "$serial" shell getconf PAGESIZE | tee -a "$out/getprop.txt"
+adb -s "$serial" shell wm size | tee -a "$out/getprop.txt"
+adb -s "$serial" shell wm density | tee -a "$out/getprop.txt"
+grep -q '^\[ro.build.version.release\]: \[17\]' "$out/getprop.txt" || fail "the Pixel does not run Android 17"
+
+step "The apps it came with"
+cp "$data/apps.tsv" "$out/apps-before.tsv"
+cat "$data/apps.tsv"
+grep -q $'^com.android.vending\t' "$data/apps.tsv" || fail "Google Play is not listed"
+grep -q $'^com.android.chrome\t' "$data/apps.tsv" || fail "Chrome is not listed"
+[ -s "$data/icons/com.android.chrome.png" ] || fail "Chrome has no icon"
+applications=${XDG_DATA_HOME:-$HOME/.local/share}/applications
+[ -e "$applications/android-com.android.vending.desktop" ] || fail "Google Play has no app grid entry"
+[ ! -e "$applications/android-com.android.settings.desktop" ] || fail "the Pixel's own Settings is in the app grid"
+mkdir -p "$out/icons"
+cp "$data/icons/com.android.chrome.png" "$data/icons/com.android.vending.png" "$out/icons/"
+
+step "Installing an APK, as opening one in Files does"
+apk=$RUNNER_TEMP/fdroid.apk
+curl -fsSL --retry 5 -o "$apk" https://f-droid.org/repo/org.fdroid.fdroid_1023052.apk ||
+  curl -fsSL --retry 5 -o "$apk" https://f-droid.org/archive/org.fdroid.fdroid_1023052.apk
+echo "985f5181d48bb6bafd54083a048b391271e0ab28385881cc41294fb01a222762  $apk" | sha256sum -c -
+android-app-support install "$apk"
+entry=$applications/android-org.fdroid.fdroid.desktop
+[ -e "$entry" ] || fail "F-Droid did not join the app grid"
+cat "$entry" | tee "$out/android-org.fdroid.fdroid.desktop"
+grep -qx 'Exec=android-app-support run org.fdroid.fdroid' "$entry" || fail "F-Droid's entry does not open it"
+grep -qx 'StartupWMClass=android.org.fdroid.fdroid' "$entry" || fail "F-Droid's entry does not name its window"
+cp "$data/icons/org.fdroid.fdroid.png" "$out/icons/"
+
+step "Opening F-Droid in a window of its own"
+android-app-support run org.fdroid.fdroid > "$out/scrcpy.log" 2>&1 &
+window_pid=$!
+window=
+for _ in $(seq 60); do
+  window=$(xdotool search --name '^F-Droid$' 2> /dev/null | head -1) && [ -n "$window" ] && break
+  sleep 2
+done
+[ -n "$window" ] || fail "no window named F-Droid appeared"
+xprop -id "$window" WM_CLASS _NET_WM_NAME | tee "$out/window.txt"
+# The app's own display, and the app on it rather than on the phone's.
+displays=$(adb -s "$serial" shell dumpsys display | grep -c 'mDisplayId=' || true)
+echo "Displays on the Pixel: $displays"
+sleep 20
+adb -s "$serial" shell dumpsys activity activities | grep -E 'Display #|org.fdroid.fdroid' | head -20 | tee "$out/activities.txt"
+grep -q 'org.fdroid.fdroid' "$out/activities.txt" || fail "F-Droid is not running"
+# Running is not showing: with Android's home screen on its display, F-Droid
+# ran behind it and the window showed the wallpaper.
+grep -Eq 'A=[0-9]+:org.fdroid.fdroid .*visible=true' "$out/activities.txt" ||
+  fail "F-Droid is not visible on its display"
+import -window root "$out/f-droid-window.png"
+geometry=$(xdotool getwindowgeometry "$window")
+echo "$geometry" | tee -a "$out/window.txt"
+
+step "What it drew with"
+# Some frames to time: scrolling F-Droid's list through the window.
+xdotool mousemove --window "$window" 200 400
+for _ in $(seq 10); do
+  xdotool click --window "$window" --repeat 5 5
+  xdotool click --window "$window" --repeat 5 4
+done
+sleep 5
+journalctl --user --no-pager -o cat -u android-app-support.service |
+  grep -E 'drawing with|Graphics (Adapter|API)' | tee "$out/gpu.txt"
+android-app-support gpu org.fdroid.fdroid | tee -a "$out/gpu.txt"
+grep -q '^GLES: .*Translator (llvmpipe' "$out/gpu.txt" || fail "Android does not draw through the host's driver"
+
+step "Resizing the window resizes the app's display"
+xdotool windowsize "$window" 1000 700
+sleep 10
+adb -s "$serial" shell dumpsys display | grep -E 'mDisplayId|mBaseDisplayInfo' | grep -A1 -v 'mDisplayId=0' | head -10 | tee "$out/resized-display.txt" || true
+import -window root "$out/f-droid-window-resized.png"
+
+step "Closing the window closes the app"
+kill "$window_pid"
+wait "$window_pid" 2> /dev/null || true
+sleep 5
+if adb -s "$serial" shell dumpsys activity activities | grep -q 'org.fdroid.fdroid/'; then
+  echo "::warning::F-Droid's activity outlived its window"
+fi
+
+step "Stopping the Pixel and starting it from its snapshot"
+android-app-support stop
+systemctl --user is-active android-app-support.service && fail "the Pixel did not stop"
+ls -la "$data/avd/pixel.avd/snapshots/default_boot" | tee "$out/snapshot.txt" || fail "the Pixel saved no snapshot"
+start=$SECONDS
+android-app-support start
+echo "Started again in $((SECONDS - start)) s" | tee "$out/restart.txt"
+android-app-support status | tee "$out/status.txt"
+[ "$(android-app-support status | jq -r .state)" = running ] || fail "the Pixel is not running after a start"
+android-app-support stop
+kill "$xvfb" 2> /dev/null || true
+echo "Android app support works end to end."
