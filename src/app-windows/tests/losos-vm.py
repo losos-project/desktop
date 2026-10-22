@@ -455,6 +455,13 @@ def window(run, app, settle=60):
 def scenes(machine, run):
     ok = True
 
+    # The nightly can ask for root's password to manage virtual machines
+    # soon after sign-in (Apple silicon run 15), and that dialog would take
+    # the search's keys: Escape cancels it, and does nothing otherwise.
+    for _ in range(2):
+        machine.key("esc")
+        time.sleep(10)
+
     # An app started from LosOS's own search, as a person would.
     machine.click(*SEARCH)
     time.sleep(30)
