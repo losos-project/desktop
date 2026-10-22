@@ -47,6 +47,7 @@ module.exports = {
         'losos-boxes',
         'windows-apps',
         'android-apps',
+        'macos-apps',
         'macos-arm64',
         'app-windows',
         'backup',

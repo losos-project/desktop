@@ -104,6 +104,9 @@ in
   # A guest's apps and windows on the desktop, from macOS's app server or
   # any other that speaks its protocol (docs/app-windows.md).
   app-windows = callWithMold ./app-windows.nix { };
+  # macOS app support (macos-apps.nix): macOS in dockur/macos on a Mac, and
+  # its windows through app-windows.
+  macos-app-support = final.callPackage ./macos-app-support.nix { };
   # This repository's documentation, for reading offline; built by Node, so
   # nothing to link.
   losos-docs = final.callPackage ./losos-docs.nix { };
