@@ -11,7 +11,9 @@ use std::ptr::{self, NonNull};
 
 use app_windows_protocol::{Menu, MenuEntry};
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGSize};
+use objc2_core_foundation::{
+    CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize,
+};
 
 use crate::apps;
 
@@ -73,6 +75,18 @@ pub fn raise(pid: i32, id: u32) {
 /// its own limits.
 pub fn resize(pid: i32, id: u32, width: f64, height: f64) {
     let Some(w) = window(pid, id) else { return };
+    // macOS keeps a window on its screen by shrinking a size that would
+    // run past the screen's edge from where the window is, so it goes to
+    // the top left first. It is pushed below the menu bar by macOS itself.
+    let mut origin = CGPoint { x: 0.0, y: 0.0 };
+    if let Some(value) = unsafe {
+        AXValue::new(
+            AXValueType::CGPoint,
+            NonNull::from(&mut origin).cast::<c_void>(),
+        )
+    } {
+        unsafe { w.set_attribute_value(&CFString::from_str("AXPosition"), &value) };
+    }
     let mut size = CGSize { width, height };
     let Some(value) = (unsafe {
         AXValue::new(
@@ -82,7 +96,11 @@ pub fn resize(pid: i32, id: u32, width: f64, height: f64) {
     }) else {
         return;
     };
-    unsafe { w.set_attribute_value(&CFString::from_str("AXSize"), &value) };
+    // Some apps take a new size in steps, clamping it against the size they
+    // had, so it is asked twice.
+    for _ in 0..2 {
+        unsafe { w.set_attribute_value(&CFString::from_str("AXSize"), &value) };
+    }
 }
 
 /// Closes a window the way its close button does, so an app with unsaved
