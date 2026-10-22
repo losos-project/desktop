@@ -194,7 +194,11 @@ cmd_setup() {
   make_pixel
   progress "Starting the Pixel for the first time"
   systemctl --user start android-app-support.service
-  wait_booted 900 || {
+  # Half an hour: Android's first boot prepares every app, and on a slower
+  # processor, or a virtual machine running the Pixel's inside it, that took
+  # more than the fifteen minutes this used to allow (CI's image on an AMD
+  # runner, where the same boot on an Intel one took nine).
+  wait_booted 1800 || {
     progress "The Pixel did not start. Open Android app support to try again."
     return 1
   }
