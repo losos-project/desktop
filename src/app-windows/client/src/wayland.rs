@@ -844,11 +844,7 @@ impl WindowHandler for App {
                     }
                 }
                 if shown.placing.is_some_and(|target| target != size) {
-                    // Floating while the guest resizes: drawn at the guest's
-                    // own size rather than derisk's floating frame, which a
-                    // floating window may differ from, so it grows to the
-                    // tile's size as the guest does and has no bars meanwhile.
-                    shown.size = rounded(shown.info.width, shown.info.height);
+                    // Floating while the guest resizes.
                 } else if shown.asked != Some(size) {
                     shown.asked = Some(size);
                     let (width, height) = (f64::from(size.0), f64::from(size.1));
