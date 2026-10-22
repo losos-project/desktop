@@ -22,6 +22,10 @@ pkgs.runCommand "apple-m1-check"
            -Wall -Werror"
     clang $flags -c ${./apple-m1/start.S} -o start.o
     clang $flags -c ${./apple-m1/test.c} -o test.o
+    # The variant for KVM on a host that is not a Mac (docs/macos-arm64.md,
+    # "How it is checked") needs an arm64 host with KVM to run, which no
+    # builder has; building it keeps it from rotting.
+    clang $flags -DGENERIC_KVM_HOST -c ${./apple-m1/test.c} -o test-kvm.o
     ld.lld -T ${./apple-m1/link.ld} start.o test.o -o firmware.elf
     llvm-objcopy -O binary firmware.elf firmware
     # vmapple wants its two pflash drives, which this firmware never reads.
