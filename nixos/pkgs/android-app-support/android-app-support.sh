@@ -31,6 +31,23 @@ export ANDROID_SDK_ROOT=$sdk ANDROID_HOME=$sdk ANDROID_AVD_HOME=$avd
 export ANDROID_USER_HOME=$data/user ANDROID_EMULATOR_HOME=$data/user
 mkdir -p "$ANDROID_USER_HOME"
 
+# The key adb signs in to the Pixel with. A Play image lets adb in only
+# with a key the emulator gave it as Android booted, read from adbkey.pub
+# here, so the key is made before anything starts the emulator or adb's
+# server: when adb's server made it first, as it does when it finds none,
+# a Pixel that booted meanwhile said "device unauthorized" to every
+# command. ADB_VENDOR_KEYS makes the server offer this key whichever
+# directory it keeps its own in. The lock stops two commands started at
+# once from each writing half a pair.
+adbkey=$ANDROID_USER_HOME/adbkey
+if [ ! -s "$adbkey.pub" ]; then
+  (
+    flock 9
+    [ -s "$adbkey.pub" ] || adb keygen "$adbkey" > /dev/null 2>&1
+  ) 9> "$ANDROID_USER_HOME/adbkey.lock"
+fi
+export ADB_VENDOR_KEYS=$adbkey
+
 # adb's server on a socket in the person's runtime directory, which only
 # they can open. Its default, TCP port 5037 on localhost, is one server for
 # everyone on the computer, so another person's adb would reach this
