@@ -59,6 +59,17 @@ in
       def status():
           return json.loads(alice("android-app-support status"))
 
+      # A key that types nothing, so the desktop never sees the person go
+      # idle: the setup takes longer than derisk waits before dimming and
+      # locking the screen, and the screenshots would show the lock screen.
+      def nudge():
+          machine.send_key("shift")
+
+      def wait(seconds):
+          for _ in range(seconds // 5):
+              nudge()
+              machine.sleep(5)
+
       machine.wait_for_unit("multi-user.target")
       machine.wait_for_unit("display-manager.service")
 
@@ -81,6 +92,10 @@ in
           machine.wait_until_succeeds("pgrep -u alice -f 'derisk session'", timeout=120)
           machine.wait_until_succeeds(f"test -S {runtime}/derisk/agent.sock", timeout=120)
           machine.sleep(10)
+          # Escape ends the tour derisk opens at a first login, which would
+          # sit over every window in the screenshots.
+          machine.send_key("esc")
+          machine.sleep(2)
           machine.screenshot("desktop")
 
       with subtest("the network reaches Google"):
@@ -115,6 +130,7 @@ in
               # The window as the setup goes, once every five minutes.
               if tick % 60 == 30:
                   machine.screenshot(f"android-app-support-setup-{tick // 60}")
+              nudge()
               machine.sleep(5)
           else:
               raise Exception("the Pixel was not running after an hour")
@@ -136,7 +152,7 @@ in
           # As the app grid opens it: by its desktop entry.
           alice("derisk launch android-org.fdroid.fdroid.desktop")
           machine.wait_until_succeeds("pgrep -u alice -f 'scrcpy.*org.fdroid.fdroid'", timeout=300)
-          machine.sleep(60)
+          wait(60)
           machine.screenshot("f-droid-window")
           # The app's frames, drawn on its own display of the Pixel's.
           print(alice("android-app-support gpu org.fdroid.fdroid"))

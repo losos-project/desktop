@@ -66,6 +66,17 @@ lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {
         KillMode = "mixed";
       };
     };
+    # adb's server, which every android-app-support command starts before
+    # it runs adb, so the server is never a child of the command that
+    # happened to need it first and dies with that command's unit
+    # (android-app-support.sh).
+    android-app-support-adb = {
+      description = "adb's server for the Pixel Android app support runs apps in";
+      serviceConfig = {
+        Type = "exec";
+        ExecStart = "${lib.getExe pkgs.android-app-support} adb-server";
+      };
+    };
     # Keeps the app grid's Android apps current while the Pixel runs, so an
     # app installed from Google Play joins it.
     android-app-support-apps = {

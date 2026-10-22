@@ -35,7 +35,7 @@ package=$(nix build --no-link --print-out-paths .#legacyPackages.x86_64-linux.an
 export PATH=$package/bin:$PATH
 units=$HOME/.config/systemd/user
 mkdir -p "$units"
-for unit in android-app-support.service android-app-support-setup.service android-app-support-apps.service; do
+for unit in android-app-support.service android-app-support-setup.service android-app-support-apps.service android-app-support-adb.service; do
   file=$(nix build --no-link --print-out-paths "$config.systemd.user.units.\"$unit\".unit")
   install -m 0644 "$file/$unit" "$units/$unit"
 done
