@@ -1,0 +1,444 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Matus <dichhead@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 18:27:04 +0000
+Subject: [PATCH 4/5] target/arm/kvm: run VMApple guests under KVM
+
+Forward Apple's pointer authentication hypercalls to QEMU with an SMCCC
+filter and serve them by writing the vCPU's key registers, as
+aquarat/qemu-reims-vgpu does on Asahi Linux.  Hosts without Apple's EL0
+key registers share EL1's keys with EL0.  Wire every CPU PPI and the KVM
+PMU on vmapple, and let it build with KVM alone.
+---
+ hw/vmapple/Kconfig       |   2 +-
+ hw/vmapple/vmapple.c     |  47 ++++++-
+ target/arm/kvm-vmapple.c | 260 +++++++++++++++++++++++++++++++++++++++
+ target/arm/kvm.c         |  12 ++
+ target/arm/kvm_arm.h     |   8 ++
+ target/arm/meson.build   |   2 +-
+ 6 files changed, 325 insertions(+), 6 deletions(-)
+ create mode 100644 target/arm/kvm-vmapple.c
+
+diff --git a/hw/vmapple/Kconfig b/hw/vmapple/Kconfig
+index af66355a88..5ba7ceaeb1 100644
+--- a/hw/vmapple/Kconfig
++++ b/hw/vmapple/Kconfig
+@@ -15,7 +15,7 @@ config VMAPPLE_VIRTIO_BLK
+ config VMAPPLE
+     bool
+     depends on AARCH64
+-    depends on TCG || HVF
++    depends on TCG || HVF || KVM
+     default y
+     imply PCI_DEVICES
+     select ARM_GICV3
+diff --git a/hw/vmapple/vmapple.c b/hw/vmapple/vmapple.c
+index cfaf502bb5..3f7cfe8718 100644
+--- a/hw/vmapple/vmapple.c
++++ b/hw/vmapple/vmapple.c
+@@ -34,6 +34,7 @@
+ #include "hw/core/sysbus.h"
+ #include "hw/usb/usb.h"
+ #include "hw/arm/boot.h"
++#include "hw/arm/bsa.h"
+ #include "hw/arm/machines-qom.h"
+ #include "hw/char/pl011.h"
+ #include "hw/intc/arm_gic.h"
+@@ -52,10 +53,12 @@
+ #include "system/reset.h"
+ #include "system/runstate.h"
+ #include "system/system.h"
++#include "system/kvm.h"
+ #include "system/tcg.h"
+ #include "target/arm/gtimer.h"
+ #include "target/arm/cpu.h"
+ #include "target/arm/cpu-features.h"
++#include "kvm_arm.h"
+ 
+ struct VMAppleMachineState {
+     MachineState parent;
+@@ -295,6 +298,45 @@ static int arm_gic_ppi_index(int cpu_nr, int ppi_index)
+     return NUM_IRQS + cpu_nr * GIC_INTERNAL + ppi_index;
+ }
+ 
++/*
++ * A CPU's private interrupts to their GIC PPIs, at the numbers the Arm base
++ * system architecture gives them: the four generic timers, the GICv3
++ * maintenance interrupt and the PMU.  27on86 wired only the virtual timer,
++ * which is all a guest at EL1 under TCG uses.  Under KVM the vCPU's PMU must
++ * also be told its PPI and initialised before it first runs, or KVM_RUN
++ * fails.  This follows aquarat/qemu-reims-vgpu.
++ */
++static void vmapple_connect_cpu_ppis(VMAppleMachineState *vms, int cpu,
++                                     DeviceState *cpudev)
++{
++    static const struct {
++        int gtimer;
++        int ppi;
++    } timers[] = {
++        { GTIMER_PHYS, ARCH_TIMER_NS_EL1_IRQ },
++        { GTIMER_VIRT, ARCH_TIMER_VIRT_IRQ },
++        { GTIMER_HYP, ARCH_TIMER_NS_EL2_IRQ },
++        { GTIMER_SEC, ARCH_TIMER_S_EL1_IRQ },
++    };
++    size_t t;
++
++    for (t = 0; t < ARRAY_SIZE(timers); t++) {
++        qdev_connect_gpio_out(cpudev, timers[t].gtimer,
++                              qdev_get_gpio_in(vms->gic,
++                                  arm_gic_ppi_index(cpu, timers[t].ppi)));
++    }
++    qdev_connect_gpio_out_named(cpudev, "gicv3-maintenance-interrupt", 0,
++                                qdev_get_gpio_in(vms->gic,
++                                    arm_gic_ppi_index(cpu, ARCH_GIC_MAINT_IRQ)));
++    qdev_connect_gpio_out_named(cpudev, "pmu-interrupt", 0,
++                                qdev_get_gpio_in(vms->gic,
++                                    arm_gic_ppi_index(cpu, VIRTUAL_PMU_IRQ)));
++    if (kvm_enabled() && ARM_CPU(cpudev)->has_pmu) {
++        kvm_arm_pmu_set_irq(ARM_CPU(cpudev), VIRTUAL_PMU_IRQ);
++        kvm_arm_pmu_init(ARM_CPU(cpudev));
++    }
++}
++
+ static void create_gic(VMAppleMachineState *vms, MemoryRegion *mem)
+ {
+     MachineState *ms = MACHINE(vms);
+@@ -334,10 +376,7 @@ static void create_gic(VMAppleMachineState *vms, MemoryRegion *mem)
+     for (i = 0; i < smp_cpus; i++) {
+         DeviceState *cpudev = DEVICE(qemu_get_cpu(i));
+ 
+-        /* Map the virt timer to PPI 27 */
+-        qdev_connect_gpio_out(cpudev, GTIMER_VIRT,
+-                              qdev_get_gpio_in(vms->gic,
+-                                               arm_gic_ppi_index(i, 27)));
++        vmapple_connect_cpu_ppis(vms, i, cpudev);
+ 
+         /* Map the GIC IRQ and FIQ lines to CPU */
+         sysbus_connect_irq(gicbusdev, i, qdev_get_gpio_in(cpudev, ARM_CPU_IRQ));
+diff --git a/target/arm/kvm-vmapple.c b/target/arm/kvm-vmapple.c
+new file mode 100644
+index 0000000000..c4d10ff684
+--- /dev/null
++++ b/target/arm/kvm-vmapple.c
+@@ -0,0 +1,260 @@
++/*
++ * VMApple guests under KVM: Apple's pointer authentication hypercalls
++ *
++ * Based on aquarat/qemu-reims-vgpu's kvm-vmapple.c (Copyright (c) 2026
++ * aquarat), which grew out of Anees Iqbal's vmapple KVM work.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ *
++ * XNU's VMAPPLE kernel asks the hypervisor for its pointer authentication
++ * keys through the SMCCC calls 0xc1000000..0xc10000ff (tcg/apple-pac.c has
++ * the table).  Under KVM an SMCCC filter set at VM creation forwards them
++ * to QEMU, which writes the vCPU's key registers.  arm64 KVM does not read
++ * run->hypercall.ret, so the status goes back in x0.
++ *
++ * The EL0 key and the switch saying whether EL1 uses it live in Apple's
++ * implementation-defined APCTL and KERNKEY registers.  KVM shows them only
++ * on an Apple silicon host whose kernel carries aquarat's VM-key patch.
++ * Elsewhere (any other arm64 host with KVM and pointer authentication)
++ * EL0 shares EL1's keys: the guest still signs and authenticates
++ * consistently, but one process can forge another's pointers.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/log.h"
++#include "qom/object.h"
++#include "hw/core/boards.h"
++#include "system/kvm.h"
++#include "cpu.h"
++#include "kvm_arm.h"
++
++#define VMAPPLE_HVC_FIRST 0xc1000000u
++#define VMAPPLE_HVC_COUNT 0x100u
++#define VMAPPLE_HVC_NOP   0xf0u
++
++#define SMCCC_NOT_SUPPORTED ((uint64_t)-1)
++
++#define CORE_REG(x) (KVM_REG_ARM64 | KVM_REG_SIZE_U64 | KVM_REG_ARM_CORE | \
++                     KVM_REG_ARM_CORE_REG(x))
++
++/* Every default key is an offset from one constant, as on Apple's host. */
++#define DEFAULT_KEY_BASE 0xfeedfacefeedfacfULL
++
++enum {
++    KEY_A,
++    KEY_B,
++    KEY_EL0,
++    KEY_G,
++    KEY_GROUPS
++};
++
++static const uint64_t default_key[KEY_GROUPS] = {
++    [KEY_A] = DEFAULT_KEY_BASE + 6,
++    [KEY_B] = DEFAULT_KEY_BASE,
++    [KEY_EL0] = DEFAULT_KEY_BASE + 4,
++    [KEY_G] = DEFAULT_KEY_BASE + 10,
++};
++
++/* Register groups, in fill order: a key "from x" sets x, x+1, ... */
++static const uint64_t key_regs_a[] = {
++    ARM64_SYS_REG(3, 0, 2, 1, 0),   /* APIAKeyLo_EL1 */
++    ARM64_SYS_REG(3, 0, 2, 1, 1),   /* APIAKeyHi_EL1 */
++    ARM64_SYS_REG(3, 0, 2, 2, 0),   /* APDAKeyLo_EL1 */
++    ARM64_SYS_REG(3, 0, 2, 2, 1),   /* APDAKeyHi_EL1 */
++};
++static const uint64_t key_regs_b[] = {
++    ARM64_SYS_REG(3, 0, 2, 1, 2),   /* APIBKeyLo_EL1 */
++    ARM64_SYS_REG(3, 0, 2, 1, 3),   /* APIBKeyHi_EL1 */
++    ARM64_SYS_REG(3, 0, 2, 2, 2),   /* APDBKeyLo_EL1 */
++    ARM64_SYS_REG(3, 0, 2, 2, 3),   /* APDBKeyHi_EL1 */
++};
++static const uint64_t key_regs_el0[] = {
++    ARM64_SYS_REG(3, 6, 15, 2, 3),  /* Apple KERNKEY lo, EL12 view */
++    ARM64_SYS_REG(3, 6, 15, 2, 4),  /* Apple KERNKEY hi, EL12 view */
++};
++static const uint64_t key_regs_g[] = {
++    ARM64_SYS_REG(3, 0, 2, 3, 0),   /* APGAKeyLo_EL1 */
++    ARM64_SYS_REG(3, 0, 2, 3, 1),   /* APGAKeyHi_EL1 */
++};
++
++static const struct {
++    const uint64_t *regs;
++    size_t n;
++} key_group[KEY_GROUPS] = {
++    [KEY_A] = { key_regs_a, ARRAY_SIZE(key_regs_a) },
++    [KEY_B] = { key_regs_b, ARRAY_SIZE(key_regs_b) },
++    [KEY_EL0] = { key_regs_el0, ARRAY_SIZE(key_regs_el0) },
++    [KEY_G] = { key_regs_g, ARRAY_SIZE(key_regs_g) },
++};
++
++/* Apple's pointer authentication control register, EL12 view. */
++#define APCTL_EL12 ARM64_SYS_REG(3, 6, 15, 15, 0)
++#define APCTL_BASE 0x19
++#define APCTL_EL0_SHARES_EL1_KEYS 0x2
++
++static bool vmapple_hvc_enabled;
++/* Whether this host's KVM has Apple's EL0 key registers; see the header. */
++static bool apple_el0_keys = true;
++
++static bool apple_reg_missing(int ret)
++{
++    if (ret != -ENOENT) {
++        return false;
++    }
++    if (apple_el0_keys) {
++        apple_el0_keys = false;
++        warn_report("vmapple: this host has no Apple EL0 key registers; "
++                    "the guest's EL0 shares EL1's pointer authentication "
++                    "keys");
++    }
++    return true;
++}
++
++static int set_key(CPUState *cs, int group, uint64_t key)
++{
++    size_t i;
++    int ret;
++
++    if (group == KEY_EL0 && !apple_el0_keys) {
++        return 0;
++    }
++    for (i = 0; i < key_group[group].n; i++) {
++        uint64_t v = key + i;
++
++        ret = kvm_set_one_reg(cs, key_group[group].regs[i], &v);
++        if (ret) {
++            return group == KEY_EL0 && apple_reg_missing(ret) ? 0 : ret;
++        }
++    }
++    return 0;
++}
++
++static int set_apctl(CPUState *cs, bool el0_shares_el1_keys)
++{
++    uint64_t v = APCTL_BASE |
++                 (el0_shares_el1_keys ? APCTL_EL0_SHARES_EL1_KEYS : 0);
++    int ret;
++
++    if (!apple_el0_keys) {
++        return 0;
++    }
++    ret = kvm_set_one_reg(cs, APCTL_EL12, &v);
++    return apple_reg_missing(ret) ? 0 : ret;
++}
++
++static int get_x(CPUState *cs, int n, uint64_t *v)
++{
++    return kvm_get_one_reg(cs, CORE_REG(regs.regs[n]), v);
++}
++
++static int set_x(CPUState *cs, int n, uint64_t v)
++{
++    return kvm_set_one_reg(cs, CORE_REG(regs.regs[n]), &v);
++}
++
++/* Serves one call; *status is what the guest gets in x0. */
++static int vmapple_pac_call(CPUState *cs, unsigned fn, uint64_t *status)
++{
++    uint64_t x1 = 0, x2 = 0;
++    int ret, g;
++
++    *status = 0;
++    if (fn >= 2 && fn <= 6) {
++        ret = get_x(cs, 1, &x1);
++        if (!ret && fn == 5) {
++            ret = get_x(cs, 2, &x2);
++        }
++        if (ret) {
++            return ret;
++        }
++    }
++    switch (fn) {
++    case 0:
++        ret = set_apctl(cs, false);
++        if (!ret) {
++            ret = set_key(cs, KEY_B, default_key[KEY_B]);
++        }
++        if (!ret) {
++            ret = set_key(cs, KEY_EL0, default_key[KEY_EL0]);
++        }
++        if (!ret) {
++            ret = set_key(cs, KEY_A, default_key[KEY_A]);
++        }
++        if (!ret) {
++            ret = set_key(cs, KEY_G, default_key[KEY_G]);
++        }
++        return ret;
++    case 1:
++        for (g = 0, ret = 0; g < KEY_GROUPS && !ret; g++) {
++            ret = set_x(cs, 1 + g, default_key[g]);
++        }
++        return ret;
++    case 2:
++        return set_key(cs, KEY_A, x1);
++    case 3:
++        return set_key(cs, KEY_B, x1);
++    case 4:
++        return set_key(cs, KEY_EL0, x1);
++    case 5:
++        ret = set_key(cs, KEY_EL0, x2);
++        return ret ? ret : set_apctl(cs, x1 != 0);
++    case 6:
++        return set_key(cs, KEY_G, x1);
++    case VMAPPLE_HVC_NOP:
++        return 0;
++    default:
++        qemu_log_mask(LOG_UNIMP, "vmapple: unhandled platform hypercall "
++                      "%#x\n", VMAPPLE_HVC_FIRST + fn);
++        *status = SMCCC_NOT_SUPPORTED;
++        return 0;
++    }
++}
++
++int kvm_arm_vmapple_init(MachineState *ms, KVMState *s)
++{
++    struct kvm_smccc_filter filter = {
++        .base = VMAPPLE_HVC_FIRST,
++        .nr_functions = VMAPPLE_HVC_COUNT,
++        .action = KVM_SMCCC_FILTER_FWD_TO_USER,
++    };
++    struct kvm_device_attr attr = {
++        .group = KVM_ARM_VM_SMCCC_CTRL,
++        .attr = KVM_ARM_VM_SMCCC_FILTER,
++        .addr = (uintptr_t)&filter,
++    };
++    int ret;
++
++    if (!g_str_has_prefix(object_get_typename(OBJECT(ms)), "vmapple")) {
++        return 0;
++    }
++    ret = kvm_vm_ioctl(s, KVM_SET_DEVICE_ATTR, &attr);
++    if (ret < 0) {
++        error_report("vmapple: cannot forward the platform hypercalls to "
++                     "QEMU (KVM's SMCCC filter needs Linux 6.4): %s",
++                     strerror(-ret));
++        return ret;
++    }
++    vmapple_hvc_enabled = true;
++    return 0;
++}
++
++bool kvm_arm_vmapple_hypercall(CPUState *cs, struct kvm_run *run, int *ret)
++{
++    uint64_t nr = run->hypercall.nr;
++    uint64_t status;
++
++    if (!vmapple_hvc_enabled || nr < VMAPPLE_HVC_FIRST ||
++        nr >= VMAPPLE_HVC_FIRST + VMAPPLE_HVC_COUNT) {
++        return false;
++    }
++    *ret = vmapple_pac_call(cs, nr - VMAPPLE_HVC_FIRST, &status);
++    if (!*ret) {
++        *ret = set_x(cs, 0, status);
++    }
++    if (*ret) {
++        error_report("vmapple: platform hypercall %#" PRIx64 " failed: %s",
++                     nr, strerror(-*ret));
++    }
++    return true;
++}
+diff --git a/target/arm/kvm.c b/target/arm/kvm.c
+index d40a6a9859..dd778036fb 100644
+--- a/target/arm/kvm.c
++++ b/target/arm/kvm.c
+@@ -610,6 +610,11 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+ 
+     cap_has_mp_state = kvm_check_extension(s, KVM_CAP_MP_STATE);
+ 
++    ret = kvm_arm_vmapple_init(ms, s);
++    if (ret < 0) {
++        return ret;
++    }
++
+     /* Check whether user space can specify guest syndrome value */
+     cap_has_inject_serror_esr =
+         kvm_check_extension(s, KVM_CAP_ARM_INJECT_SERROR_ESR);
+@@ -1550,6 +1555,13 @@ int kvm_arch_handle_exit(CPUState *cs, struct kvm_run *run)
+     int ret = 0;
+ 
+     switch (run->exit_reason) {
++    case KVM_EXIT_HYPERCALL:
++        if (kvm_arm_vmapple_hypercall(cs, run, &ret)) {
++            break;
++        }
++        qemu_log_mask(LOG_UNIMP, "%s: unhandled hypercall %#" PRIx64 "\n",
++                      __func__, (uint64_t)run->hypercall.nr);
++        break;
+     case KVM_EXIT_DEBUG:
+         if (kvm_arm_handle_debug(cpu, &run->debug.arch)) {
+             ret = EXCP_DEBUG;
+diff --git a/target/arm/kvm_arm.h b/target/arm/kvm_arm.h
+index e7c40fb003..bf4887ae48 100644
+--- a/target/arm/kvm_arm.h
++++ b/target/arm/kvm_arm.h
+@@ -211,6 +211,14 @@ int kvm_arm_get_max_vm_ipa_size(MachineState *ms, bool *fixed_ipa);
+ 
+ int kvm_arm_vgic_probe(void);
+ 
++/*
++ * vmapple guests: forward Apple's pointer authentication hypercalls to
++ * QEMU (at VM creation, for a vmapple machine) and serve them.
++ * kvm_arm_vmapple_hypercall returns true when it handled the exit.
++ */
++int kvm_arm_vmapple_init(MachineState *ms, KVMState *s);
++bool kvm_arm_vmapple_hypercall(CPUState *cs, struct kvm_run *run, int *ret);
++
+ void kvm_arm_pmu_init(ARMCPU *cpu);
+ void kvm_arm_pmu_set_irq(ARMCPU *cpu, int irq);
+ 
+diff --git a/target/arm/meson.build b/target/arm/meson.build
+index 0369f96b4c..d52e8e3c82 100644
+--- a/target/arm/meson.build
++++ b/target/arm/meson.build
+@@ -31,7 +31,7 @@ arm_common_user_system_ss.add(when: 'TARGET_AARCH64', if_true: files(
+ arm_common_system_ss.add(files(
+   'arm-qmp-cmds.c',
+ ))
+-arm_system_ss.add(when: 'CONFIG_KVM', if_true: files('hyp_gdbstub.c', 'kvm.c'))
++arm_system_ss.add(when: 'CONFIG_KVM', if_true: files('hyp_gdbstub.c', 'kvm.c', 'kvm-vmapple.c'))
+ arm_system_ss.add(when: 'CONFIG_HVF', if_true: files('hyp_gdbstub.c'))
+ 
+ arm_user_ss.add(files('cpu.c'))
