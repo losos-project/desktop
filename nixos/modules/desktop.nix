@@ -162,8 +162,8 @@ in
   # what does not read derisk's theme: Danube's pages, Flatpak apps and
   # every `system-ui` stylesheet. derisk's egui apps load it themselves
   # through mcsapi. Before it, the theme named Ubuntu, which only egui's
-  # built-in copy drew; the image had no sans-serif font at all, so
-  # everything else was lettered in whatever fontconfig had, Hack among it.
+  # built-in copy drew, and sans-serif was fontconfig's own DejaVu Sans, so
+  # the rest of the desktop was lettered in a third face.
   fonts.packages = [
     pkgs.inter
     pkgs.nerd-fonts.hack
