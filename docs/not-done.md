@@ -66,13 +66,18 @@
   their H.264 in software. USB passthrough, which WinBoat does only with
   Docker, is not offered. Windows is not activated.
 - **App windows.** [App windows](app-windows.md) has run on GitHub's Macs,
-  driven by scripts, and its client has shown their recordings on this
-  desktop. Nothing in the image starts a macOS guest for it yet. Pictures go
+  driven by scripts and from LosOS booted in a VM on them. Pictures go
   to the compositor through shared memory rather than the GPU's own
   buffers. The pointer is always the arrow, only text crosses the
   clipboard, and drag and drop and sound stay in the guest. A Mac package
   downloaded in another machine stays there; only this desktop's own hand
   packages to macOS.
+- **macOS app support.** [macOS app support](macos-apps.md) has not set
+  up macOS yet. That needs a Mac running LosOS, because Apple's licence
+  lets macOS run only on Apple hardware, and CI's Macs run macOS rather
+  than LosOS. The installer inside macOS builds the app server with Rust
+  and Apple's command line tools, which macOS downloads, rather than
+  installing a built one. Reims vGPU has not drawn macOS here.
 - **No hosted proxy.** GitHub Pages serves files only. Of what
   [`proxy/`](binary-cache.md) did, updates moved to GitHub Releases, through
   an index on the documentation site and a service on each machine

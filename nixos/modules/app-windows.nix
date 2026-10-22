@@ -1,7 +1,7 @@
 # app-windows on every target (docs/app-windows.md): the client that shows
 # a guest system's apps in the app grid and its windows as windows here.
-# Nothing starts it yet; a guest's own module does, with that guest's
-# server and token.
+# A guest's own module starts it, with that guest's server and token:
+# macos-apps.nix, for macOS in a container on a Mac.
 #
 # What it does without a window: Mac packages, disk images and installers,
 # opened in Files or downloaded into Downloads, go to macOS and open there.
