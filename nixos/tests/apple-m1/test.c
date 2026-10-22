@@ -74,6 +74,17 @@ static void puthex(uint64_t v)
     }
 }
 
+/*
+ * Built with -DGENERIC_KVM_HOST for KVM on an arm64 host that is not a Mac:
+ * the CPU is the host's, and without Apple's KERNKEY register EL0 shares
+ * EL1's keys, so the checks that need separate EL0 keys are skipped.
+ */
+#ifdef GENERIC_KVM_HOST
+#define SEPARATE_EL0_KEYS false
+#else
+#define SEPARATE_EL0_KEYS true
+#endif
+
 static void check(bool ok, const char *what)
 {
     tests++;
@@ -195,6 +206,19 @@ static bool check_el1_keys(void)
     return true;
 }
 
+/* A check that holds only where EL0 has keys of its own. */
+static void check_el0(bool ok, const char *what)
+{
+    if (SEPARATE_EL0_KEYS) {
+        check(ok, what);
+        return;
+    }
+    tests++;
+    puts_("ok - ");
+    puts_(what);
+    puts_(" # SKIP EL0 shares EL1's keys on this host\n");
+}
+
 static void check_el0_keys(void)
 {
     uint64_t el0_key = KEY_BASE + 4;
@@ -202,12 +226,12 @@ static void check_el0_keys(void)
 
     q = run_el0(el0_pacia, PTR, MOD);
     check(run_el0(el0_autia, q, MOD) == PTR, "EL0 authenticates its own IA");
-    check(q != pacia(PTR), "EL0 signs with other keys than EL1");
-    check(autia(q) != PTR, "EL1 rejects an EL0 signature");
-    check(run_el0(el0_autia, pacia(PTR), MOD) != PTR,
+    check_el0(q != pacia(PTR), "EL0 signs with other keys than EL1");
+    check_el0(autia(q) != PTR, "EL1 rejects an EL0 signature");
+    check_el0(run_el0(el0_autia, pacia(PTR), MOD) != PTR,
           "EL0 rejects an EL1 signature");
     r = run_el0(el0_pacib, PTR, MOD);
-    check(autib(r) != PTR && run_el0(el0_autib, r, MOD) == PTR,
+    check_el0(autib(r) != PTR && run_el0(el0_autib, r, MOD) == PTR,
           "the diversifier covers the B keys too");
 
     check(call(PAC_SET_EL0_DIVERSIFIER_AT_EL1, 1, el0_key) == 0,
@@ -217,11 +241,11 @@ static void check_el0_keys(void)
           "EL0 accepts what EL1 signed with EL0's keys");
     check(call(PAC_SET_EL0_DIVERSIFIER_AT_EL1, 0, el0_key) == 0,
           "SET_EL0_DIVERSIFIER_AT_EL1 off");
-    check(autia(q) != PTR, "EL1 is back on its own keys");
+    check_el0(autia(q) != PTR, "EL1 is back on its own keys");
 
     check(call(PAC_SET_EL0_DIVERSIFIER, 0x9999aaaabbbbccccUL, 0) == 0,
           "SET_EL0_DIVERSIFIER");
-    check(run_el0(el0_autia, q, MOD) != PTR,
+    check_el0(run_el0(el0_autia, q, MOD) != PTR,
           "another process's EL0 key rejects the first one's pointers");
 
     r = pacga(PTR);
@@ -249,9 +273,16 @@ int main(void)
     uint64_t sctlr;
 
     uart[UART_CR / 4] = 0x301;
-    puts_("# apple-m1 on vmapple under TCG\n");
+    puts_(SEPARATE_EL0_KEYS ? "# apple-m1 on vmapple under TCG\n"
+                            : "# vmapple under KVM on a host that is not a Mac\n");
 
-    check_cpu();
+    if (SEPARATE_EL0_KEYS) {
+        check_cpu();
+    } else {
+        puts_("# the CPU is the host's under KVM, MIDR ");
+        puthex(READ_SYSREG(midr_el1));
+        putc_('\n');
+    }
 
     check(call(PAC_NOP, 0, 0) == 0, "PAC_NOP answers like a current host");
     check(call(PAC_SET_INITIAL_STATE, 0, 0) == 0, "SET_INITIAL_STATE");
