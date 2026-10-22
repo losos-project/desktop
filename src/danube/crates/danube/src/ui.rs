@@ -228,6 +228,8 @@ struct ThemeWatch {
     checked: Option<Instant>,
     id: Option<String>,
     tokens: Tokens,
+    /// The theme's font families, which egui draws only once installed.
+    fonts: mcsapi_theme::Fonts,
 }
 
 impl ThemeWatch {
@@ -236,6 +238,7 @@ impl ThemeWatch {
             checked: None,
             id: None,
             tokens: Tokens::from_spec(&mcsapi_theme::Theme::dark()),
+            fonts: mcsapi_theme::Fonts::default(),
         }
     }
 
@@ -268,6 +271,7 @@ impl ThemeWatch {
             });
             if let Some(theme) = theme {
                 self.tokens = Tokens::from_spec(&theme);
+                self.fonts = theme.fonts;
             }
             self.id = id;
         }
@@ -641,6 +645,7 @@ impl eframe::App for Window {
         let ctx = ui.ctx().clone();
         let tokens = self.theme.tokens();
         tokens.install(&ctx);
+        mcsapi_components::install_fonts(&ctx, &self.theme.fonts);
 
         if !self.drain(&ctx) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
