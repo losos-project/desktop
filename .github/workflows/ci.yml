@@ -45,9 +45,10 @@ permissions:
 # publish queue instead, so none is killed half-way through an upload. The
 # cadence is part of the group because cadence.yml can start a weekly, a
 # monthly and a yearly run on the same tag at once, and a group holds one
-# waiting run: a third would cancel the second.
+# waiting run: a third would cancel the second. A pull request's runs are
+# grouped by its branch, the same runs as by its merge ref.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.cadence }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ inputs.cadence }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The cadence the images are built for, `losos.channel` (flake.nix reads
@@ -355,10 +356,12 @@ jobs:
   # It starts after
   # `prebuild`, from what that compiled, so it is left with assembling the
   # image. A failed `prebuild` does not stop it: the same derivation fails
-  # here too, and everything else it builds is kept.
+  # here too, and everything else it builds is kept. Not `always()`: a job
+  # with it ignores the run being cancelled, so a pull request's newer push
+  # waited hours for the older run's flake check and VM tests to finish.
   flake:
     needs: [prebuild]
-    if: always() && needs.prebuild.result != 'cancelled'
+    if: ${{ !cancelled() && needs.prebuild.result != 'cancelled' }}
     strategy: *arches
     runs-on: ${{ matrix.runner }}
     timeout-minutes: &flake-minutes 355
