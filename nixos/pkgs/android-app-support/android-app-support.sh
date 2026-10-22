@@ -12,8 +12,8 @@
 #                                       fast an app's frames came
 #
 # and, for the user units in modules/android-apps.nix: `emulator`, the
-# Pixel itself, `shutdown`, its clean stop, and `watch`, which keeps the
-# app list current while it runs.
+# Pixel itself, `shutdown`, its clean stop, `watch`, which keeps the app
+# list current while it runs, and `adb-server`, adb's server.
 #
 # @emulatorUrl@ and the rest are filled in by android-app-support.nix.
 
@@ -53,6 +53,24 @@ export ADB_VENDOR_KEYS=$adbkey
 # everyone on the computer, so another person's adb would reach this
 # person's Pixel through it, with this person's key.
 export ADB_SERVER_SOCKET=localfilesystem:${XDG_RUNTIME_DIR:?no XDG_RUNTIME_DIR}/android-app-support-adb
+
+# The server runs as a unit of its own, android-app-support-adb, started
+# here before any adb command can start it. An adb command that finds no
+# server forks one, which then lives in the cgroup of whatever ran that
+# command: started from the setup, it died as the setup's unit finished,
+# and the install after it lost its connection halfway; started inside the
+# sync's lock, it kept the lock's file open and every later sync waited
+# for it forever.
+# The unit is up once its process is, a moment before the socket is, so
+# the wait for the socket keeps the next command from forking a server.
+cmd_adb_server() { exec adb nodaemon server; }
+if [ "${1:-}" != adb-server ]; then
+  systemctl --user start android-app-support-adb.service 2> /dev/null || true
+  for _ in $(seq 50); do
+    [ -S "${ADB_SERVER_SOCKET#localfilesystem:}" ] && break
+    sleep 0.1
+  done
+fi
 
 # The Pixel's console port, and its adb port one above. Each person's
 # Pixel has its own pair, from their UID, among the sixteen pairs adb
@@ -364,7 +382,7 @@ cmd_stop() {
 cmd_sync() {
   mkdir -p "$data"
   (
-    flock 9
+    flock -w 600 9 || { say "android-app-support: another listing of the apps did not finish"; exit 1; }
     sync_apps
   ) 9> "$data/sync.lock"
 }
@@ -503,8 +521,8 @@ cmd_install() {
 command=${1:-status}
 shift || true
 case $command in
-  status | setup | start | stop | run | phone | install | sync | gpu | emulator | shutdown | watch)
-    "cmd_$command" "$@"
+  status | setup | start | stop | run | phone | install | sync | gpu | emulator | shutdown | watch | adb-server)
+    "cmd_${command//-/_}" "$@"
     ;;
   *)
     say "usage: android-app-support status|setup|start|stop|run PACKAGE|phone|install APK...|sync|gpu [PACKAGE]"

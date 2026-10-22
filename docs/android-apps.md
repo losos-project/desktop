@@ -187,6 +187,13 @@ the emulator tells it on port 5037. While the Pixel starts,
 `android-app-support` sends the server that same request over its socket,
 so a Pixel that starts after the server is still found.
 
+The server runs as a user unit of its own, `android-app-support-adb`, and
+every `android-app-support` command starts it before using adb. Left to
+itself, adb starts a server from whichever command needs one first, and
+that server dies with the command's unit. The key adb signs in with is
+made before anything starts the Pixel, because Google Play's Android only
+accepts the key the emulator handed it as Android booted.
+
 ## What was here before
 
 The Android Translation Layer used to do this. It ran each app as a Linux
