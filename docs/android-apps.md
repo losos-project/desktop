@@ -131,6 +131,11 @@ which mode it chose:
 - `-gpu swiftshader_indirect`, the emulator's SwiftShader on the processor,
   when either is missing.
 
+If the emulator dies on the GPU before Android has started, which happens
+when gfxstream gets no OpenGL context from the driver, the Pixel is started
+once more with SwiftShader, and its log says so. That lasts for that start
+only: the next one tries the GPU again.
+
 `android-app-support gpu` shows what Android itself got. On a PC with a GPU
 its first line names it:
 
