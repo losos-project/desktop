@@ -48,6 +48,7 @@ module.exports = {
         'windows-apps',
         'android-apps',
         'macos-arm64',
+        'app-windows',
         'backup',
       ],
     },

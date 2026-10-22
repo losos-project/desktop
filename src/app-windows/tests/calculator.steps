@@ -1,0 +1,12 @@
+# Calculator: typed sums, a result that has to show, and closing a window
+# the way its close button does.
+launch com.apple.calculator
+window com.apple.calculator 60
+shot 01-opened
+key escape
+keys 12*34=
+expect-change 5
+shot 02-result
+expect-menus View 15
+close
+expect-closed 15

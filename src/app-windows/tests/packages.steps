@@ -1,0 +1,17 @@
+# Mac packages from this side open in macOS (docs/app-windows.md, "Mac
+# packages"). macos-ci.sh runs `app-windows watch "$DOWNLOADS"` beside this,
+# as the image does for the person's Downloads folder.
+
+# A disk image a browser here downloads: Rectangle's newest release, from
+# GitHub, the way a person would fetch it.
+run tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/rxhanson/Rectangle/releases/latest) && v=${tag##*/v} && curl -fsSL -o "$DOWNLOADS/Rectangle$v.dmg.part" "https://github.com/rxhanson/Rectangle/releases/download/v$v/Rectangle$v.dmg" && mv "$DOWNLOADS/Rectangle$v.dmg.part" "$DOWNLOADS/Rectangle$v.dmg"
+# The watcher hands it over and macOS mounts it, showing its window.
+window com.apple.finder 90
+expect-title Rectangle 30
+shot 01-dmg-opened
+
+# An installer package opened here, as Files' "Open in macOS" does.
+run pkgbuild --nopayload --identifier org.losos.app-windows.hello --version 1 "$WORK/Hello.pkg"
+send $WORK/Hello.pkg 30
+window com.apple.installer 60
+shot 02-pkg-opened

@@ -65,6 +65,14 @@
   colour of their own. It has no GPU, so Windows draws its apps and encodes
   their H.264 in software. USB passthrough, which WinBoat does only with
   Docker, is not offered. Windows is not activated.
+- **App windows.** [App windows](app-windows.md) has run on GitHub's Macs,
+  driven by scripts, and its client has shown their recordings on this
+  desktop. Nothing in the image starts a macOS guest for it yet. Pictures go
+  to the compositor through shared memory rather than the GPU's own
+  buffers. The pointer is always the arrow, only text crosses the
+  clipboard, and drag and drop and sound stay in the guest. A Mac package
+  downloaded in another machine stays there; only this desktop's own hand
+  packages to macOS.
 - **No hosted proxy.** GitHub Pages serves files only. Of what
   [`proxy/`](binary-cache.md) did, updates moved to GitHub Releases, through
   an index on the documentation site and a service on each machine
