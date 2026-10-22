@@ -71,9 +71,18 @@ The guest draws its own title bar, so the windows have none here.
 Dragging the guest's title bar moves the window on this desktop. A size the
 desktop gives a window, when it tiles or maximizes it, is asked of the
 guest. A window that does not take that size, as a dialog or Calculator
-never does, keeps its shape in the middle of it, with black bars beside it,
-rather than being stretched. A click on a bar lands on the window's nearest
+never does, keeps its shape in the middle of it, with black bars around
+it, rather than being stretched. It is made smaller to fit a smaller size,
+but never larger than macOS draws it, so its text stays sharp and the size
+of the desktop's own. A click on a bar lands on the window's nearest
 edge.
+
+Under derisk, a new window that would tile at a size other than its own
+opens floating instead, and its tile's size is asked of macOS. The server
+moves the window to the top left of macOS's screen first, so macOS does not
+shrink the size to keep the window on screen, and asks twice, for apps that
+take a new size in steps. Once macOS draws the window at that size, it is
+tiled. A window macOS will not resize stays floating at its own size.
 
 Under derisk, a guest window's menus go in the top bar and the palette,
 through derisk's agent socket. A pick there goes back to the guest as the

@@ -10,7 +10,10 @@
 //!
 //! The windows carry no title bar of their own: the guest draws its own,
 //! and dragging it moves the window here (`Moving`). A size the desktop
-//! gives a window (tiling, maximizing) is asked of the guest, and until the
+//! gives a window (tiling, maximizing) is asked of the guest. Under derisk,
+//! a new window floats while the guest resizes it to its tile, and is tiled
+//! once it has that size; one the guest will not resize stays floating.
+//! Until the
 //! guest's window has that size, which a dialog or a fixed-size window
 //! never does, the picture keeps its shape in the middle of it.
 //!
@@ -85,7 +88,7 @@ use smithay_client_toolkit::{
 };
 
 use crate::decode::Picture;
-use crate::derisk::{self, Bridge, Register};
+use crate::derisk::{self, Bridge, Place, Register};
 use crate::entries;
 use crate::link::Link;
 use crate::stream::{Event, Frames};
@@ -140,6 +143,10 @@ struct Shown {
     last: Option<Picture>,
     /// The size changed since the last picture was drawn.
     resized: bool,
+    /// Its first tile, while it floats and the guest is resized to it.
+    placing: Option<(u32, u32)>,
+    /// Its first size here came, so it is placed only once.
+    placed: bool,
     /// A picture is on screen and the compositor has not yet said when to
     /// draw the next.
     drawing: bool,
@@ -174,11 +181,14 @@ impl Shown {
     /// pixels a guest point takes, and its offset from the top left. A size
     /// the desktop chose that the guest's window does not take, as a
     /// dialog or Calculator never does, keeps the picture's shape and
-    /// centres it, with bars either side, instead of stretching it.
+    /// centres it, with bars around it, instead of stretching it. It is
+    /// made smaller to fit a smaller size but never larger than the guest
+    /// draws it: a dialog blown up to half the screen is blurred, and its
+    /// text no longer matches the desktop's.
     fn fit(&self) -> (f64, f64, f64) {
         let (w, h) = (f64::from(self.size.0), f64::from(self.size.1));
         let (gw, gh) = (self.info.width.max(1.0), self.info.height.max(1.0));
-        let scale = (w / gw).min(h / gh).max(f64::MIN_POSITIVE);
+        let scale = (w / gw).min(h / gh).clamp(f64::MIN_POSITIVE, 1.0);
         (scale, (w - gw * scale) / 2.0, (h - gh * scale) / 2.0)
     }
 }
@@ -451,6 +461,8 @@ impl App {
                 buffers: Vec::new(),
                 last: None,
                 resized: false,
+                placing: None,
+                placed: false,
                 drawing: false,
             },
         );
@@ -493,6 +505,22 @@ impl App {
             let moved = (old.x - info.x).abs() > 0.5 || (old.y - info.y).abs() > 0.5;
             if resized && !shown.sized_here {
                 shown.size = rounded(info.width, info.height);
+            }
+            // The guest took the tile's size: the window goes back to it.
+            if let Some((w, h)) = shown.placing {
+                if (info.width - f64::from(w)).abs() <= 1.0
+                    && (info.height - f64::from(h)).abs() <= 1.0
+                {
+                    shown.placing = None;
+                    if let Some(bridge) = &self.bridge {
+                        bridge.place(Place {
+                            window: info.window,
+                            app_id: entries::app_id(&self.options.prefix, &info.app),
+                            title: info.title.clone(),
+                            tile: true,
+                        });
+                    }
+                }
             }
             // The title bar is being dragged on the guest: from here on the
             // desktop moves the window, and the guest is let go of.
@@ -790,12 +818,34 @@ impl WindowHandler for App {
         shown.configured = true;
         if let (Some(w), Some(h)) = configure.new_size {
             let size = (w.get(), h.get());
+            let first = !std::mem::replace(&mut shown.placed, true);
             if size != shown.size {
                 shown.size = size;
                 shown.resized = true;
-                shown.sized_here =
-                    configure.is_maximized() || configure.is_fullscreen() || configure.is_tiled();
-                if shown.asked != Some(size) {
+                let tiled =
+                    configure.is_tiled() && !configure.is_maximized() && !configure.is_fullscreen();
+                shown.sized_here = tiled || configure.is_maximized() || configure.is_fullscreen();
+                // A new window that is not the tile's size floats, at its
+                // own size as near as derisk lets it, while the guest is
+                // asked for the tile's; changed() tiles it again once the
+                // guest has it. Meanwhile derisk's floating size is not
+                // asked of the guest.
+                let fits = (shown.info.width - f64::from(size.0)).abs() <= 1.0
+                    && (shown.info.height - f64::from(size.1)).abs() <= 1.0;
+                if first && tiled && !fits {
+                    if let Some(bridge) = &self.bridge {
+                        shown.placing = Some(size);
+                        bridge.place(Place {
+                            window: id,
+                            app_id: entries::app_id(&self.options.prefix, &shown.info.app),
+                            title: shown.info.title.clone(),
+                            tile: false,
+                        });
+                    }
+                }
+                if shown.placing.is_some_and(|target| target != size) {
+                    // Floating while the guest resizes.
+                } else if shown.asked != Some(size) {
                     shown.asked = Some(size);
                     let (width, height) = (f64::from(size.0), f64::from(size.1));
                     self.link.send(Message::Resize(Resize {

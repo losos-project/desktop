@@ -9,6 +9,9 @@
 //! `state` by the app id this program gave it: the focused one, since menus
 //! come right after a window takes the focus. On another desktop, or with
 //! derisk not running, there is no socket and menus stay in the guest.
+//!
+//! The same socket floats a new guest window and tiles it again once the
+//! guest has resized it to its tile (`Place`, wayland.rs).
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -34,14 +37,32 @@ pub struct Register {
     pub menus: Vec<Menu>,
 }
 
+/// A window to float or tile, by derisk's own `float` and `tile` actions.
+pub struct Place {
+    /// The guest's id for the window.
+    pub window: u32,
+    pub app_id: String,
+    pub title: String,
+    pub tile: bool,
+}
+
+enum Job {
+    Menus(Register),
+    Place(Place),
+}
+
 #[derive(Clone)]
 pub struct Bridge {
-    tx: Sender<Register>,
+    tx: Sender<Job>,
 }
 
 impl Bridge {
     pub fn register(&self, register: Register) {
-        let _ = self.tx.send(register);
+        let _ = self.tx.send(Job::Menus(register));
+    }
+
+    pub fn place(&self, place: Place) {
+        let _ = self.tx.send(Job::Place(place));
     }
 }
 
@@ -54,8 +75,11 @@ fn socket() -> Option<PathBuf> {
 
 /// Connects to derisk, if it runs, and returns where to send menus.
 pub fn connect(link: Link) -> Option<Bridge> {
-    let path = socket()?;
-    let stream = UnixStream::connect(&path).ok()?;
+    connect_to(&socket()?, link)
+}
+
+fn connect_to(path: &std::path::Path, link: Link) -> Option<Bridge> {
+    let stream = UnixStream::connect(path).ok()?;
     let reader = BufReader::new(stream.try_clone().ok()?);
     let (tx, rx) = unbounded();
     let (answers_tx, answers) = unbounded();
@@ -129,45 +153,78 @@ fn find(state: &Value, app_id: &str, title: &str) -> Option<u64> {
         .and_then(|w| w["id"].as_u64())
 }
 
+/// derisk's id for the guest's `window`: the one it was found as before,
+/// or the one `state` shows for its app id and title. A window derisk has
+/// not mapped yet is not in its state; it will be within a few frames.
+fn derisk_window(
+    stream: &mut UnixStream,
+    answers: &Receiver<Value>,
+    windows: &Mutex<HashMap<u64, u32>>,
+    (window, app_id, title): (u32, &str, &str),
+) -> Result<Option<u64>, String> {
+    let known = windows
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, w)| **w == window)
+        .map(|(d, _)| *d);
+    if known.is_some() {
+        return Ok(known);
+    }
+    for _ in 0..10 {
+        let state = request(stream, answers, json!({"method": "state"}))?;
+        if let Some(found) = find(&state, app_id, title) {
+            windows.lock().unwrap().insert(found, window);
+            return Ok(Some(found));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Ok(None)
+}
+
 fn send(
     mut stream: UnixStream,
-    rx: Receiver<Register>,
+    rx: Receiver<Job>,
     answers: Receiver<Value>,
     windows: &Mutex<HashMap<u64, u32>>,
 ) {
-    while let Ok(mut register) = rx.recv() {
-        // Only the newest menus matter when several came meanwhile.
-        while let Ok(newer) = rx.try_recv() {
-            register = newer;
-        }
-        // A window derisk has not mapped yet is not in its state; it will
-        // be within a few frames.
-        let mut found = None;
-        for _ in 0..10 {
-            match request(&mut stream, &answers, json!({"method": "state"})) {
-                Ok(state) => found = find(&state, &register.app_id, &register.title),
-                Err(e) => {
-                    eprintln!("app-windows: derisk: {e}");
-                    return;
-                }
+    while let Ok(first) = rx.recv() {
+        // Only the newest menus matter when several came meanwhile; every
+        // placement goes, in order.
+        let mut jobs = vec![first];
+        jobs.extend(rx.try_iter());
+        let newest_menus = jobs.iter().rposition(|j| matches!(j, Job::Menus(_)));
+        for (i, job) in jobs.into_iter().enumerate() {
+            let (window, app_id, title) = match &job {
+                Job::Menus(_) if Some(i) != newest_menus => continue,
+                Job::Menus(r) => (r.window, r.app_id.clone(), r.title.clone()),
+                Job::Place(p) => (p.window, p.app_id.clone(), p.title.clone()),
+            };
+            let found =
+                match derisk_window(&mut stream, &answers, windows, (window, &app_id, &title)) {
+                    Ok(found) => found,
+                    Err(e) => {
+                        eprintln!("app-windows: derisk: {e}");
+                        return;
+                    }
+                };
+            let Some(derisk_window) = found else { continue };
+            let (asked, what) = match job {
+                Job::Menus(register) => (
+                    json!({"method": "register_menu", "window": derisk_window, "menus": register.menus}),
+                    "menus",
+                ),
+                Job::Place(place) => (
+                    json!({"method": "dispatch", "actions": [{
+                        "action": if place.tile { "tile" } else { "float" },
+                        "window": derisk_window,
+                    }]}),
+                    if place.tile { "tiling" } else { "floating" },
+                ),
+            };
+            if let Err(e) = request(&mut stream, &answers, asked) {
+                eprintln!("app-windows: derisk refused {app_id}'s {what}: {e}");
             }
-            if found.is_some() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-        let Some(derisk_window) = found else { continue };
-        windows
-            .lock()
-            .unwrap()
-            .insert(derisk_window, register.window);
-        let menus =
-            json!({"method": "register_menu", "window": derisk_window, "menus": register.menus});
-        if let Err(e) = request(&mut stream, &answers, menus) {
-            eprintln!(
-                "app-windows: derisk refused {}'s menus: {e}",
-                register.app_id
-            );
         }
     }
 }
@@ -222,10 +279,9 @@ mod tests {
             .unwrap();
             writeln!(out, "{}", json!({"ok": true, "result": null})).unwrap();
         });
-        std::env::set_var("DERISK_AGENT_SOCKET", &path);
         let (tx, rx) = unbounded();
         let link = Link::for_test(tx);
-        let bridge = connect(link).expect("connects to the stand-in");
+        let bridge = connect_to(&path, link).expect("connects to the stand-in");
         bridge.register(Register {
             window: 5,
             app_id: "macos.com.apple.TextEdit".into(),
@@ -245,6 +301,55 @@ mod tests {
         );
         drop(bridge);
         fake.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_window_floats_then_tiles() {
+        let dir = std::env::temp_dir().join(format!("app-windows-place-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        // derisk is asked for its state once, then to float the window and
+        // to tile it again, by the id it found.
+        let fake = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut out = stream.try_clone().unwrap();
+            let mut lines = BufReader::new(stream).lines();
+            let mut next =
+                || -> Value { serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap() };
+            assert_eq!(next()["method"], "state");
+            writeln!(out, "{}", json!({"ok": true, "result": {"windows": [
+                {"id": 4, "app_id": "macos.com.apple.calculator", "title": "Calculator", "focused": true}
+            ]}}))
+            .unwrap();
+            let mut actions = Vec::new();
+            for _ in 0..2 {
+                let dispatch = next();
+                assert_eq!(dispatch["method"], "dispatch");
+                assert_eq!(dispatch["actions"][0]["window"], 4);
+                actions.push(
+                    dispatch["actions"][0]["action"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+                writeln!(out, "{}", json!({"ok": true, "result": null})).unwrap();
+            }
+            actions
+        });
+        let (tx, _rx) = unbounded();
+        let bridge = connect_to(&path, Link::for_test(tx)).expect("connects to the stand-in");
+        for tile in [false, true] {
+            bridge.place(Place {
+                window: 7,
+                app_id: "macos.com.apple.calculator".into(),
+                title: "Calculator".into(),
+                tile,
+            });
+        }
+        assert_eq!(fake.join().unwrap(), ["float", "tile"]);
+        drop(bridge);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
