@@ -646,6 +646,47 @@ jobs:
               echo "::error::$arch SHA256SUMS was signed by ${signer:-no valid key}, not $UPDATE_SIGNING_FPR."
               exit 1
             fi
+
+            # Build the initial-install bundle after signing its manifest.
+            # Each payload is individually XZ-compressed when it is not
+            # already an XZ file; the resulting files are then bundled into
+            # one XZ-compressed tar archive. The archive carries the original
+            # signed manifest so the installer verifies restored file bytes.
+            bundle="$RUNNER_TEMP/initial-update-$arch"
+            mkdir -p "$bundle"
+            cp "$dir/SHA256SUMS" "$dir/SHA256SUMS.gpg" "$bundle/"
+            update_count=0
+            while read -r _ name; do
+              case "$name" in
+                losos-desktop_*_"$arch".efi|losos-desktop_*_usr-*.raw.xz|losos-desktop_*.linux|losos-desktop_*.initrd|losos-desktop_*.grub)
+                  if [[ "$name" == *.raw.xz ]]; then
+                    # These files are already multi-gigabyte XZ images.
+                    # Hard-link them into the bundle when possible so the
+                    # archive build does not duplicate their disk usage.
+                    if ! ln -- "$dir/$name" "$bundle/$name" 2>/dev/null; then
+                      cp -- "$dir/$name" "$bundle/$name"
+                    fi
+                  else
+                    xz -T0 -1 -c -- "$dir/$name" > "$bundle/$name.xz"
+                  fi
+                  update_count=$((update_count + 1))
+                  ;;
+              esac
+            done < "$dir/SHA256SUMS"
+            if [ "$update_count" -lt 3 ]; then
+              echo "::error::$arch initial archive only contains $update_count update payload(s)."
+              exit 1
+            fi
+            archive="$RUNNER_TEMP/initial-update-$arch.tar.xz"
+            (
+              cd "$bundle"
+              members=( * )
+              tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+                -cf - "${members[@]}" | xz -T0 -0 -c > "$archive"
+            )
+            mv "$archive" "$dir/initial-update.tar.xz"
+            rm -rf "$bundle"
+            echo "- $arch initial update archive: $(du -h "$dir/initial-update.tar.xz" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
             (
               cd "$dir"
               oras push "ghcr.io/${GITHUB_REPOSITORY,,}/images:$LOSOS_CHANNEL-$version-$arch" \
@@ -655,6 +696,8 @@ jobs:
                 --format json \
                 -- * | jq -r .reference
             ) > "refs/release-ref-$arch.txt"
+            # The OCI layer is uploaded and is not needed by the next arch.
+            rm -f "$dir/initial-update.tar.xz"
             echo "- $arch: \`$(cat "refs/release-ref-$arch.txt")\`" >> "$GITHUB_STEP_SUMMARY"
           done
 
@@ -898,7 +941,213 @@ jobs:
           printf '%s' "$GHCR_TOKEN" \
             | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           for arch in x86_64 aarch64; do
-            oras pull "$(cat "refs/release-ref-$arch.txt")" --output "pulled/$arch"
+            reference=$(cat "refs/release-ref-$arch.txt")
+            repository=${reference%:*}
+            manifest="$RUNNER_TEMP/release-manifest-$arch.json"
+            layers="$RUNNER_TEMP/release-layers-$arch.tsv"
+            oras manifest fetch "$reference" > "$manifest"
+            jq -er '.layers[] | [.digest, .annotations["org.opencontainers.image.title"]] | @tsv' \
+              "$manifest" > "$layers"
+            mkdir -p "pulled/$arch"
+            while IFS=
+          # The UKI's name is <id>_<version>_<arch>.efi on both architectures,
+          # and both were built from this commit, so they agree.
+          versions=$(sed -En 's/^[0-9a-f]+  .*_([0-9]{8}\.[0-9]{6})_(x86_64|aarch64)\.efi$/\1/p' \
+            pulled/*/SHA256SUMS | sort -u)
+          if [ "$(printf '%s\n' "$versions" | grep -c .)" != 1 ]; then
+            echo "::error::Expected one version across the architectures, found: ${versions:-none}"
+            exit 1
+          fi
+          # 20261010.175322 is tagged nightly-20261010T1753 for a nightly,
+          # weekly-20261010T1753 for a weekly, and so on.
+          tag=$LOSOS_CHANNEL-${versions:0:8}T${versions:9:4}
+          title=${TITLE:-LosOS $LOSOS_CHANNEL $versions}
+          # Each release also gets a name, an adjective and a verb that start
+          # with the same letter ("Quiet Queue"), drawn from the Oxford 3000
+          # and 5000 word lists of Oxford Learner's Dictionaries. A verb some
+          # earlier release's name already used is not drawn again; the names
+          # are read back from the titles of this repository's releases, the
+          # last word of the part after " · ". Once every verb has been used
+          # they repeat. The name is a nicety, so a dictionary that cannot be
+          # reached leaves the release without one rather than unreleased.
+          if [ -z "$TITLE" ]; then
+            if words=$(curl --silent --show-error --fail --location --retry 3 --max-time 120 \
+              https://www.oxfordlearnersdictionaries.com/wordlists/oxford3000-5000); then
+              # The page is one line; every <li> is a headword and its part
+              # of speech.
+              grep -oE '<li data-hw="[a-z]+"[^>]*>[^<]*<a [^>]*>[^<]*</a>[^<]*<span class="pos">(verb|adjective)</span>' \
+                <<<"$words" | sed -E 's|<li data-hw="([a-z]+)".*<span class="pos">([a-z]+)</span>|\2 \1|' \
+                | sort -u > words.txt
+              gh release list --repo "$GITHUB_REPOSITORY" --limit 100000 --json name --jq '.[].name' \
+                | sed -nE 's/.* · [A-Za-z]+ ([A-Za-z]+)$/\1/p' | tr '[:upper:]' '[:lower:]' | sort -u > used.txt
+              # Verbs that have an adjective of their letter.
+              awk '$1 == "adjective" { a[substr($2, 1, 1)] = 1 } $1 == "verb" && a[substr($2, 1, 1)] { print $2 }' \
+                words.txt | sort -u > verbs.txt
+              fresh=$(comm -23 verbs.txt used.txt)
+              if [ -z "$fresh" ]; then
+                echo "::warning::Every verb of the word list has named a release, so one is used again."
+                fresh=$(cat verbs.txt)
+              fi
+              verb=$(shuf -n 1 <<<"$fresh")
+              adjective=$(awk -v l="${verb:0:1}" '$1 == "adjective" && substr($2, 1, 1) == l { print $2 }' words.txt | shuf -n 1)
+              if [ -n "$verb" ] && [ -n "$adjective" ]; then
+                title="$title · ${adjective^} ${verb^}"
+              else
+                echo "::warning::The word list had no verb and adjective to name this release with."
+              fi
+            else
+              echo "::warning::The Oxford word list could not be fetched, so this release has no name."
+            fi
+          fi
+          # A title is one line, so it cannot add outputs of its own.
+          title=${title//[$'\r\n']/ }
+          {
+            echo "version=$versions"
+            echo "tag=$tag"
+            echo "title=$title"
+            echo "any=true"
+          } >> "$GITHUB_OUTPUT"
+
+      # proxy/ serves `images:<channel>-<arch>` at /updates/<channel>/<arch>/,
+      # so the tag moves only here, to the artifact the release below is made
+      # of: `nightly-<arch>` for a nightly, `weekly-<arch>` for a weekly
+      # release, and so on.
+      - name: Move the channel tags in GHCR
+        if: steps.pulled.outputs.any == 'true'
+        run: |
+          for arch in x86_64 aarch64; do
+            oras tag "$(cat "refs/release-ref-$arch.txt")" "$LOSOS_CHANNEL-$arch"
+          done
+
+      # The release carries every file of both architectures. Each
+      # architecture's SHA256SUMS goes with its signature, renamed because
+      # both are called SHA256SUMS; the signature covers the bytes, not the
+      # name. GitHub rejects an asset of 2 GiB or more, and /usr and the disk
+      # image are already past it, so such a file goes up in 2000 MiB parts
+      # named <file>.part-00 on, which `cat` joins back into the file its line
+      # of SHA256SUMS names.
+      - name: Publish the release
+        if: steps.pulled.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pulled.outputs.tag }}
+          TITLE: ${{ steps.pulled.outputs.title }}
+          VERSION: ${{ steps.pulled.outputs.version }}
+          PROXY_URL: ${{ vars.LOSOS_PROXY_URL }}
+        run: |
+          # A tag is published once. A re-run of this commit and cadence
+          # finds its release there and stops; only a draft, which an upload
+          # that died half-way leaves behind and which is not yet immutable,
+          # is replaced.
+          if draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::notice::$TAG is already published, and a release is never edited."
+              exit 0
+            fi
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+          shopt -s nullglob
+          mkdir assets
+          for arch in x86_64 aarch64; do
+            dir=pulled/$arch
+            mv "$dir/SHA256SUMS" "assets/SHA256SUMS-$arch"
+            mv "$dir/SHA256SUMS.gpg" "assets/SHA256SUMS-$arch.gpg"
+            rm -f "$dir/.version"
+            # The initial-install archive is an OCI layer for the installer,
+            # not a duplicate GitHub release asset.
+            rm -f "$dir/initial-update.tar.xz"
+            # The two architectures share no file name but these, since
+            # every other name carries its architecture or is x86_64's alone.
+            # rmdir fails the step if one ever did and was left behind.
+            mv -n -t assets "$dir"/*
+            rmdir "$dir"
+          done
+          limit=$((2 * 1024 * 1024 * 1024))
+          for file in assets/*; do
+            if [ "$(stat -c %s "$file")" -ge "$limit" ]; then
+              split --bytes=2000MiB --numeric-suffixes --suffix-length=2 "$file" "$file.part-"
+              rm "$file"
+              parts=("$file".part-*)
+              echo "Split $(basename "$file") into ${#parts[@]} parts."
+            fi
+          done
+          ls -l assets
+          if [ -n "$PROXY_URL" ]; then
+            fetched="fetch them from \`${PROXY_URL%/}/updates/$LOSOS_CHANNEL/<arch>/\`, which serves its newest release"
+          else
+            fetched="fetch them from its newest release, which the documentation site lists"
+          fi
+          cat > notes.md <<NOTES
+          Built from $GITHUB_SHA, version \`$VERSION\`, for x86_64 and aarch64.
+
+          - **Install:** write \`*-installer.iso\` to a USB stick and boot it, or run the Windows installer on a PC that keeps Windows. The ISO installs this version from this release over the network; the Windows installer installs the newest $LOSOS_CHANNEL release.
+          - **Update images:** the UKI (\`.efi\`) and the two halves of \`/usr\` (\`_usr-*.raw.xz\`) are what systemd-sysupdate installs. Systems installed from this release follow the $LOSOS_CHANNEL releases, until another cadence is picked in Settings, System, and $fetched; these are the same files, pinned to this version.
+          - **Disk image:** \`<arch>.raw.xz\`. Unpack it and write it to a disk, or convert it for a VM with \`qemu-img convert -O qcow2\`.
+          - **Files of 2 GiB or more** are split into \`.part-00\`, \`.part-01\` and on, because GitHub rejects larger assets. \`cat <file>.part-* > <file>\` joins one.
+          - **Checking:** \`SHA256SUMS-<arch>\` lists that architecture's files and \`SHA256SUMS-<arch>.gpg\` signs it with the [update signing key]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/nixos/keys/update-signing.asc). \`gpg --verify SHA256SUMS-<arch>.gpg SHA256SUMS-<arch>\`, then \`sha256sum --check --ignore-missing SHA256SUMS-<arch>\`.
+          NOTES
+          # gh creates the release as a draft, uploads every asset and only
+          # then publishes it, so an immutable release is never published
+          # with files still missing.
+          # A nightly is a prerelease, which GitHub never shows as latest.
+          # The others are full releases, and only a yearly one is the
+          # repository's latest: gh would otherwise mark every weekly and
+          # monthly latest as it came out.
+          case $LOSOS_CHANNEL in
+            nightly) kind=(--prerelease) ;;
+            yearly) kind=(--latest) ;;
+            *) kind=(--latest=false) ;;
+          esac
+          # The runner's connection to the API can drop for a moment (a
+          # nightly was lost to one "dial tcp ... i/o timeout"), and this
+          # step comes hours into the run, so a failed attempt is tried
+          # again. What it left behind decides how: a draft is deleted and
+          # started over, and a published release means only the answer was
+          # lost.
+          for attempt in 1 2 3; do
+            if gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$TITLE" "${kind[@]}" --notes-file notes.md \
+              assets/*; then
+              exit 0
+            fi
+            [ "$attempt" = 3 ] && break
+            echo "::warning::Publishing $TAG failed (attempt $attempt of 3); trying again in a minute."
+            sleep 60
+            if draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+              if [ "$draft" != true ]; then
+                echo "::notice::$TAG was published by the attempt that failed."
+                exit 0
+              fi
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          done
+          echo "::error::Publishing $TAG failed three times."
+          exit 1
+
+      # The documentation site carries each channel's newest release as the
+      # index installed systems update from (website/release-index.js), so
+      # it is built again once this one is up. A run started with the job's
+      # own token would start no workflow, but workflow_dispatch is the
+      # exception GitHub makes.
+      - name: Rebuild the site's release index
+        if: steps.pulled.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+\t' read -r digest name; do
+              case "$name" in
+                ""|"."|".."|*/*)
+                  echo "::error::Unsafe release layer name: $name"
+                  exit 1
+                  ;;
+              esac
+              # The initial archive is only for fresh installs. Exclude it
+              # here so the release publisher does not download a second
+              # multi-gigabyte copy beside both architectures' disk images.
+              [ "$name" = "initial-update.tar.xz" ] && continue
+              oras blob fetch --output "pulled/$arch/$name" "$repository@$digest"
+            done < "$layers"
           done
           # The UKI's name is <id>_<version>_<arch>.efi on both architectures,
           # and both were built from this commit, so they agree.
@@ -1003,6 +1252,9 @@ jobs:
             mv "$dir/SHA256SUMS" "assets/SHA256SUMS-$arch"
             mv "$dir/SHA256SUMS.gpg" "assets/SHA256SUMS-$arch.gpg"
             rm -f "$dir/.version"
+            # The initial-install archive is an OCI layer for the installer,
+            # not a duplicate GitHub release asset.
+            rm -f "$dir/initial-update.tar.xz"
             # The two architectures share no file name but these, since
             # every other name carries its architecture or is x86_64's alone.
             # rmdir fails the step if one ever did and was left behind.

@@ -55,13 +55,19 @@ and install" button. Then:
    with only one slot. These are `disk.nix`'s own definitions, so the disk is
    laid out the way the installed system expects to find it.
 3. The installer pulls the versioned OCI release artifact directly from
-   GHCR with `oras`, staging only the manifest, signature and files named
-   by the transfers. If that exact artifact is not published (for example,
-   for a branch build), it pulls the channel's current artifact instead.
-   The installer verifies the signed `SHA256SUMS` and every staged file
-   before `systemd-sysupdate update` writes the slots, using the same
-   transfer definitions as `update.nix`, aimed at the chosen disk instead
-   of `auto` and at the new ESP, mounted under `/run/losos-installer`. On
+   GHCR with `oras`, preferring its `initial-update.tar.xz` layer. If that
+   exact artifact is not published (for example, for a branch build), it
+   pulls the channel's current artifact instead. The archive contains the
+   signed `SHA256SUMS`, its signature and the update payloads. Payloads that
+   are not already XZ files are compressed individually before the contents
+   are bundled into the XZ archive. The installer stores the archive on an
+   ext4 scratch partition created in the target disk's free space, then
+   extracts to that same partition and unwraps each additional XZ layer
+   there, rather than using tmpfs or buffering update files in RAM. It
+   verifies the signed manifest and every resulting file before
+   `systemd-sysupdate update` writes the slots, using the same transfer
+   definitions as `update.nix`, aimed at the chosen disk instead of
+   `auto` and at the new ESP, mounted under `/run/losos-installer`. On
    x86_64, `losos-grub-bios-install` then writes GRUB into the MBR and the
    BIOS boot partition, so the disk starts on a legacy BIOS as well.
 4. The machine reboots into the installed system. Its first boot creates
@@ -80,14 +86,22 @@ The installer pulls the architecture-specific OCI artifact from GHCR with
 each version as `images:<channel>-<version>-<arch>` and moves
 `images:<channel>-<arch>` to the latest complete artifact. The installer
 prefers the ISO's exact version and falls back to the current channel artifact
-when that version is not published (as with branch builds). It selects only
-the manifest, signature and files named by its transfer definitions.
+when that version is not published (as with branch builds). The OCI artifact
+contains both the individual release layers used by the update proxy and an
+`initial-update.tar.xz` layer for a fresh installation.
 
-The artifact's manifest is `SHA256SUMS-<arch>`; the installer fetches those
-layers under the conventional names sysupdate expects, then verifies the
-signature against the bundled update key and checks each staged file's hash. sysupdate
-reads the verified files from the installer's local mirror, just as it does
-for any update. After installation, the system continues updating from its
+The initial archive carries the architecture-specific `SHA256SUMS` and
+`SHA256SUMS.gpg`, plus only the files selected by the sysupdate transfer
+definitions. Payloads are XZ-compressed individually before being bundled
+into the XZ archive; existing `.raw.xz` images retain their compression.
+The installer streams the archive listing to validate that it contains only
+the expected flat regular files, then extracts onto the target disk's scratch
+partition and decompresses in place. The archive is removed before the
+additional XZ layers are expanded, avoiding tmpfs and a second full copy in
+RAM. It verifies the original payload hashes and signed manifest before
+sysupdate writes the initial version. The scratch partition and every staged
+update file are removed when installation completes, including after an
+installation error. Subsequent updates continue to use the machine's
 configured channel.
 
 The files must be stored before sysupdate can read them: `/usr` is over 3 GiB,
