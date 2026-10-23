@@ -660,7 +660,12 @@ jobs:
               case "$name" in
                 losos-desktop_*_"$arch".efi|losos-desktop_*_usr-*.raw.xz|losos-desktop_*.linux|losos-desktop_*.initrd|losos-desktop_*.grub)
                   if [[ "$name" == *.raw.xz ]]; then
-                    cp -- "$dir/$name" "$bundle/$name"
+                    # These files are already multi-gigabyte XZ images.
+                    # Hard-link them into the bundle when possible so the
+                    # archive build does not duplicate their disk usage.
+                    if ! ln -- "$dir/$name" "$bundle/$name" 2>/dev/null; then
+                      cp -- "$dir/$name" "$bundle/$name"
+                    fi
                   else
                     xz -T0 -1 -c -- "$dir/$name" > "$bundle/$name.xz"
                   fi
@@ -680,6 +685,7 @@ jobs:
                 -cf - "${members[@]}" | xz -T0 -0 -c > "$archive"
             )
             mv "$archive" "$dir/initial-update.tar.xz"
+            rm -rf "$bundle"
             echo "- $arch initial update archive: $(du -h "$dir/initial-update.tar.xz" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
             (
               cd "$dir"
@@ -690,6 +696,8 @@ jobs:
                 --format json \
                 -- * | jq -r .reference
             ) > "refs/release-ref-$arch.txt"
+            # The OCI layer is uploaded and is not needed by the next arch.
+            rm -f "$dir/initial-update.tar.xz"
             echo "- $arch: \`$(cat "refs/release-ref-$arch.txt")\`" >> "$GITHUB_STEP_SUMMARY"
           done
 
