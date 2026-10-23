@@ -75,40 +75,29 @@ release on the channel configured in the ISO. A nightly ISO installs the
 newest nightly; a weekly ISO installs the newest weekly. The installed system
 then follows its configured channel. The medium carries no copy of the OS.
 
-sysupdate cannot read a GitHub release directly. There, each architecture's
-manifest is `SHA256SUMS-<arch>`, and a file of 2 GiB or more is split into
-`.part-NN` assets. So `losos-installer` serves the release to sysupdate from
-`127.0.0.1`. The `SHA256SUMS` and signature it serves are the
-architecture's, and a split file comes back as its parts one after the
-other. sysupdate checks the signature and every hash itself, as it does for
-the channel. The backend reads the channel's index on the documentation site, as
-[Releases](releases.md) explains, and installs the newest release with all
-files required by the ISO's transfer definitions. It does not pin installation
-to the ISO's build version; after installation, the system continues updating
-from that same configured channel.
+The installer pulls the architecture-specific OCI artifact from GHCR with
+`oras`, without a hosted proxy or GitHub release-asset downloads. CI publishes
+each version as `images:<channel>-<version>-<arch>` and moves
+`images:<channel>-<arch>` to the latest complete artifact. The installer
+prefers the ISO's exact version and falls back to the current channel artifact
+when that version is not published (as with branch builds). It selects only
+the manifest, signature and files named by its transfer definitions.
 
-The files come down with [aria2](https://aria2.github.io/) before sysupdate
-reads them, in `src/losos-installer/src/stage.rs`. aria2 fetches one file at
-a time and splits each over one connection per hardware thread, as
-`aria2c -x $(nproc)` would, up to 16, which is the most aria2 opens to one
-server. GitHub's release storage caps each connection's speed, so the image
-arrives that many times faster than over curl's single connection, which is
-how it used to come. A connection that breaks is opened again and carries on
-from the byte where it stopped. Only the manifest, its signature and the
-files the transfers name are fetched. The ISO, the disk image and the other
-architecture's files are not.
+The artifact's manifest is `SHA256SUMS-<arch>`; the installer renames it and
+its signature to the names sysupdate expects, then verifies the signature
+against the bundled update key and checks each staged file's hash. sysupdate
+reads the verified files from the installer's local mirror, just as it does
+for any update. After installation, the system continues updating from its
+configured channel.
 
-aria2 writes each connection's range into its place in the file, so a file
-is whole only once every range is in, and it cannot go to sysupdate while it
-is still arriving. It has to be stored somewhere first, and the live
-system's memory cannot hold a `/usr` of over 3 GiB on every machine. The disk
-being installed can. Until the first boot creates root, `/home` and swap,
+The files must be stored before sysupdate can read them: `/usr` is over 3 GiB,
+and the live system's memory cannot hold it on every machine. The disk being
+installed has the room. Until the first boot creates root, `/home` and swap,
 everything after the `/usr` slots is free. So repart adds an ext4 partition
-labelled `losos-download` there, the size of the files plus some room, and
-aria2 fetches into it. Once sysupdate has written the slots, the installer
-wipes and deletes the partition, so the first boot finds the free space it
-expects. Updates on the installed system still stream through curl, in
-`update-source.nix`, because its free space is not a spare partition.
+labelled `losos-download` there, sized for the selected files plus some room,
+and ORAS fetches the needed OCI layers into it. Once sysupdate has written the
+slots, the installer wipes and deletes the partition, so the first boot finds
+the free space it expects.
 
 The installed system then updates from the channel like any other. The
 repository comes from `GITHUB_REPOSITORY` in CI, as
