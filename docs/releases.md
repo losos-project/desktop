@@ -16,9 +16,16 @@ SHA256SUMS
 ```
 
 CI pushes it to GHCR with `oras`, as one OCI artifact per architecture.
-sysupdate cannot fetch from an OCI registry itself, but a deployment of
-[`proxy/`](binary-cache.md) can serve the artifact to it. The publish job then
-creates a GitHub release for that run, tagged with its cadence and version.
+Alongside the individual files, the OCI artifact carries
+`initial-update.tar.xz`: the signed manifest and only the files named by
+the sysupdate transfers, with update payloads individually XZ-compressed
+before they are bundled into the XZ archive. The installer downloads this
+single archive for the initial version and extracts to a scratch partition
+on the target disk instead of tmpfs; the archive and extracted files are
+removed after installation. sysupdate cannot fetch from an OCI registry
+itself, but a deployment of [`proxy/`](binary-cache.md) serves the
+individual file layers to installed systems. The publish job then creates a
+GitHub release for that run, tagged with its cadence and version.
 Version `20261010.175322` becomes `nightly-20261010T1753` for a nightly, which
 is marked as a [prerelease](#release-cadences). The release carries both
 architectures' files: the update images, disk images, installer ISOs and the

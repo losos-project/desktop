@@ -44,6 +44,9 @@ use crate::stage::{self, Scratch};
 /// Stands for the target disk's device node in the transfer templates.
 pub const TARGET: &str = "@TARGET@";
 
+/// The OCI layer used to install an ISO's initial version in one download.
+const INITIAL_UPDATE_ARCHIVE: &str = "initial-update.tar.xz";
+
 #[derive(Debug, Clone)]
 pub struct Plan {
     pub disk: PathBuf,
@@ -360,6 +363,9 @@ fn online_oci(
 ) -> Result<(), String> {
     let patterns = stage::source_patterns(&plan.sysupdate_templates)?;
     let wanted = stage::wanted(files, &patterns, version)?;
+    if let Some(archive) = files.get(INITIAL_UPDATE_ARCHIVE) {
+        return online_oci_archive(plan, disk, url, reference, archive, &wanted, events);
+    }
     let scratch = Scratch::create(disk, stage::scratch_size(&wanted), &plan.work, events)?;
     let installed = (|| {
         // A full `oras pull` would also download the ISO and disk image.
@@ -395,6 +401,189 @@ fn online_oci(
         (Err(e), Ok(())) => Err(e),
         (Err(e), Err(cleanup)) => Err(format!("{e}; cleanup also failed: {cleanup}")),
     }
+}
+
+/// Installs the first version from the XZ archive carried by a release's OCI
+/// artifact. The archive and all extracted files live on the target disk's
+/// scratch partition, never in tmpfs. Payloads that are already XZ files
+/// (the /usr and verity images) keep their existing compression; other update
+/// files have an individual XZ layer inside the compressed tar archive.
+fn online_oci_archive(
+    plan: &Plan,
+    disk: &str,
+    url: &str,
+    reference: &str,
+    archive: &github::File,
+    wanted: &BTreeMap<String, github::File>,
+    events: &Sender<Event>,
+) -> Result<(), String> {
+    // Peak disk use is the downloaded archive plus its expanded members.
+    // The archive is removed before individually compressed members expand.
+    let scratch_bytes = initial_archive_scratch_size(wanted, archive.size);
+    let scratch = Scratch::create(disk, scratch_bytes, &plan.work, events)?;
+    let installed = (|| {
+        let digest = archive
+            .urls
+            .first()
+            .ok_or_else(|| "GHCR initial update archive has no digest".to_owned())?;
+        let repository = reference
+            .rsplit_once(':')
+            .map(|(name, _)| name)
+            .unwrap_or(reference);
+        let blob = format!("{repository}@{digest}");
+        let archive_path = scratch.mount.join(INITIAL_UPDATE_ARCHIVE);
+        let archive_text = archive_path.to_string_lossy().into_owned();
+        command(
+            "oras",
+            &["blob", "fetch", "--output", &archive_text, &blob],
+            false,
+            events,
+        )?;
+        let actual_size = fs::metadata(&archive_path)
+            .map_err(|e| format!("{}: {e}", archive_path.display()))?
+            .len();
+        if actual_size != archive.size {
+            return Err(format!(
+                "initial update archive has {actual_size} bytes, expected {}",
+                archive.size
+            ));
+        }
+
+        // Verify that the archive contains exactly the regular-file members
+        // expected from the signed manifest and transfer names before letting
+        // tar extract anything. All members are flat file names, not paths.
+        let listing = command(
+            "bash",
+            &[
+                "-o",
+                "pipefail",
+                "-c",
+                r#"xz -dc -- "$1" | tar -tvf -"#,
+                "losos-initial-update",
+                &archive_text,
+            ],
+            true,
+            events,
+        )?;
+        let mut actual_members = Vec::new();
+        for line in listing.lines().filter(|line| !line.trim().is_empty()) {
+            let mut fields = line.split_whitespace();
+            let kind = fields.next().unwrap_or_default();
+            let member = fields.last().unwrap_or_default();
+            let path = Path::new(member);
+            if !kind.starts_with('-')
+                || path.components().count() != 1
+                || path.file_name().and_then(|name| name.to_str()) != Some(member)
+            {
+                return Err(format!("unsafe initial update archive member: {line}"));
+            }
+            actual_members.push(member.to_owned());
+        }
+        actual_members.sort();
+        if actual_members.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("initial update archive contains duplicate members".to_owned());
+        }
+        let mut expected_members = vec!["SHA256SUMS".to_owned(), "SHA256SUMS.gpg".to_owned()];
+        for name in wanted.keys() {
+            if name == "SHA256SUMS" || name == "SHA256SUMS.gpg" {
+                continue;
+            }
+            expected_members.push(if name.ends_with(".raw.xz") {
+                name.clone()
+            } else {
+                format!("{name}.xz")
+            });
+        }
+        expected_members.sort();
+        if actual_members != expected_members {
+            return Err(format!(
+                "initial update archive members differ from the transfer set (expected {}, got {})",
+                expected_members.len(),
+                actual_members.len()
+            ));
+        }
+
+        // Extract the validated archive onto the target's ext4 scratch
+        // partition. The tar stream is piped from XZ, not buffered in RAM.
+        let mount_text = scratch.mount.to_string_lossy().into_owned();
+        command(
+            "bash",
+            &[
+                "-o",
+                "pipefail",
+                "-c",
+                r#"xz -dc -- "$1" | tar -xf - -C "$2""#,
+                "losos-initial-update",
+                &archive_text,
+                &mount_text,
+            ],
+            false,
+            events,
+        )?;
+        fs::remove_file(&archive_path)
+            .map_err(|e| format!("{}: {e}", archive_path.display()))?;
+
+        // Unwrap the individually compressed files in place. /usr and verity
+        // are already named *.raw.xz, so they retain the XZ data sysupdate
+        // expects. All files remain on the scratch partition, not tmpfs.
+        for (name, file) in wanted {
+            if name == "SHA256SUMS" || name == "SHA256SUMS.gpg" {
+                continue;
+            }
+            if !name.ends_with(".raw.xz") {
+                let encoded = scratch.mount.join(format!("{name}.xz"));
+                let encoded_text = encoded.to_string_lossy().into_owned();
+                command(
+                    "xz",
+                    &["--decompress", "--", &encoded_text],
+                    false,
+                    events,
+                )?;
+            }
+            let output = scratch.mount.join(name);
+            let actual_size = fs::metadata(&output)
+                .map_err(|e| format!("{}: {e}", output.display()))?
+                .len();
+            if actual_size != file.size {
+                return Err(format!(
+                    "{name}: archive extracted {actual_size} bytes, expected {}",
+                    file.size
+                ));
+            }
+        }
+
+        // The original signed manifest hashes the restored payload names.
+        // sysupdate then writes them into the selected empty slot.
+        verify_release(&scratch.mount, Path::new(PUBRING), &plan.work, events)?;
+        render_transfers(
+            &plan.sysupdate_templates,
+            &plan.work.join("sysupdate.d"),
+            disk,
+            Source::Disk(Local {
+                url,
+                dir: &scratch.mount,
+            }),
+        )?;
+        sysupdate(plan, events)
+    })();
+    // The scratch partition (including every staged update file) is deleted
+    // on both success and error, restoring the space needed on first boot.
+    let removed = scratch.remove(disk, events);
+    match (installed, removed) {
+        (Ok(()), removed) => removed,
+        (Err(e), Ok(())) => Err(e),
+        (Err(e), Err(cleanup)) => Err(format!("{e}; cleanup also failed: {cleanup}")),
+    }
+}
+
+/// Size for the archive plus the original-size files that will be extracted
+/// beside it. Member payloads are expanded on disk only after the archive has
+/// been deleted, so a second full compressed copy is never needed.
+fn initial_archive_scratch_size(files: &BTreeMap<String, github::File>, archive_size: u64) -> u64 {
+    const MIB: u64 = 1 << 20;
+    let payload_bytes: u64 = files.values().map(|file| file.size).sum();
+    let bytes = archive_size.saturating_add(payload_bytes);
+    (bytes + bytes / 8 + 256 * MIB).div_ceil(MIB) * MIB
 }
 
 /// The channel's newest release: fetched with aria2 from the assets the

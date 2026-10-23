@@ -59,6 +59,10 @@ let
         pkgs.aria2
         # Pull the release OCI artifact directly from GHCR, without a proxy.
         pkgs.oras
+        # Unpack the XZ update archive directly on the target disk.
+        pkgs.xz
+        pkgs.gnutar
+        pkgs.bash
         pkgs.e2fsprogs
       ]
     }:$PATH
