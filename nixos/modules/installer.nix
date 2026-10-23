@@ -5,9 +5,8 @@
 # command line said `losos.install`, copying its own /usr onto the target with
 # CopyBlocks=. That medium was the whole desktop, and it installed whatever
 # version the stick happened to be written with. It is not coming back:
-# installing is now an update into an empty slot, downloaded from the GitHub
-# release of the version the ISO was built as (the channel's newest where
-# there is none), and the medium carries no copy of the OS.
+# installing is now an update into an empty slot, downloaded from the ISO's
+# configured update channel, and the medium carries no copy of the OS.
 #
 # This module is the OS's half, the half that decides what is written. The
 # repart definitions are disk.nix's own ESP and /usr slots, and the transfers are
@@ -144,7 +143,9 @@ let
       # Where the backend reads which assets make up the channel's files,
       # when baseUrl is losos-update-source's address (update-source.nix).
       updateIndex = config.services.losos-update-source.defaultIndex;
-      releaseRepo = cfg.release.repository;
+      # Do not pass a pinned release: the installer always installs the
+      # channel's newest complete release, regardless of the ISO's build tag.
+      releaseRepo = null;
       docsUrl = cfg.docs.url;
       inherit esp repartDefinitions sysupdateTemplates;
       # Run on the disk once it is installed, so a legacy BIOS PC starts it
