@@ -57,6 +57,8 @@ let
         # which repart formats with mkfs.ext4 (src/losos-installer's
         # stage.rs).
         pkgs.aria2
+        # Pull the release OCI artifact directly from GHCR, without a proxy.
+        pkgs.oras
         pkgs.e2fsprogs
       ]
     }:$PATH
