@@ -256,7 +256,7 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
             };
             let files = oci_files(&manifest, &release.arch)?;
             let _ = events.send(Event::Line(format!("Installing directly from GHCR artifact {reference}")));
-            online_oci(plan, disk, url, &reference, &release.arch, &files, version, events)?;
+            online_oci(plan, disk, url, &reference, &files, version, events)?;
         }
         (Some(url), _, None) => channel(plan, disk, url, events)?,
         _ => {
@@ -354,7 +354,6 @@ fn online_oci(
     disk: &str,
     url: &str,
     reference: &str,
-    _arch: &str,
     files: &BTreeMap<String, github::File>,
     version: Option<&str>,
     events: &Sender<Event>,
