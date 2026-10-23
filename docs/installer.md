@@ -83,9 +83,9 @@ prefers the ISO's exact version and falls back to the current channel artifact
 when that version is not published (as with branch builds). It selects only
 the manifest, signature and files named by its transfer definitions.
 
-The artifact's manifest is `SHA256SUMS-<arch>`; the installer renames it and
-its signature to the names sysupdate expects, then verifies the signature
-against the bundled update key and checks each staged file's hash. sysupdate
+The artifact's manifest is `SHA256SUMS-<arch>`; the installer fetches those
+layers under the conventional names sysupdate expects, then verifies the
+signature against the bundled update key and checks each staged file's hash. sysupdate
 reads the verified files from the installer's local mirror, just as it does
 for any update. After installation, the system continues updating from its
 configured channel.
