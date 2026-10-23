@@ -333,9 +333,12 @@ fn oci_files(
         files.insert(
             logical_name.to_owned(),
             github::File {
-                // Keep the OCI layer's actual name; the manifest is renamed
-                // to sysupdate's conventional name after ORAS pulls it.
-                urls: vec![name.to_owned()],
+                // Store the OCI digest here; online_oci fetches each selected
+                // layer directly, writing it under its sysupdate file name.
+                urls: vec![layer["digest"]
+                    .as_str()
+                    .ok_or_else(|| format!("GHCR image layer {name} has no digest"))?
+                    .to_owned()],
                 size,
             },
         );
@@ -351,7 +354,7 @@ fn online_oci(
     disk: &str,
     url: &str,
     reference: &str,
-    arch: &str,
+    _arch: &str,
     files: &BTreeMap<String, github::File>,
     version: Option<&str>,
     events: &Sender<Event>,
@@ -360,30 +363,20 @@ fn online_oci(
     let wanted = stage::wanted(files, &patterns, version)?;
     let scratch = Scratch::create(disk, stage::scratch_size(&wanted), &plan.work, events)?;
     let installed = (|| {
-        let output = scratch.mount.to_string_lossy().into_owned();
-        let mut args = vec![
-            "pull".to_owned(),
-            reference.to_owned(),
-            "--output".to_owned(),
-            output,
-        ];
-        for file in wanted.values() {
-            for name in &file.urls {
-                args.push("--include".to_owned());
-                args.push(name.clone());
-            }
-        }
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        command("oras", &refs, false, events)?;
-        let source = scratch.mount.join(format!("SHA256SUMS-{arch}"));
-        if source.exists() {
-            fs::rename(&source, scratch.mount.join("SHA256SUMS"))
-                .map_err(|e| format!("{}: {e}", source.display()))?;
-        }
-        let signature = scratch.mount.join(format!("SHA256SUMS-{arch}.gpg"));
-        if signature.exists() {
-            fs::rename(&signature, scratch.mount.join("SHA256SUMS.gpg"))
-                .map_err(|e| format!("{}: {e}", signature.display()))?;
+        // A full `oras pull` would also download the ISO and disk image.
+        // Fetch only the selected layer digests into their logical file names.
+        let repository = reference
+            .rsplit_once(':')
+            .map(|(name, _)| name)
+            .unwrap_or(reference);
+        for (name, file) in &wanted {
+            let digest = file
+                .urls
+                .first()
+                .ok_or_else(|| format!("GHCR image layer {name} has no digest"))?;
+            let output = scratch.mount.join(name).to_string_lossy().into_owned();
+            let blob = format!("{repository}@{digest}");
+            command("oras", &["blob", "fetch", "--output", &output, &blob], false, events)?;
         }
         verify_release(&scratch.mount, Path::new(PUBRING), &plan.work, events)?;
         render_transfers(
