@@ -256,7 +256,7 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
             };
             let files = oci_files(&manifest, &release.arch)?;
             let _ = events.send(Event::Line(format!("Installing directly from GHCR artifact {reference}")));
-            online_oci(plan, disk, url, &reference, &files, version, events)?;
+            online_oci(plan, disk, url, &reference, &release.arch, &files, version, events)?;
         }
         (Some(url), _, None) => channel(plan, disk, url, events)?,
         _ => {
@@ -304,7 +304,10 @@ fn oci_manifest(reference: &str, events: &Sender<Event>) -> Result<serde_json::V
 
 /// Files in the release artifact, keyed by their original file names. ORAS
 /// records each pushed file's name in the standard OCI title annotation.
-fn oci_files(manifest: &serde_json::Value, arch: &str) -> Result<BTreeMap<String, github::File>, String> {
+fn oci_files(
+    manifest: &serde_json::Value,
+    arch: &str,
+) -> Result<BTreeMap<String, github::File>, String> {
     let layers = manifest["layers"]
         .as_array()
         .ok_or_else(|| "GHCR image manifest has no layers".to_owned())?;
@@ -348,6 +351,7 @@ fn online_oci(
     disk: &str,
     url: &str,
     reference: &str,
+    arch: &str,
     files: &BTreeMap<String, github::File>,
     version: Option<&str>,
     events: &Sender<Event>,
@@ -371,16 +375,11 @@ fn online_oci(
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         command("oras", &refs, false, events)?;
-        for (from, to) in [
-            (format!("SHA256SUMS-{}", reference.rsplit('-').next().unwrap_or_default()), "SHA256SUMS"),
-        ] {
-            let source = scratch.mount.join(&from);
-            if source.exists() {
-                fs::rename(&source, scratch.mount.join(to))
-                    .map_err(|e| format!("{}: {e}", source.display()))?;
-            }
+        let source = scratch.mount.join(format!("SHA256SUMS-{arch}"));
+        if source.exists() {
+            fs::rename(&source, scratch.mount.join("SHA256SUMS"))
+                .map_err(|e| format!("{}: {e}", source.display()))?;
         }
-        let arch = reference.rsplit('-').next().unwrap_or_default();
         let signature = scratch.mount.join(format!("SHA256SUMS-{arch}.gpg"));
         if signature.exists() {
             fs::rename(&signature, scratch.mount.join("SHA256SUMS.gpg"))
