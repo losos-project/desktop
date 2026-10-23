@@ -33,10 +33,13 @@ as a channel, so an image reads the release through its own service that
 joins the parts as it streams them, described
 [below](#updating-from-github-releases).
 
-The installer ISO a release carries installs from that same release. Its
-backend fetches the release's files with aria2 onto the disk being installed
-and serves them to sysupdate under the names a channel uses, joining split
-files. [The installer](installer.md) has the details.
+The installer ISO pulls the versioned OCI release artifact directly from GHCR
+with `oras`, falling back to the channel's moving OCI tag for branch builds.
+It stages only the manifest, signature and files its transfers need, verifies
+them, and gives them to sysupdate locally. It does not need GitHub release
+asset downloads or a hosted proxy to install. [The installer](installer.md)
+has the details. GitHub releases remain available for people downloading
+artifacts manually and for the web flasher.
 
 > [!NOTE]
 > A release is created once and never edited, so the repository can make

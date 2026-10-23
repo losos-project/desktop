@@ -10,13 +10,13 @@
 //! the UKI on the ESP. Everything else -- root, /home, swap -- is made by the
 //! installed system's first boot, as it is for an image written with dd.
 //!
-//! Online, the transfers read the GitHub release of the version the ISO was
-//! built as, served to sysupdate from this machine by [`crate::github`], so
-//! what is installed is that tag's release. Where no such release can be
-//! found, such as an ISO built from a branch, they read the channel itself,
-//! whose newest release is then what is installed. Either way aria2 fetches
-//! the files onto the target disk first, over as many connections as the
-//! machine has hardware threads ([`crate::stage`]).
+//! Online, the installer pulls the release artifact for the ISO's version
+//! directly from GHCR with oras. The artifact carries the signed manifest and
+//! its files; the installer verifies them and lets sysupdate read the selected
+//! files from a scratch partition on the target disk. If the ISO's version
+//! has no artifact (for example, a branch build), it pulls the channel's
+//! current artifact instead. No hosted proxy or GitHub release-asset download
+//! is needed.
 //!
 //! With a release disk attached, the same transfers read from it instead: their sources become local files, and the files are checked
 //! against the release's signed SHA256SUMS here first, since sysupdate only
@@ -225,28 +225,38 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
             sysupdate(plan, events)?;
         }
         (Some(url), _, Some(release)) => {
-            match github::find(
-                &release.repo,
-                &release.channel,
-                &release.version,
-                &release.arch,
-                events,
-            ) {
-                Ok(found) => {
+            let image = format!(
+                "ghcr.io/{}/images:{}-{}-{}",
+                release.repo, release.channel, release.version, release.arch
+            );
+            let current = format!(
+                "ghcr.io/{}/images:{}-{}",
+                release.repo, release.channel, release.arch
+            );
+            let exact = github::release_tag(&release.channel, &release.version)
+                .map(|_| image.as_str());
+            let (reference, manifest, version) = match exact {
+                Some(reference) => match oci_manifest(reference, events) {
+                    Ok(manifest) => (reference.to_owned(), manifest, Some(release.version.as_str())),
+                    Err(e) => {
+                        let _ = events.send(Event::Line(format!(
+                            "No GHCR image for this ISO version ({e}); trying the current {} image",
+                            release.channel
+                        )));
+                        (current.clone(), oci_manifest(&current, events)?, None)
+                    }
+                },
+                None => {
                     let _ = events.send(Event::Line(format!(
-                        "Installing {} from the GitHub release {} of {}",
-                        release.version, found.tag, release.repo
+                        "{} is not a published release version; pulling the current {} image",
+                        release.version, release.channel
                     )));
-                    let files = github::files(&found, &release.arch);
-                    online(plan, disk, url, &files, Some(&release.version), events)?;
+                    (current.clone(), oci_manifest(&current, events)?, None)
                 }
-                Err(e) => {
-                    let _ = events.send(Event::Line(format!(
-                        "{e}, so the channel's newest release is installed from {url}"
-                    )));
-                    channel(plan, disk, url, events)?;
-                }
-            }
+            };
+            let files = oci_files(&manifest, &release.arch)?;
+            let _ = events.send(Event::Line(format!("Installing directly from GHCR artifact {reference}")));
+            online_oci(plan, disk, url, &reference, &files, version, events)?;
         }
         (Some(url), _, None) => channel(plan, disk, url, events)?,
         _ => {
@@ -283,6 +293,108 @@ fn sysupdate(plan: &Plan, events: &Sender<Event>) -> Result<(), String> {
         events,
     )
     .map(|_| ())
+}
+
+/// Fetches an OCI image manifest from GHCR. The artifact is public, so
+/// oras can pull it without a token.
+fn oci_manifest(reference: &str, events: &Sender<Event>) -> Result<serde_json::Value, String> {
+    let text = command("oras", &["manifest", "fetch", reference], true, events)?;
+    serde_json::from_str(&text).map_err(|e| format!("{reference}: invalid OCI manifest: {e}"))
+}
+
+/// Files in the release artifact, keyed by their original file names. ORAS
+/// records each pushed file's name in the standard OCI title annotation.
+fn oci_files(
+    manifest: &serde_json::Value,
+    arch: &str,
+) -> Result<BTreeMap<String, github::File>, String> {
+    let layers = manifest["layers"]
+        .as_array()
+        .ok_or_else(|| "GHCR image manifest has no layers".to_owned())?;
+    let mut files = BTreeMap::new();
+    for layer in layers {
+        let name = layer["annotations"]["org.opencontainers.image.title"]
+            .as_str()
+            .ok_or_else(|| "GHCR image layer has no file-name annotation".to_owned())?;
+        let path = Path::new(name);
+        if path.components().count() != 1 || name == "." || name == ".." {
+            return Err(format!("GHCR image contains an unsafe file name: {name}"));
+        }
+        let size = layer["size"]
+            .as_u64()
+            .ok_or_else(|| format!("GHCR image layer {name} has no size"))?;
+        let logical_name = if name == format!("SHA256SUMS-{arch}") {
+            "SHA256SUMS"
+        } else if name == format!("SHA256SUMS-{arch}.gpg") {
+            "SHA256SUMS.gpg"
+        } else {
+            name
+        };
+        files.insert(
+            logical_name.to_owned(),
+            github::File {
+                // Store the OCI digest here; online_oci fetches each selected
+                // layer directly, writing it under its sysupdate file name.
+                urls: vec![layer["digest"]
+                    .as_str()
+                    .ok_or_else(|| format!("GHCR image layer {name} has no digest"))?
+                    .to_owned()],
+                size,
+            },
+        );
+    }
+    Ok(files)
+}
+
+/// Pull only the files sysupdate needs from an OCI release artifact. The
+/// selected layers are staged on the target disk, verified against the
+/// release's signed SHA256SUMS, and served to sysupdate as local files.
+fn online_oci(
+    plan: &Plan,
+    disk: &str,
+    url: &str,
+    reference: &str,
+    files: &BTreeMap<String, github::File>,
+    version: Option<&str>,
+    events: &Sender<Event>,
+) -> Result<(), String> {
+    let patterns = stage::source_patterns(&plan.sysupdate_templates)?;
+    let wanted = stage::wanted(files, &patterns, version)?;
+    let scratch = Scratch::create(disk, stage::scratch_size(&wanted), &plan.work, events)?;
+    let installed = (|| {
+        // A full `oras pull` would also download the ISO and disk image.
+        // Fetch only the selected layer digests into their logical file names.
+        let repository = reference
+            .rsplit_once(':')
+            .map(|(name, _)| name)
+            .unwrap_or(reference);
+        for (name, file) in &wanted {
+            let digest = file
+                .urls
+                .first()
+                .ok_or_else(|| format!("GHCR image layer {name} has no digest"))?;
+            let output = scratch.mount.join(name).to_string_lossy().into_owned();
+            let blob = format!("{repository}@{digest}");
+            command("oras", &["blob", "fetch", "--output", &output, &blob], false, events)?;
+        }
+        verify_release(&scratch.mount, Path::new(PUBRING), &plan.work, events)?;
+        render_transfers(
+            &plan.sysupdate_templates,
+            &plan.work.join("sysupdate.d"),
+            disk,
+            Source::Disk(Local {
+                url,
+                dir: &scratch.mount,
+            }),
+        )?;
+        sysupdate(plan, events)
+    })();
+    let removed = scratch.remove(disk, events);
+    match (installed, removed) {
+        (Ok(()), removed) => removed,
+        (Err(e), Ok(())) => Err(e),
+        (Err(e), Err(cleanup)) => Err(format!("{e}; cleanup also failed: {cleanup}")),
+    }
 }
 
 /// The channel's newest release: fetched with aria2 from the assets the
