@@ -67,12 +67,10 @@ and install" button. Then:
 
 ![derisk installer talks JSON lines to losos-installer serve, which runs systemd-repart, then systemd-sysupdate from the channel or a LOSOS-RELEASE disk, then reboots; the disk ends with the ESP, BIOS boot and slot A written, slot B laid out empty, and root, home and swap left to the first boot](images/installer.svg)
 
-So an install is an update into an empty slot, from the
-[release](releases.md) the ISO came with. An ISO from
-`nightly-20261010T2127` installs that nightly. One from
-`weekly-20261012T0300` installs that weekly release, and the installed
-system then follows the weekly releases. The medium carries no copy of the
-OS.
+So an install is an update into an empty slot, from the newest complete
+release on the channel configured in the ISO. A nightly ISO installs the
+newest nightly; a weekly ISO installs the newest weekly. The installed system
+then follows its configured channel. The medium carries no copy of the OS.
 
 sysupdate cannot read a GitHub release directly. There, each architecture's
 manifest is `SHA256SUMS-<arch>`, and a file of 2 GiB or more is split into
@@ -80,12 +78,11 @@ manifest is `SHA256SUMS-<arch>`, and a file of 2 GiB or more is split into
 `127.0.0.1`. The `SHA256SUMS` and signature it serves are the
 architecture's, and a split file comes back as its parts one after the
 other. sysupdate checks the signature and every hash itself, as it does for
-the channel. The backend asks GitHub's API for the release by its tag, which
-it makes from the cadence and version the ISO was built as. When there is no
-such release, as for an ISO built from a branch or a local build, the install
-reads the channel and gets its newest release instead. When the OS updates
-from GitHub Releases, it reads the channel through the channel's index on the
-documentation site, as [Releases](releases.md) explains.
+the channel. The backend reads the channel's index on the documentation site, as
+[Releases](releases.md) explains, and installs the newest release with all
+files required by the ISO's transfer definitions. It does not pin installation
+to the ISO's build version; after installation, the system continues updating
+from that same configured channel.
 
 The files come down with [aria2](https://aria2.github.io/) before sysupdate
 reads them, in `src/losos-installer/src/stage.rs`. aria2 fetches one file at
