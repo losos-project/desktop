@@ -12,6 +12,10 @@ fetches. It serves four things from this project's GHCR namespace:
   a signed path through it against a fake registry. The automated tests in
   `proxy/test/` run the handler against a fake fetch that answers like the
   registry, with no Nix involved.
+  The OCI artifacts do not require a hosted proxy to consume: a client with
+  `oras` can pull an individual path directly from GHCR by its store hash,
+  and serve the resulting signed narinfo/NAR locally. LosOS's installer uses
+  this path, so cache substitution works without deploying `proxy/` to Vercel.
 - **Build caches.** `/build-cache/<name>/<arch>/<part>` redirects to one
   part of a compiler cache that CI keeps in GHCR. The one cache, `losos`, is
   for the overlay's patched GTK and Qt and lives at `losos-ccache:<arch>`.
@@ -62,10 +66,13 @@ trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDS
 
 Five things are set up once, outside the repository:
 
-1. **Vercel.** Make a project with root directory `proxy/` and the
-   environment variable `GHCR_REPOSITORY=dasmatus/losos-desktop`.
-   `vercel.json` has the rest. Its build installs a pinned Rust with rustup
-   when Rust is missing, and adds the WebAssembly target when it is there.
+1. **Vercel (optional for the binary cache).** A deployment with root
+   directory `proxy/` and `GHCR_REPOSITORY=dasmatus/losos-desktop` hosts the
+   proxy's update, flasher, ping and shared-cache HTTP routes. Direct Nix cache
+   consumers can pull `nix-cache:<store hash>` from GHCR with `oras` and do
+   not need this deployment for cache substitution. `vercel.json` has the
+   rest. Its build installs a pinned Rust with rustup when Rust is missing,
+   and adds the WebAssembly target when it is there.
 2. **GHCR.** Make the `losos-desktop/nix-cache`, `losos-desktop/images` and
    `losos-desktop/losos-ccache` packages public once CI has created them.
    Or put a read-only token in Vercel as `GHCR_TOKEN`, with its owner's
@@ -74,13 +81,15 @@ Five things are set up once, outside the repository:
    losos-desktop-1` and store the result as the secret
    `NIX_CACHE_SIGNING_KEY`. Store its public half, from `nix key
    convert-secret-to-public`, as the variable `NIX_CACHE_PUBLIC_KEY`.
-4. **`LOSOS_PROXY_URL`**, the deployment's URL without a trailing slash, as a
-   repository variable. CI requires it, both for Nix cache substitutions and
-   as the base of each image's update URL. Flake evaluation reads this
-   environment variable, so CI passes `--impure` when it builds, checks and
-   collects the release. CI uploads its signed cache paths to GHCR whenever
-   `NIX_CACHE_SIGNING_KEY` is set, even when a non-CI build leaves this URL
-   unset, and the proxy can serve them once it is configured.
+4. **`LOSOS_PROXY_URL` (optional).** Set the deployment URL without a
+   trailing slash when images should fetch updates from the hosted proxy.
+   It is not required to publish or consume Nix cache artifacts: CI reads the
+   GHCR cache through `proxy/serve.ts` on its own runner, and appliances can
+   pull store-path artifacts directly with `oras`. Flake evaluation reads
+   this variable for the optional update URL, so CI passes `--impure` when
+   it builds, checks and collects the release. CI uploads signed cache paths
+   to GHCR whenever `NIX_CACHE_SIGNING_KEY` is set, whether or not this URL
+   is configured.
 5. **The update signing key**, which every image trusts and every release
    is signed with. Make it on a machine you trust, with no passphrase,
    because CI signs unattended:
