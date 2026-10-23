@@ -54,11 +54,14 @@ and install" button. Then:
    `/usr` slots at full size, labelled `_empty`. sysupdate refuses a disk
    with only one slot. These are `disk.nix`'s own definitions, so the disk is
    laid out the way the installed system expects to find it.
-3. `systemd-sysupdate update` fills the slots with the GitHub release of the
-   version the ISO was built as. It uses the same transfers as `update.nix`,
-   aimed at the chosen disk instead of `auto` and at the new ESP, mounted
-   under `/run/losos-installer`. With `losos.update.pubring` set, the
-   installer checks `SHA256SUMS.gpg` against it, as an update does. On
+3. The installer pulls the versioned OCI release artifact directly from
+   GHCR with `oras`, staging only the manifest, signature and files named
+   by the transfers. If that exact artifact is not published (for example,
+   for a branch build), it pulls the channel's current artifact instead.
+   The installer verifies the signed `SHA256SUMS` and every staged file
+   before `systemd-sysupdate update` writes the slots, using the same
+   transfer definitions as `update.nix`, aimed at the chosen disk instead
+   of `auto` and at the new ESP, mounted under `/run/losos-installer`. On
    x86_64, `losos-grub-bios-install` then writes GRUB into the MBR and the
    BIOS boot partition, so the disk starts on a legacy BIOS as well.
 4. The machine reboots into the installed system. Its first boot creates
