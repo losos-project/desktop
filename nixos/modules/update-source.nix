@@ -139,8 +139,23 @@ let
         "" | *[!0-9]*) answer "502 Bad Gateway" ;;
       esac
 
+      if [ "$method" = HEAD ]; then
+        printf 'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$size"
+        exit 0
+      fi
+
+      # Do not promise a complete response until every asset is reachable.
+      # Otherwise an unavailable release asset makes curl exit after we've
+      # sent 200, leaving sysupdate with a truncated body (reported as a
+      # connection reset instead of a useful HTTP error).
+      # HEAD follows GitHub's redirect without downloading the potentially
+      # multi-GiB asset. If any part is unavailable, answer before streaming.
+      for url in $urls; do
+        curl --silent --show-error --fail --head --location --proto '=https' \
+          --retry 3 --max-time 60 "$url" >/dev/null || answer "502 Bad Gateway"
+      done
+
       printf 'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$size"
-      [ "$method" = HEAD ] && exit 0
 
       # A connection that breaks off is picked up where it stopped, from the
       # github.com URL again, which redirects to a fresh signed address. A
