@@ -140,7 +140,7 @@ let
       esac
 
       if [ "$method" = HEAD ]; then
-      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$size"
+        printf 'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$size"
         exit 0
       fi
 
@@ -151,7 +151,8 @@ let
       # HEAD follows GitHub's redirect without downloading the potentially
       # multi-GiB asset. If any part is unavailable, answer before streaming.
       for url in $urls; do
-        curl --silent --show-error --fail --head --location --proto '=https' --retry 3 --max-time 60 "$url" >/dev/null || answer "502 Bad Gateway"
+        curl --silent --show-error --fail --head --location --proto '=https' \
+          --retry 3 --max-time 60 "$url" >/dev/null || answer "502 Bad Gateway"
       done
 
       printf 'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$size"
