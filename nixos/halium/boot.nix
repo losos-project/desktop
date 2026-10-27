@@ -58,8 +58,6 @@ in
       loader.grub.enable = false;
 
       initrd = {
-        systemd.enable = true;
-
         # NixOS's initrd modules are for a kernel this system does not boot.
         # The ones a device needs to reach its storage are in vendor_boot's
         # ramdisk, which the bootloader unpacks in front of this one.

@@ -106,7 +106,6 @@ in
     # its own image; NixOS's GRUB module, which installs one on a disk and
     # writes its menu there, has no disk here to do that on.
     loader.grub.enable = false;
-    initrd.systemd.enable = true;
     # How quiet the boot is, so nothing writes over the splash before the
     # installer takes the screen, is splash.nix's, as on the installed
     # system.
