@@ -29,7 +29,12 @@ picture leaves the guest as soon as it is drawn. A window whose contents do
 not change sends nothing.
 
 Menus, tooltips and panels that macOS draws as windows of their own are
-sent as popups of the app's focused window, with their offset from it. The
+sent as popups of the app's focused window, with their offset from it. So
+is a sheet, such as a save dialog or Game Center's sign-in, which hangs
+from its window's title bar: an untitled window centred inside one of its
+app's windows. Popups and sheets are cut from macOS's screen with nothing
+else in the picture, because ScreenCaptureKit's capture of one window alone
+gives a sheet's window as well, squeezed into the sheet's size. The
 Dock, the menu bar and the other parts of macOS's own screen are left out.
 
 Input comes back as positions in a window and Linux key codes, and the

@@ -118,6 +118,29 @@ struct Listed {
     title: String,
 }
 
+/// The window a sheet hangs from, if `w` is one: an untitled window of the
+/// same app wholly inside the frontmost of that app's windows behind it, and
+/// centred across it. macOS centres every sheet on its window this way; a
+/// document window that happens to lie inside another has a title, and one
+/// without is rarely centred to the point.
+fn sheet_of(w: &Listed, behind: &[Listed]) -> Option<u32> {
+    if !w.title.is_empty() {
+        return None;
+    }
+    let under = behind.iter().find(|o| {
+        o.pid == w.pid
+            && kind_for_layer(o.layer) == Some(WindowKind::Normal)
+            && o.width >= SMALLEST.0
+            && o.height >= SMALLEST.1
+    })?;
+    let inside = w.x >= under.x
+        && w.y >= under.y
+        && w.x + w.width <= under.x + under.width
+        && w.y + w.height <= under.y + under.height;
+    let centred = ((w.x + w.width / 2.0) - (under.x + under.width / 2.0)).abs() <= 1.0;
+    (inside && centred && (w.width, w.height) != (under.width, under.height)).then_some(under.id)
+}
+
 /// Whether the window server's layer is one of an app's own windows
 /// (normal, floating, panels, utility windows) or what pops up over them
 /// (menus, tooltips), as opposed to the Dock, menu bar and screen savers.
@@ -359,10 +382,17 @@ pub fn track(hub: &Arc<Hub>) {
                     }
                 }
             };
-            let kind = if kind == WindowKind::Popup && parent.is_none() {
-                WindowKind::Normal
-            } else {
-                kind
+            // A sheet hangs from its window's title bar and is shown over
+            // it the way a popup is. A window-alone capture of a sheet is of
+            // the window it hangs from as well, squeezed into the sheet's
+            // size, so a sheet is cut from the display as a popup is.
+            let (kind, parent) = match (kind, parent) {
+                (WindowKind::Popup, None) => (WindowKind::Normal, None),
+                (WindowKind::Normal, _) => match sheet_of(w, &listed[i + 1..]) {
+                    Some(id) => (WindowKind::Popup, Some(id)),
+                    None => (WindowKind::Normal, None),
+                },
+                other => other,
             };
             current.insert(
                 w.id,
@@ -1190,3 +1220,51 @@ fn annex_b(sample: &CMSampleBuffer) -> Option<(Vec<u8>, bool)> {
 
 #[allow(dead_code)]
 fn unused(_: DispatchRetained<DispatchQueue>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(
+        id: u32,
+        pid: i32,
+        (x, y, width, height): (f64, f64, f64, f64),
+        title: &str,
+    ) -> Listed {
+        Listed {
+            id,
+            pid,
+            layer: 0,
+            x,
+            y,
+            width,
+            height,
+            title: title.into(),
+        }
+    }
+
+    #[test]
+    fn a_sheet_hangs_from_the_window_behind_it() {
+        // Chess's Game Center sheet over its board, as macOS 15 lists them.
+        let chess = window(40, 7, (0.0, 25.0, 872.0, 682.0), "Game 1");
+        let sheet = window(51, 7, (187.0, 225.0, 498.0, 220.0), "");
+        assert_eq!(sheet_of(&sheet, &[chess]), Some(40));
+    }
+
+    #[test]
+    fn other_windows_are_not_sheets() {
+        let big = || window(1, 7, (0.0, 0.0, 800.0, 600.0), "Untitled");
+        // A titled document window inside another.
+        let titled = window(2, 7, (250.0, 100.0, 300.0, 200.0), "Untitled 2");
+        assert_eq!(sheet_of(&titled, &[big()]), None);
+        // One off centre.
+        let aside = window(3, 7, (10.0, 100.0, 300.0, 200.0), "");
+        assert_eq!(sheet_of(&aside, &[big()]), None);
+        // Another app's window behind.
+        let other = window(4, 8, (250.0, 100.0, 300.0, 200.0), "");
+        assert_eq!(sheet_of(&other, &[big()]), None);
+        // Sticking out of the window behind.
+        let wide = window(5, 7, (-100.0, 100.0, 1000.0, 200.0), "");
+        assert_eq!(sheet_of(&wide, &[big()]), None);
+    }
+}
