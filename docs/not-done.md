@@ -220,12 +220,6 @@
   though, is found by its partition label, `losos-swap`, in `disk.nix` and
   `hibernate.nix`. With two LosOS disks in one machine, swap may come from the
   other disk.
-- **A recovery shell on an aarch64 PC.** The boot menu's root shell for a
-  machine nobody can administer, described in [When something goes
-  wrong](troubleshooting.md#no-one-can-administer-the-machine), starts the
-  kernel kept beside the UKI for a BIOS boot. Only x86_64 images carry that
-  kernel. An aarch64 PC's GRUB can only chainload its UKI, and a UKI takes
-  kernel arguments only as a replacement for its whole command line.
 - **sysext.** Extensions merge into `/usr`, which here holds little but the
   Nix store, so an extension can add a program but cannot replace one.
 - **Android app support.** [Android app support](android-apps.md) boots

@@ -8,6 +8,7 @@
     ./base.nix
     ./boot.nix
     ./grub.nix
+    ./uki-files.nix
     ./bios.nix
     ./splash.nix
     ./boot-sound.nix
