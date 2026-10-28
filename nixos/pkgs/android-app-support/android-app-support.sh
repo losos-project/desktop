@@ -375,9 +375,26 @@ wait_booted() {
     fi
     register
     booted && return 0
+    reauthorize
     sleep 2
   done
   return 1
+}
+
+# Asks adb's server to sign in to the Pixel again when it still says
+# "device unauthorized" twenty seconds after the last try. register reaches
+# adbd as soon as it listens, which on a first boot can be before Android
+# has copied the key the emulator gave it into adbd's list; adbd then
+# refuses the key, the server waits for someone to accept it on the
+# phone's screen, and every command said "unauthorized" until the setup
+# gave up half an hour later. A new connection signs in again with the key
+# now in place. reconnect drops the server's connection, and the next
+# register makes a new one.
+reauthorize() {
+  [ "$(adb devices 2> /dev/null | awk -v s="$serial" '$1 == s { print $2 }')" = unauthorized ] || return 0
+  [ $((SECONDS - ${reauthorized:-0})) -ge 20 ] || return 0
+  reauthorized=$SECONDS
+  adb -s "$serial" reconnect > /dev/null 2>&1 || true
 }
 
 cmd_start() {
@@ -407,12 +424,25 @@ cmd_stop() {
 # One at a time: the setup, an install and the watcher below each list the
 # apps, and two at once wrote over each other's files, here and on the
 # Pixel.
+#
+# Up to three times: adbd on the Pixel restarts once more after a first
+# boot says it has finished, and adb's server then forgets the Pixel (it
+# hears of an emulator only from register), so a listing begun just before
+# lost the Pixel halfway with "device offline" or "not found" and failed
+# the setup. wait_booted tells the server about the Pixel again.
+# The listing runs in the background and is waited for: run as the test
+# of an `if`, its first failed command would not have stopped it.
 cmd_sync() {
   mkdir -p "$data"
-  (
-    flock -w 600 9 || { say "android-app-support: another listing of the apps did not finish"; exit 1; }
-    sync_apps
-  ) 9> "$data/sync.lock"
+  local attempt
+  for attempt in 1 2 3; do
+    (
+      flock -w 600 9 || { say "android-app-support: another listing of the apps did not finish"; exit 1; }
+      sync_apps
+    ) 9> "$data/sync.lock" &
+    if wait $!; then return 0; fi
+    [ "$attempt" -lt 3 ] && wait_booted 300 || return 1
+  done
 }
 
 sync_apps() {
@@ -463,6 +493,8 @@ cmd_watch() {
   adb -s "$serial" shell 'svc power stayon true; settings put system screen_off_timeout 2147483647' > /dev/null 2>&1 || true
   local last='' now
   while active android-app-support.service; do
+    # adb's server forgets a Pixel whose adbd restarted; this finds it again.
+    register
     now=$(adb -s "$serial" shell pm list packages -3 2> /dev/null | LC_ALL=C sort | sha256sum) || now=
     if [ -n "$now" ] && [ "$now" != "$last" ]; then
       cmd_sync && last=$now
