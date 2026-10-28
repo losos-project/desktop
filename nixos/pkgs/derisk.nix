@@ -356,6 +356,16 @@ rustPlatform.buildRustPackage {
     # (derisk's host::gpui_apps, derisk-portal's access::dialog_program).
     ln -s ${gpui}/bin/derisk-gpui $out/bin/derisk-gpui
 
+    # The Text Editor's and Files' desktop entries, which otherwise live
+    # only inside the binary: on disk, their MimeType= lines are what lets
+    # xdg-open hand them a text file or a folder (desktop.nix's defaults).
+    # derisk lists core apps itself and skips these copies.
+    for app in editor files; do
+      install -Dm644 -t $out/share/applications crates/derisk-apps/data/org.derisk.$app.desktop
+      substituteInPlace $out/share/applications/org.derisk.$app.desktop \
+        --replace-fail "Exec=derisk " "Exec=$out/bin/derisk "
+    done
+
     install -Dm644 -t $out/lib/systemd/user crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/*
     substituteInPlace $out/lib/systemd/user/derisk-agent.service \
       --replace-fail "ExecStart=derisk " "ExecStart=$out/bin/derisk "

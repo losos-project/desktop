@@ -2,8 +2,8 @@
 
 A [LosOS](https://losos.dasmat.us) box is the project's home server. It runs
 LosOS cloud, which is Nextcloud at `/nextcloud`, and LosOS Git, which is
-Forgejo at `/forgejo/`. Once a day, LosOS Desktop backs each person's home up
-to a box on the local network:
+Forgejo at `/forgejo/`. Once a day, or as often as the person sets, LosOS
+Desktop backs each person's home up to a box on the local network:
 
 - every Git repository in the home goes to LosOS Git, as a private
   repository of the person's own;
@@ -38,8 +38,9 @@ The Backups page is under System in Settings. It has three steps.
    kept. The two apps keep separate accounts on a box, and signing in to
    just one is enough to back up. Without LosOS Git, repositories and
    configs go to LosOS cloud as plain files with everything else.
-3. **Back up every day** turns the timer's backups on. **Back up now**
-   runs one at once.
+3. **Back up automatically** turns the timer's backups on, and the choice
+   beside it sets how often: every hour, every 6 or 12 hours, every day,
+   which is the default, or every week. **Back up now** runs one at once.
 
 The page shows when the last backup went through and what it sent. It also
 lists any file or repository the box refused, with the box's reason.
@@ -51,6 +52,7 @@ losos-backup choose mattbox.local
 printf '%s' "$password" | losos-backup sign-in cloud matus
 printf '%s' "$password" | losos-backup sign-in git matus
 losos-backup on
+losos-backup every 6      # hours between backups, 1 to 168
 losos-backup run          # now
 losos-backup status       # what the page shows, as JSON
 ```
@@ -58,14 +60,21 @@ losos-backup status       # what the page shows, as JSON
 ## What a backup does
 
 `losos-backup.timer` fires every hour. The run goes ahead only when backups
-are on and the last successful one is a day old. A computer that was off,
+are on and the last successful one is as old as the time set between them,
+a day unless the person changed it. A computer that was off,
 asleep or away from the box catches up within an hour of coming back. If the
 box cannot be reached, the run is skipped and tried again the next hour,
 and that does not count as a failure. The runs belong to the person and run
 in their user manager, because systemd-homed unlocks a home only while its
 owner is signed in. A backup runs with the lowest CPU and disk priority.
 
-It walks the home without following symbolic links.
+It walks the home without following symbolic links. LosOS cloud cannot
+hold a link, so the run lists every link outside the configs, with its
+target, in `.losos-backup-links.tsv` at the top of the computer's folder
+there, and sends the list again whenever it changes. Its header has the
+shell line that makes the links again in a restored home. A config that is
+a link, as Home Manager writes them, goes to the configs' repository as a
+link, which Git keeps as it is.
 
 - A directory with a `.git` directory, or a bare repository, is a
   repository. Its branches and tags are force-pushed to a repository named
@@ -77,7 +86,12 @@ It walks the home without following symbolic links.
   a separate index, so the repository's own index, branches and stash stay
   as they were, and the repository's hooks do not run. A worktree's
   checkout, which has a `.git` file, is skipped, because its commits are in
-  the repository it belongs to.
+  the repository it belongs to. A repository that uses Git LFS has the
+  objects in its `.git/lfs/objects` uploaded too, through LosOS Git's LFS
+  batch API with the same token and certificate pin, so its large files are
+  on the box and not only their pointers. The box answers for the objects
+  it already has without an upload. A box with LFS turned off in Forgejo
+  makes that repository's line in the report say so.
 - The configs are every file under `~/.config` and every file directly in
   the home whose name starts with a dot, such as `.bashrc` and
   `.gitconfig`. They are committed together to `main` of the private

@@ -34,8 +34,14 @@ pub struct Account {
     pub user: String,
 }
 
+/// How many hours apart backups run unless the person picks otherwise.
+pub const EVERY_HOURS: u32 = 24;
+
+/// The longest a person can set between backups: a week.
+pub const MAX_HOURS: u32 = 7 * 24;
+
 /// The settings, `config.json`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// The box, by the name it announces (`mattbox.local`); empty until one
@@ -51,6 +57,22 @@ pub struct Config {
     pub cloud: Option<Account>,
     /// The LosOS Git account repositories go to.
     pub git: Option<Account>,
+    /// Hours from one backup that went through to the next, from 1 to
+    /// [`MAX_HOURS`]. The timer asks every hour, so an hour is the finest.
+    pub every_hours: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            box_name: String::new(),
+            fingerprint: String::new(),
+            enabled: false,
+            cloud: None,
+            git: None,
+            every_hours: EVERY_HOURS,
+        }
+    }
 }
 
 impl Config {

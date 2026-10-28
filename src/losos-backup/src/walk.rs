@@ -1,8 +1,10 @@
 //! What in the home gets backed up, and how.
 //!
 //! The walk goes through the whole home without following symbolic links,
-//! which Nextcloud cannot hold and which on this OS mostly point into the
-//! Nix store. A directory holding a `.git` directory, or a bare repository,
+//! which on this OS mostly point into the Nix store. Nextcloud cannot hold
+//! a link, so each is listed with its target ([`Tree::links`]), and the
+//! list goes to LosOS cloud as one file a restore can make them again
+//! from; a config that is a link goes to LosOS Git as one, which git holds. A directory holding a `.git` directory, or a bare repository,
 //! is a repository: it goes to LosOS Git and the walk does not go into it.
 //! The configs ([`is_config`]) go to LosOS Git as well, when there is an
 //! account there. Every other regular file goes to LosOS cloud, apart from what can be
@@ -54,6 +56,15 @@ pub struct File {
     pub mtime: i64,
 }
 
+/// A symbolic link, kept as the list LosOS cloud gets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Link {
+    /// Its path relative to the home, `/`-separated.
+    pub rel: String,
+    /// What it points to, as written in it.
+    pub target: String,
+}
+
 /// A repository for LosOS Git.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Repo {
@@ -74,6 +85,8 @@ pub struct Tree {
     pub dirs: Vec<String>,
     /// Repositories for LosOS Git.
     pub repos: Vec<Repo>,
+    /// Symbolic links, in walk order.
+    pub links: Vec<Link>,
     /// Paths that were left out because they could not be read, or their
     /// names are not UTF-8, which WebDAV paths must be.
     pub unreadable: Vec<String>,
@@ -131,15 +144,33 @@ fn in_config(rel: &str) -> bool {
 }
 
 impl Tree {
-    /// Takes the configs ([`is_config`]) out of the files for LosOS cloud,
-    /// with the folders under `~/.config`, and returns their files.
-    pub fn take_configs(&mut self) -> Vec<File> {
-        let (configs, files) = std::mem::take(&mut self.files)
-            .into_iter()
-            .partition(|f| is_config(&f.rel));
-        self.files = files;
+    /// Takes the configs ([`is_config`]) out of the files and links for
+    /// LosOS cloud, with the folders under `~/.config`, and returns how
+    /// many there were.
+    pub fn take_configs(&mut self) -> usize {
+        let before = self.files.len() + self.links.len();
+        self.files.retain(|f| !is_config(&f.rel));
+        self.links.retain(|l| !is_config(&l.rel));
         self.dirs.retain(|d| !in_config(d));
-        configs
+        before - self.files.len() - self.links.len()
+    }
+
+    /// The links as LosOS cloud keeps them: a line each, the path and its
+    /// target split by a tab, after a header saying how to make them again.
+    pub fn links_list(&self) -> String {
+        let mut list = String::from(
+            "# The symbolic links in this home, which LosOS cloud cannot hold:\n\
+             # each line is a path, a tab and the link's target. From the home,\n\
+             #   grep -v '^#' .losos-backup-links.tsv | while IFS=\"$(printf '\\t')\" read -r p t; do ln -sfn \"$t\" \"$p\"; done\n\
+             # makes them again.\n",
+        );
+        for link in &self.links {
+            list.push_str(&link.rel);
+            list.push('\t');
+            list.push_str(&link.target);
+            list.push('\n');
+        }
+        list
     }
 }
 
@@ -198,9 +229,19 @@ pub fn walk(home: &Path, options: &Options) -> Tree {
                 });
             } else if meta.is_dir() {
                 subdirs.push((entry.path(), child));
+            } else if meta.file_type().is_symlink() {
+                // A target that is not UTF-8, or would break the list's
+                // lines, cannot be listed.
+                match fs::read_link(entry.path()).ok().and_then(|t| {
+                    t.to_str()
+                        .filter(|t| !t.contains(['\t', '\n']) && !child.contains(['\t', '\n']))
+                        .map(str::to_owned)
+                }) {
+                    Some(target) => tree.links.push(Link { rel: child, target }),
+                    None => tree.unreadable.push(child),
+                }
             }
-            // Symbolic links, sockets, FIFOs and devices have nothing to
-            // upload.
+            // Sockets, FIFOs and devices have nothing to upload.
         }
         // Reversed, so the stack pops them in name order.
         for (path, child) in subdirs.into_iter().rev() {
@@ -321,6 +362,14 @@ mod tests {
             .collect();
         assert_eq!(repos, [("src/bare.git", true), ("src/project", false)]);
         assert_eq!(tree.files[1].size, 5);
+        assert_eq!(
+            tree.links,
+            [Link {
+                rel: "store-link".into(),
+                target: "/nix/store".into(),
+            }]
+        );
+        assert!(tree.links_list().ends_with("\nstore-link\t/nix/store\n"));
 
         let tree = walk(
             &home,
@@ -357,13 +406,22 @@ mod tests {
                 ".ssh".into(),
                 "Documents".into(),
             ],
+            links: vec![
+                Link {
+                    rel: ".config/home-manager".into(),
+                    target: "/nix/store/x-home-manager-files/.config/home-manager".into(),
+                },
+                Link {
+                    rel: "Downloads".into(),
+                    target: "/mnt/data/Downloads".into(),
+                },
+            ],
             ..Tree::default()
         };
-        let configs: Vec<String> = tree.take_configs().into_iter().map(|f| f.rel).collect();
-        assert_eq!(
-            configs,
-            [".bashrc", ".config/git/config", ".configure-notes"]
-        );
+        // Three files and a link.
+        assert_eq!(tree.take_configs(), 4);
+        assert_eq!(tree.links.len(), 1);
+        assert_eq!(tree.links[0].rel, "Downloads");
         let files: Vec<&str> = tree.files.iter().map(|f| f.rel.as_str()).collect();
         assert_eq!(
             files,

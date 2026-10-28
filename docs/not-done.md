@@ -20,17 +20,12 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
-- **A default for text files.** Since Sonne left, nothing claims text and
-  source files as their default for `xdg-open`. Files opens them in whatever
-  app happens to list their type, if any. derisk's Text Editor cannot be
-  handed a file, because its desktop entry lives inside the derisk binary
-  with no file argument and no types.
-- **Searching what is in every file.** `derisk-index` reads plain text only.
-  A file with a NUL byte in its first 8 KiB counts as binary and is found by
-  its name alone, so the text in PDFs, office documents and pictures is not
-  searched. Only the first MiB of a large text file is indexed. Hidden files
-  and anything `.gitignore` leaves out are not indexed, and there is no
-  setting yet to index other folders or turn the index off.
+- **Searching what is in every file.** `derisk-index` reads plain text,
+  PDFs and OpenDocument and Office Open XML files, but not the text in
+  pictures or scanned PDFs, which would take OCR, nor the older binary
+  `.doc`, `.xls` and `.ppt` formats. Those are found by name alone. Only the
+  first MiB of a file's text is indexed. Hidden files and anything
+  `.gitignore` leaves out are not indexed unless Settings names their folder.
 - **The guest template in full.** Only a reduced build of the
   [guest](hypervisor.md), without Danube, Flatpak and the Calculator, has
   booted, and no machine's window has reached a desktop through it yet. It is
@@ -274,14 +269,11 @@
 - **Backups to a LosOS box keep one copy and need a password sign-in.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A
-  repository deleted at home stays on the box. Configs that are symbolic
-  links, as Home Manager writes them, are not in the configs' repository, so
-  back up the Home Manager configuration they come from instead. Accounts
-  with two-factor sign-in cannot sign in from the Backups page, which sends a
-  name and a password. Git LFS objects are not pushed. Symbolic links, which
-  Nextcloud cannot hold, are left out. A box with HTTPS turned off through
-  `losos.tls.enable` cannot be backed up to. Only an administrator's run can
-  start a stopped LosOS boxes machine. Backups run once a day, with no
-  setting to change that. They have run against Nextcloud and Forgejo laid
-  out the way a box lays them out, not against a real box. See
-  [Backups to a LosOS box](backup.md).
+  repository deleted at home stays on the box. Accounts with two-factor
+  sign-in cannot sign in from the Backups page, which sends a name and a
+  password. Symbolic links are a list in LosOS cloud, not links, and a
+  restore makes them again from it by hand. A box with HTTPS turned off
+  through `losos.tls.enable` cannot be backed up to. Only an administrator's
+  run can start a stopped LosOS boxes machine. They have run against
+  Nextcloud and Forgejo laid out the way a box lays them out, not against a
+  real box. See [Backups to a LosOS box](backup.md).

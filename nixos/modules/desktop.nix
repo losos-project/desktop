@@ -120,7 +120,13 @@ in
     pkgs.derisk
     pkgs.derisk.index
   ];
-  systemd.user.services.derisk-index.wantedBy = [ "graphical-session.target" ];
+  systemd.user.services.derisk-index = {
+    wantedBy = [ "graphical-session.target" ];
+    # The text of PDFs, which derisk-index reads through pdftotext under a
+    # deadline. On the service's PATH alone: nothing else in the image
+    # needs poppler's tools.
+    path = [ pkgs.poppler-utils ];
+  };
 
   # Generate the PAM stack used by derisk's lock screen. With homed enabled,
   # NixOS includes pam_systemd_home in this service.
@@ -150,6 +156,24 @@ in
     # derisk starts it to learn when nobody uses the session (above).
     pkgs.swayidle
   ];
+
+  # Text and source files open in derisk's Text Editor and folders in
+  # Files, the types each claims in its desktop entry (pkgs/derisk.nix
+  # installs both). Read from derisk's source, so a type added there is a
+  # default here without a second list to keep.
+  xdg.mime.defaultApplications =
+    let
+      claims =
+        app:
+        let
+          entry = builtins.readFile ../../components/derisk/crates/derisk-apps/data/org.derisk.${app}.desktop;
+          line = lib.findFirst (lib.hasPrefix "MimeType=") "MimeType=" (lib.splitString "\n" entry);
+        in
+        lib.genAttrs (lib.filter (t: t != "") (lib.splitString ";" (lib.removePrefix "MimeType=" line))) (
+          _: "org.derisk.${app}.desktop"
+        );
+    in
+    claims "editor" // claims "files";
 
   # derisk-terminal draws with the theme's monospace family through its Nerd
   # Font build, the same letters with the icons prompts and TUIs print. Hack

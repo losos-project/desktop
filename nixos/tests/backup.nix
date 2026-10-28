@@ -75,6 +75,8 @@ in
       };
       services.forgejo = {
         enable = true;
+        # As a box has it, for the repository whose LFS objects go up.
+        lfs.enable = true;
         settings.server = {
           ROOT_URL = "https://${boxName}/forgejo/";
           HTTP_ADDR = "127.0.0.1";
@@ -102,7 +104,10 @@ in
               proxy_request_buffering off;
             '';
           };
-          locations."/forgejo/".proxyPass = "http://127.0.0.1:3000/";
+          locations."/forgejo/" = {
+            proxyPass = "http://127.0.0.1:3000/";
+            extraConfig = "client_max_body_size 512M;";
+          };
         };
       };
     };
@@ -131,9 +136,10 @@ in
     in
     ''
       import json
+      import shlex
 
       def alice(command):
-          return desktop.succeed(f"su - alice -c {json.dumps(command)}")
+          return desktop.succeed(f"su - alice -c {shlex.quote(command)}")
 
       def last():
           return json.loads(alice("cat ~/.local/state/losos-backup/last.json"))["last"]
@@ -175,6 +181,19 @@ in
               " && cd src/notes && git init -q -b main && echo one > a.txt && git add a.txt"
               " && git -c user.name=a -c user.email=a@a commit -qm first && echo draft > draft.txt"
           )
+          # Links, one of them a config, as Home Manager writes them.
+          alice("ln -s letter.txt Documents/latest && ln -s ../.bashrc .config/bashrc")
+          # A repository using Git LFS: a pointer committed, its object in
+          # the local store as git-lfs leaves it.
+          alice(
+              "mkdir -p src/media && cd src/media && git init -q -b main && head -c 3M /dev/urandom > /tmp/blob"
+              " && oid=$(sha256sum /tmp/blob | cut -d' ' -f1) && mkdir -p .git/lfs/objects/$(echo $oid | cut -c1-2)/$(echo $oid | cut -c3-4)"
+              " && mv /tmp/blob .git/lfs/objects/$(echo $oid | cut -c1-2)/$(echo $oid | cut -c3-4)/$oid"
+              " && printf 'version https://git-lfs.github.com/spec/v1\\noid sha256:%s\\nsize %s\\n' $oid $((3 << 20)) > video.bin"
+              " && echo 'video.bin filter=lfs diff=lfs merge=lfs -text' > .gitattributes && git add -A"
+              " && git -c user.name=a -c user.email=a@a commit -qm video"
+          )
+          lfs_oid = alice("ls src/media/.git/lfs/objects/*/*/").strip()
 
       with subtest("choosing the box pins its certificate"):
           fingerprint = alice("losos-backup choose ${boxName}").strip()
@@ -196,7 +215,7 @@ in
 
       with subtest("files go to LosOS cloud, the repository to LosOS Git"):
           report = back_up()
-          assert report["uploaded"] == 2 and report["repos"] == 1 and report["failed"] == 0, report
+          assert report["uploaded"] == 2 and report["repos"] == 2 and report["failed"] == 0, report
           assert box.succeed(f"cat {files}/Documents/letter.txt").strip() == "hello"
           assert box.succeed(f"stat -c %s {files}/Documents/big.bin").strip() == str(150 << 20)
           box.fail(f"test -e {files}/.cache")
@@ -208,6 +227,18 @@ in
           assert forgejo("desktop-config")["private"]
           assert forgejo("desktop-config/contents/.config/git/config")["type"] == "file"
           assert len(forgejo("desktop-config/commits")) == 1
+          # The config that is a link went to git as one.
+          link = forgejo("desktop-config/contents/.config/bashrc")
+          assert link["type"] == "symlink" and link["target"] == "../.bashrc", link
+          # The other link is in the list LosOS cloud keeps.
+          links = box.succeed(f"cat {files}/.losos-backup-links.tsv")
+          assert "\nDocuments/latest\tletter.txt\n" in links, links
+          assert ".config/bashrc" not in links, links
+          # The LFS object is on the box, behind the pointer.
+          box.succeed(
+              f"curl -sf -u alice:${gitPassword} http://127.0.0.1:3000/api/v1/repos/alice/media/media/video.bin"
+              f" | sha256sum | grep -q ^{lfs_oid}"
+          )
           repo = forgejo("notes")
           assert repo["private"], repo
           branches = {b["name"]: b["commit"]["message"].strip() for b in forgejo("notes/branches")}
@@ -249,10 +280,19 @@ in
           report = last()
           assert report["outcome"] == "skipped", report
 
-      with subtest("the timer's run waits for a day to pass"):
+      with subtest("the timer's run waits for a day to pass, or as long as set"):
           desktop.succeed("echo '${boxAddress} ${boxName}' > /run/losos-boxes/hosts/boxes")
           before = last()
           desktop.succeed("systemctl --user -M alice@ start losos-backup.service")
           assert last() == before
+          desktop.fail("su - alice -c 'losos-backup every 0'")
+          alice("losos-backup every 1")
+          assert json.loads(alice("losos-backup status"))["every_hours"] == 1
+          # The last backup, made two hours old.
+          history = json.loads(alice("cat ~/.local/state/losos-backup/last.json"))
+          history["last_done"] -= 7200
+          alice(f"printf %s {shlex.quote(json.dumps(history))} > ~/.local/state/losos-backup/last.json")
+          desktop.succeed("systemctl --user -M alice@ start losos-backup.service")
+          assert last()["started"] > before["started"], last()
     '';
 }

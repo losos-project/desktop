@@ -14,8 +14,6 @@
   # palette opens the Agent with ("Ask the agent").
   environment.systemPackages = [ pkgs.derisk.agent ];
 
-  # Text and source files have no default again, as before Sonne claimed
-  # them: derisk's Text Editor cannot take one, its desktop entry living
-  # inside the derisk binary with no file argument and no types
-  # (docs/not-done.md).
+  # Sonne also claimed text and source files; derisk's Text Editor does now
+  # (desktop.nix).
 }
