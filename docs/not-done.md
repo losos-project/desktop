@@ -18,6 +18,16 @@
     Arm laptops, stays the host's, and Settings does not see it.
   - Controller passthrough has only run under QEMU, never on a PC's own
     USB controllers.
+- **The gaming machine.** [The gaming machine](gaming-machine.md) needs a
+  second graphics card. Some of it is not finished:
+  - A PC with one card cannot hand it to the machine and take it back
+    while the desktop waits on the processor.
+  - Settings has no page for it yet; `losos-gaming` and
+    `pm system start losos-gaming-reserve@<address>` do it.
+  - It has not run with a real card yet: the VM test defines the machine
+    in libvirt and checks the boot unit, without a card to move.
+  - Disks and other devices still carry QEMU's names, which some
+    anti-cheats look for.
 - **The network and files machines.** [The network machine](network-machine.md)
   and [the files machine](files-machine.md) have gaps:
   - Handing a network card over by VFIO has only run in QEMU. The VM test

@@ -50,6 +50,7 @@ module.exports = {
         'choice-screens',
         'losos-boxes',
         'windows-apps',
+        'gaming-machine',
         'android-apps',
         'macos-apps',
         'macos-arm64',

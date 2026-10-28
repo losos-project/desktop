@@ -93,6 +93,9 @@ in
   # Peripherals in machines of their own: the host's router and the
   # machines' halves (docs/peripherals.md).
   losos-peripherals = callWithMold ./losos-peripherals.nix { };
+  # The gaming machine: a Windows machine with a graphics card of its own
+  # (docs/gaming-machine.md).
+  losos-gaming = callWithMold ./losos-gaming.nix { };
   # The Windows installer's Linux build, for its tests and for installing
   # into a disk image; the .exe is windows-installer.nix's.
   losos-windows-installer = callWithMold ./losos-windows-installer.nix { };
