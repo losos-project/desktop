@@ -136,7 +136,15 @@ let
           <initrd>${g.initrd}</initrd>
           <cmdline>${g.cmdline}</cmdline>
         </os>
-        @CPU@
+        @CPU@${
+          # As service-machines.nix's: a PC's kernel booted by libvirt has
+          # ACPI only when asked for, and stalls without it.
+          lib.optionalString pkgs.stdenv.hostPlatform.isx86 ''
+            <features>
+              <acpi/>
+              <apic/>
+            </features>''
+        }
         <on_poweroff>destroy</on_poweroff>
         <on_reboot>destroy</on_reboot>
         <on_crash>destroy</on_crash>
