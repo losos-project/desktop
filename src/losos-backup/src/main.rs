@@ -4,7 +4,9 @@
 //!
 //!     losos-backup status                 # JSON: settings, the last run, the boxes
 //!     losos-backup choose BOX             # pin BOX's certificate, print its fingerprint
-//!     losos-backup sign-in cloud|git NAME # the password on stdin
+//!     losos-backup sign-in box            # both, through LosOS Login; prints the link and code
+//!     losos-backup sign-in cloud NAME     # the password on stdin
+//!     losos-backup sign-in git            # a LosOS Git token on stdin
 //!     losos-backup sign-out cloud|git
 //!     losos-backup on|off
 //!     losos-backup run [--if-due]         # back up now, or when a day has passed
@@ -12,21 +14,21 @@
 //! `run --if-due` is what the user timer starts every hour.
 
 use std::{
-    io::{self, IsTerminal, Read},
+    io::{self, IsTerminal, Read, Write},
     process::ExitCode,
 };
 
 use losos_backup::{
     boxes, cloud,
     config::{Account, Paths, Secrets},
-    forge, host_name,
+    forge, host_name, login,
     run::{self, Outcome},
     Error,
 };
 use miette::{miette, IntoDiagnostic, Result};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage: losos-backup status | choose BOX | sign-in cloud|git NAME | sign-out cloud|git | on | off | run [--if-due]";
+const USAGE: &str = "usage: losos-backup status | choose BOX | sign-in box | sign-in cloud NAME | sign-in git | sign-out cloud|git | on | off | run [--if-due]";
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -62,7 +64,9 @@ fn main_inner() -> Result<ExitCode> {
             );
         }
         ["choose", name] => choose(&paths, name)?,
-        ["sign-in", which @ ("cloud" | "git"), login] => sign_in(&paths, which, login)?,
+        ["sign-in", "box"] => sign_in_box(&paths)?,
+        ["sign-in", "cloud", login] => sign_in(&paths, "cloud", login)?,
+        ["sign-in", "git"] => sign_in(&paths, "git", "")?,
         ["sign-out", which @ ("cloud" | "git")] => sign_out(&paths, which)?,
         [on @ ("on" | "off")] => {
             let mut config = paths.load_config().into_diagnostic()?;
@@ -128,43 +132,98 @@ fn agent(paths: &Paths, name: &str) -> Result<(ureq::Agent, boxes::Route)> {
     Ok((boxes::pinned(&route, &der).map_err(report)?, route))
 }
 
+/// Both accounts at once, through LosOS Login (`login`): the link and the
+/// code go to standard output as one JSON line for Settings to show, then
+/// this waits for the person to approve them in a browser, and prints
+/// which accounts it signed in to.
+fn sign_in_box(paths: &Paths) -> Result<()> {
+    let mut config = paths.load_config().into_diagnostic()?;
+    if config.box_name.is_empty() {
+        return Err(miette!("choose the box first"));
+    }
+    let (agent, route) = agent(paths, &config.box_name)?;
+    let code = login::start(&agent, &route.name).map_err(report)?;
+    let mut out = io::stdout().lock();
+    writeln!(out, "{}", code.prompt()).into_diagnostic()?;
+    out.flush().into_diagnostic()?;
+    drop(out);
+    if io::stderr().is_terminal() {
+        eprintln!("Open {} and enter {}.", code.link(), code.user_code);
+    }
+    let token = login::finish(&agent, &route.name, &code).map_err(report)?;
+    let made = login::credentials(&agent, &route.name, &token, &host_name()).map_err(report)?;
+    let mut secrets = paths.load_secrets().into_diagnostic()?;
+    // An app that made nothing this time keeps what it had.
+    if let Some(cloud) = &made.cloud {
+        secrets.cloud = Some(cloud.secret.clone());
+        config.cloud = Some(Account {
+            login: cloud.user.clone(),
+            user: cloud.user.clone(),
+        });
+    }
+    if let Some(git) = &made.git {
+        secrets.git = Some(git.secret.clone());
+        config.git = Some(Account {
+            login: git.user.clone(),
+            user: git.user.clone(),
+        });
+    } else if made.git_off {
+        config.git = None;
+        secrets.git = None;
+    }
+    paths.save_secrets(&secrets).into_diagnostic()?;
+    paths.save_config(&config).into_diagnostic()?;
+    for problem in &made.problems {
+        tracing::warn!("{problem}");
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "cloud": made.cloud.map(|c| c.user),
+            "git": made.git.map(|g| g.user),
+            "gitOff": made.git_off,
+            "problems": made.problems,
+        })
+    );
+    Ok(())
+}
+
+/// One account with what is on standard input: LosOS cloud with the
+/// account's password, which buys an app password of this computer's,
+/// or LosOS Git with a token made in its settings, kept as it is.
 fn sign_in(paths: &Paths, which: &str, login: &str) -> Result<()> {
     let mut config = paths.load_config().into_diagnostic()?;
     if config.box_name.is_empty() {
         return Err(miette!("choose the box first"));
     }
-    let mut password = String::new();
-    io::stdin()
-        .read_to_string(&mut password)
-        .into_diagnostic()?;
-    let password = password.trim_end_matches(['\n', '\r']);
+    let mut secret = String::new();
+    io::stdin().read_to_string(&mut secret).into_diagnostic()?;
+    let secret = secret.trim_end_matches(['\n', '\r']);
     let (agent, route) = agent(paths, &config.box_name)?;
     let mut secrets = paths.load_secrets().into_diagnostic()?;
-    let login = login.trim().to_owned();
     if which == "cloud" {
+        let login = login.trim().to_owned();
         let (app_password, user) =
-            cloud::sign_in(&agent, &cloud::base(&route.name), &login, password).map_err(report)?;
+            cloud::sign_in(&agent, &cloud::base(&route.name), &login, secret).map_err(report)?;
         secrets.cloud = Some(app_password);
         config.cloud = Some(Account { login, user });
     } else {
-        let (token, user) = forge::sign_in(
-            &agent,
-            &forge::base(&route.name),
-            &login,
-            password,
-            &host_name(),
-        )
-        .map_err(report)?;
-        secrets.git = Some(token);
-        config.git = Some(Account { login, user });
+        let token = secret.trim();
+        let user = forge::check_token(&agent, &forge::base(&route.name), token).map_err(report)?;
+        secrets.git = Some(token.to_owned());
+        config.git = Some(Account {
+            login: user.clone(),
+            user,
+        });
     }
     paths.save_secrets(&secrets).into_diagnostic()?;
     paths.save_config(&config).into_diagnostic()
 }
 
 /// Forgets an account. The cloud's app password is revoked on the box
-/// when the box can be reached; a Git token can only be deleted with the
-/// password, so it stays listed in the account's settings there.
+/// when the box can be reached; a Git token stays listed in LosOS Git's
+/// settings, where the person removes it, and a new sign-in from this
+/// computer replaces it.
 fn sign_out(paths: &Paths, which: &str) -> Result<()> {
     let mut config = paths.load_config().into_diagnostic()?;
     let mut secrets = paths.load_secrets().into_diagnostic()?;

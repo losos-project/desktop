@@ -1,8 +1,9 @@
 # Backups to a LosOS box
 
 A [LosOS](https://losos.dasmat.us) box is the project's home server. It runs
-LosOS cloud, which is Nextcloud at `/nextcloud`, and LosOS Git, which is
-Forgejo at `/forgejo/`. Once a day, LosOS Desktop backs each person's home up
+LosOS cloud, which answers Nextcloud's apps at `/nextcloud`, and LosOS Git,
+its Git server at `/git/`. People sign in to both through LosOS Login, the
+box's own sign-in. Once a day, LosOS Desktop backs each person's home up
 to a box on the local network:
 
 - every Git repository in the home goes to LosOS Git, as a private
@@ -29,15 +30,21 @@ The Backups page is under System in Settings. It has three steps.
    From then on, every connection to the box has to present exactly that
    certificate. The box's certificate is self-signed for its `.local` name,
    so there is no certificate authority to ask instead.
-2. **LosOS cloud** and **LosOS Git.** Each takes the account's name and
-   password once and trades them for a credential that belongs to this
-   computer. LosOS cloud gives an app password, listed under the account's
-   security settings. LosOS Git gives an access token named "LosOS Desktop
-   backups (*computer*)" with the `write:repository` and `write:user`
-   scopes, listed under the account's applications. The password is not
-   kept. The two apps keep separate accounts on a box, and signing in to
-   just one is enough to back up. Without LosOS Git, repositories and
-   configs go to LosOS cloud as plain files with everything else.
+2. **Sign in with LosOS Login.** The page shows a link and a short code.
+   Open the link in a browser, sign in to LosOS Login with your password
+   and, if your account has one, your second factor, and approve "LosOS
+   Desktop backups". Nothing is typed into Settings. The box then makes
+   this computer a LosOS cloud app password, named "LosOS on *computer*"
+   and listed under the account's security settings, and a LosOS Git token
+   of the same name with the `write:repository` and `read:user` scopes. A
+   second sign-in from the same computer replaces both. LosOS Login's own
+   token lasts ten minutes, can only ask for those two credentials, and
+   isn't kept. On a box without LosOS Git, repositories and configs go to
+   LosOS cloud as plain files with everything else.
+
+   A box older than this sign-in can still be signed in to LosOS cloud with
+   a name and password, under **Sign in with a password instead**. That
+   way doesn't work for an account with a second factor.
 3. **Back up every day** turns the timer's backups on. **Back up now**
    runs one at once.
 
@@ -48,8 +55,10 @@ The same steps on the command line:
 
 ```sh
 losos-backup choose mattbox.local
+losos-backup sign-in box  # prints the link and code as JSON, then waits
+# or, one app at a time:
 printf '%s' "$password" | losos-backup sign-in cloud matus
-printf '%s' "$password" | losos-backup sign-in git matus
+printf '%s' "$token" | losos-backup sign-in git   # a token from LosOS Git's settings
 losos-backup on
 losos-backup run          # now
 losos-backup status       # what the page shows, as JSON
@@ -154,19 +163,19 @@ they live in whenever its owner is signed out.
 
 > [!NOTE]
 > Signing out of LosOS cloud on the Backups page revokes its app password on
-> the box; a LosOS Git token can only be deleted with the password, in the
-> account's settings there.
+> the box. Signing out of LosOS Git only forgets the token here: remove it
+> in LosOS Git's settings, or sign in again from this computer to replace it.
 
 ## Tested
 
-`losos-backup`'s own tests cover the walk, the names, the paths, the
-relay's hosts files and a snapshot of uncommitted work.
-`nixos/tests/backup.nix` boots a box with Nextcloud and Forgejo laid out the
-way a LosOS box lays them out, behind a certificate made the way the box makes
-its own. It also boots a desktop that chooses the box and signs in to both
-apps. The desktop backs up a home with a large file, a cache, configs and a
-repository with uncommitted work. It then backs up again after changes, and
-the test checks what arrived and what was removed, including the configs'
-second commit on top of their first. The test repeats this through a hosts
-file written the way the relay writes it, and finally checks that a run is
-skipped once no machine names the box.
+`losos-backup`'s own tests cover the walk, the names, the paths, the relay's
+hosts files and a snapshot of uncommitted work. `nixos/tests/backup.nix` boots
+a box with Nextcloud and Forgejo at the paths a LosOS box serves LosOS cloud
+and LosOS Git from, behind a certificate made the way the box makes its own.
+It also boots a desktop that chooses the box and signs in to both apps, with a
+password and with a token made on the box. The desktop backs up a home with a
+large file, a cache, configs and a repository with uncommitted work. It then
+backs up again after changes, and the test checks what arrived and what was
+removed, including the configs' second commit on top of their first. The test
+repeats this through a hosts file written the way the relay writes it, and
+finally checks that a run is skipped once no machine names the box.
