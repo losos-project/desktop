@@ -7,6 +7,7 @@ module.exports = {
     'index',
     'building',
     'troubleshooting',
+    'reporting',
     {
       type: 'category',
       label: 'The system',
