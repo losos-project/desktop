@@ -175,7 +175,8 @@ own modules from the pinned commit, with lososd, LosOS Login, LosOS Cloud
 and LosOS Git, claimed as the setup wizard claims it. The desktop finds it
 by its announcement, signs `losos` in with a token made for the GPG key the
 box was installed with and reads the box's state through the encrypted
-envelope, then pins its certificate and backs a home up to it
+envelope, then pins its certificate, signs the backups in through LosOS
+Login with a code a browser approves, and backs a home up to it
 ([backups](backup.md)). The pin's pull requests run it, so a change in LosOS
 that breaks the desktop shows there before it merges.
 `nixos/tests/machines.nix` makes a LosOS boxes machine on a host whose LAN

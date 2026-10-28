@@ -179,3 +179,6 @@ backs up again after changes, and the test checks what arrived and what was
 removed, including the configs' second commit on top of their first. The test
 repeats this through a hosts file written the way the relay writes it, and
 finally checks that a run is skipped once no machine names the box.
+`nixos/tests/losos-box.nix` does it against a real LosOS box: the desktop
+signs in with a code that a browser approves on the box's LosOS Login, and
+its home reaches LosOS Cloud and its repository LosOS Git.
