@@ -68,7 +68,19 @@
         ../modules/network-machine.nix
         ../modules/files-machine.nix
       ];
-      nixpkgs.overlays = [ (import ../pkgs) ];
+      # The OS's overlay without its patched GTK and Qt, which nothing here
+      # draws with and which would only be built again for the test.
+      nixpkgs.overlays = [
+        (
+          final: prev:
+          removeAttrs (import ../pkgs final prev) [
+            "gtk3"
+            "gtk4"
+            "qt5"
+            "qt6"
+          ]
+        )
+      ];
 
       networking.interfaces.eth1.ipv4.addresses = lib.mkForce [ ];
       virtualisation.qemu.networkingOptions = lib.mkForce [ ];
