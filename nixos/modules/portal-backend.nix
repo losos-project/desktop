@@ -46,6 +46,8 @@ in
 
   config = lib.mkIf cfg.enable {
     xdg.portal.extraPortals = [ backend ];
+    # D-Bus starts it whether or not xdg.portal is on here.
+    services.dbus.packages = [ backend ];
     systemd.user.services.losos-portal = {
       description = "Portal dialogs from the portal machine";
       serviceConfig = {
