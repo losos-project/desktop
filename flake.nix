@@ -247,6 +247,7 @@
         // lib.genAttrs [
           "losos-installer"
           "losos-hardware"
+          "losos-peripherals"
           "losos-security"
           "losos-swap"
           "losos-windows-installer"
@@ -256,6 +257,10 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-vm-call"
+          "losos-netd"
+          "losos-filesd"
+          "losos-portal"
           "losos-agent-machine"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
@@ -301,6 +306,16 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # The network and files machines under load: connections, downloads
+          # and DNS through the network machine, nmcli through losos-vm-call,
+          # schizo mode cutting the host off, the machine destroyed and
+          # started again; drives copied to and ejected from the files
+          # machine, which powers off when idle (service-machines.nix).
+          service-machines = pkgs.testers.runNixOSTest ./nixos/tests/service-machines.nix;
+          # The portal machine: a host app's request starts it, an app in
+          # another machine gets a copy of the file picked for it and saves
+          # it back to the host, and it stops when idle (portal-machine.nix).
+          portal-machine = pkgs.testers.runNixOSTest ./nixos/tests/portal-machine.nix;
           # Opening the Agent starts the person's own machine, whose window
           # reaches the host from its address, whose home is their Agent
           # folder and whose tools channel their session answers

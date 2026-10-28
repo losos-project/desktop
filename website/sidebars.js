@@ -14,6 +14,10 @@ module.exports = {
       items: [
         'systemd',
         'hypervisor',
+        'peripherals',
+        'network-machine',
+        'files-machine',
+        'portal-machine',
         'layout',
         'hibernation',
         'drivers',

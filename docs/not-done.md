@@ -4,6 +4,47 @@
   on a PC, or under KVM on an arm64 host, with a GPU from Reims. Nobody has
   booted macOS on it yet, no guest has drawn through Reims, and nothing in
   derisk starts it. [arm64 macOS machines](macos-arm64.md) lists the rest.
+- **Peripherals in their machines.** [Peripherals](peripherals.md) moves
+  USB devices and Bluetooth radios into machines of their own. Some of it
+  is not finished:
+  - Bluetooth headphones pair and connect in sys-bluetooth, but there is
+    no PipeWire there and no path for their sound to the host's.
+  - A camera or sound card in its disposable machine is driven there, but
+    nothing yet carries its video or sound back to apps on the host.
+  - A keyboard or mouse plugged into a port sys-usb holds comes to the
+    host over USB/IP, so the host parses its HID descriptors. Qubes's input
+    proxy, which passes only key and pointer events, is not done.
+  - A Bluetooth radio that is not on USB, on a UART or SDIO as on some
+    Arm laptops, stays the host's, and Settings does not see it.
+  - Controller passthrough has only run under QEMU, never on a PC's own
+    USB controllers.
+- **The network and files machines.** [The network machine](network-machine.md)
+  and [the files machine](files-machine.md) have gaps:
+  - Handing a network card over by VFIO has only run in QEMU. The VM test
+    runs the fallback for a PC without an IOMMU.
+  - sys-net forwards IPv4 only. The host has no IPv6 while it routes
+    through it.
+  - The keyboard's Wi-Fi and airplane keys reach the host's rfkill, not
+    the machine's. Settings' Wi-Fi switch works.
+  - The edge proxies are not in sys-net yet.
+  - Without an IOMMU, NetworkManager on the host keeps the networks the
+    host has saved, and sys-net keeps none of its own.
+  - Network shares have a command, `losos-shares`, and no page in
+    Settings or Files. WebDAV shares have not been tried against a
+    server.
+  - OpenSSH's `sftp-server` in sys-files is not chrooted to the volume it
+    serves. The host is the only one that can ask for one.
+- **The portal machine.** [The portal machine](portal-machine.md) has
+  gaps:
+  - Its dialogs are not attached to the app's window, which is on
+    another machine's display, so they open as windows of their own.
+  - What a machine may write back is kept until the host restarts. After
+    that, saving a copy a machine was given before changes only the copy.
+  - A folder picked for an app in a machine is copied in to read. Changes
+    to it are not written back.
+  - Only the files and screenshot portals copy files. A portal that hands
+    an app a file in another way, such as the Account portal's picture,
+    hands a machine's app a path it cannot open.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
@@ -47,8 +88,9 @@
   the 8 GiB `/usr` slot. Giving machines the host's store over virtiofs would
   save it. A machine's disk grows once, to the size it was made with, and
   nothing makes an existing machine's disk larger. Portal dialogs in a
-  machine, such as a Flatpak's file chooser, are GTK's, drawn through the
-  same waypipe, and nobody has tried them.
+  machine, such as a Flatpak's file chooser, are the
+  [portal machine](portal-machine.md)'s now, and nobody has tried them
+  with a real app in a machine.
 - **The Flatpak machine's loose ends.** A `.flatpakref` or `.flatpakrepo`
   file opened on the host has nothing to open it, because Flatpak is in
   [the machine](hypervisor.md#the-flatpak-machine), so it has to be copied
