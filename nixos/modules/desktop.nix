@@ -120,7 +120,13 @@ in
     pkgs.derisk
     pkgs.derisk.index
   ];
-  systemd.user.services.derisk-index.wantedBy = [ "graphical-session.target" ];
+  systemd.user.services.derisk-index = {
+    wantedBy = [ "graphical-session.target" ];
+    # The text of PDFs, which derisk-index reads through pdftotext under a
+    # deadline. On the service's PATH alone: nothing else in the image
+    # needs poppler's tools.
+    path = [ pkgs.poppler-utils ];
+  };
 
   # Generate the PAM stack used by derisk's lock screen. With homed enabled,
   # NixOS includes pam_systemd_home in this service.

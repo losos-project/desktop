@@ -40,9 +40,11 @@ no GPU. [The Agent](agent.md), on the PC image, runs Claude Code in its own
 window with live previews of the apps it builds, and derisk's palette can
 hand it a request.
 
-derisk's command palette finds files by name and by content, and shows the
-line that matched. It searches an index of each person's home that
-`derisk-index.service` updates as files change. The palette also takes
+derisk's command palette finds files by name and by content, PDFs and
+office documents included, and shows the line that matched. It searches an
+index of each person's home, and any other folders they name on Settings'
+Privacy page, that `derisk-index.service` updates as files change. The same
+page turns the index off, which deletes it. The palette also takes
 requests in plain words. [Ask derisk](assistant.md) handles the ones its
 rules don't cover with a small language model that runs on the computer,
 through Ollama.

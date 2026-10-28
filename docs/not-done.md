@@ -20,12 +20,12 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
-- **Searching what is in every file.** `derisk-index` reads plain text only.
-  A file with a NUL byte in its first 8 KiB counts as binary and is found by
-  its name alone, so the text in PDFs, office documents and pictures is not
-  searched. Only the first MiB of a large text file is indexed. Hidden files
-  and anything `.gitignore` leaves out are not indexed, and there is no
-  setting yet to index other folders or turn the index off.
+- **Searching what is in every file.** `derisk-index` reads plain text,
+  PDFs and OpenDocument and Office Open XML files, but not the text in
+  pictures or scanned PDFs, which would take OCR, nor the older binary
+  `.doc`, `.xls` and `.ppt` formats. Those are found by name alone. Only the
+  first MiB of a file's text is indexed. Hidden files and anything
+  `.gitignore` leaves out are not indexed unless Settings names their folder.
 - **The guest template in full.** Only a reduced build of the
   [guest](hypervisor.md), without Danube, Flatpak and the Calculator, has
   booted, and no machine's window has reached a desktop through it yet. It is
