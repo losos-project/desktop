@@ -295,6 +295,16 @@ in
                "--release-channel"
                losos.channel
              ]}"
+        # A failed install can be reported as an issue, after the person signs
+        # in to GitHub with this App's device flow (docs/installer.md).
+        +
+          lib.optionalString (losos.reportClientId != null && losos.reportRepo != null)
+            " ${lib.escapeShellArgs [
+               "--report-client-id"
+               losos.reportClientId
+               "--report-repo"
+               losos.reportRepo
+             ]}"
         # GRUB into the installed disk's MBR and BIOS boot partition, so a
         # legacy BIOS PC starts it as UEFI firmware does (bios.nix).
         +

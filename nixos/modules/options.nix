@@ -89,6 +89,31 @@ in
       '';
     };
 
+    report = {
+      clientId = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "Iv23liAbCdEfGhIjKlMn";
+        description = ''
+          The client ID of the GitHub App the installer signs in with to
+          report a failed install as an issue (docs/installer.md, "Reporting
+          a failed install"). It is not a secret: GitHub shows it on the
+          sign-in page. The flake sets it from LOSOS_REPORT_CLIENT_ID, a
+          repository variable in CI; with none, the installer offers no
+          report.
+        '';
+      };
+      repository = mkOption {
+        type = types.nullOr types.str;
+        default = config.losos.release.repository;
+        defaultText = lib.literalExpression "config.losos.release.repository";
+        description = ''
+          The repository, `owner/name`, that failed installs are reported to,
+          the one the releases come from unless set.
+        '';
+      };
+    };
+
     docs.url = mkOption {
       type = types.nullOr types.str;
       default = "https://losos-project.github.io/losos-desktop";

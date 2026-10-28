@@ -9,6 +9,7 @@
 {
   lib,
   rustPlatform,
+  curl,
 }:
 
 rustPlatform.buildRustPackage {
@@ -27,6 +28,9 @@ rustPlatform.buildRustPackage {
   # Fixture trees and the JSON protocol: no disk and no root. The disk filter is what stands between someone and the wrong drive,
   # so it is tested on every build.
   doCheck = true;
+  # A report is sent with curl, and its tests send one to a stand-in for
+  # GitHub on 127.0.0.1.
+  nativeCheckInputs = [ curl ];
 
   meta = {
     description = "Installer backend for LosOS Desktop, driven by derisk installer";

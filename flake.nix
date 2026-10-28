@@ -93,6 +93,11 @@
       # Empty outside Actions, where options.nix's default stands.
       releaseRepo = builtins.getEnv "GITHUB_REPOSITORY";
 
+      # The GitHub App the installer signs in with to report a failed
+      # install (docs/installer.md), a repository variable in CI. Empty
+      # outside Actions, where the ISO offers no report.
+      reportClientId = builtins.getEnv "LOSOS_REPORT_CLIENT_ID";
+
       # requireProxy refused to build an image without LOSOS_PROXY_URL, back
       # when the proxy was the only place an image could update from. It
       # went when GitHub Releases became the default source, and is not
@@ -109,6 +114,9 @@
         }
         // lib.optionalAttrs (channel != "") {
           losos.channel = lib.mkDefault channel;
+        }
+        // lib.optionalAttrs (reportClientId != "") {
+          losos.report.clientId = lib.mkDefault reportClientId;
         };
 
       mkSystem =
