@@ -92,7 +92,17 @@ let
           <initrd>${os.initrd}</initrd>
           <cmdline>${os.cmdline}</cmdline>
         </os>
-        @CPU@
+        @CPU@${
+          # A PC's kernel finds its devices' interrupts through ACPI, which a
+          # domain booted by its kernel has only when asked for; on Arm the
+          # `virt` board describes itself in a device tree instead.
+          lib.optionalString pkgs.stdenv.hostPlatform.isx86 ''
+
+            <features>
+              <acpi/>
+              <apic/>
+            </features>''
+        }
         <on_poweroff>destroy</on_poweroff>
         <on_reboot>restart</on_reboot>
         <on_crash>restart</on_crash>
