@@ -16,6 +16,7 @@
 # and those dialogs is losos-agent-machine's tools channel, which takes
 # derisk's desktop tools and web links to open, and refuses the rest.
 {
+  config,
   lib,
   pkgs,
   ...
@@ -107,16 +108,22 @@ in
   # host's relay, which hands this machine a copy of what the person
   # picked and takes it back when the Agent saves it, and only while the
   # person whose machine this is (agent.nix's <pm:person>) is in front.
-  # GTK's backend, drawn through waypipe, does the rest.
+  # Nothing else here is a portal's: the Agent's links go through
+  # xdg-open above, and it reads the desktop's theme itself.
   losos.portalBackend = {
     enable = true;
     inMachine = true;
   };
-  xdg.portal = {
-    enable = true;
-    extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
-    config.common = {
-      default = "gtk";
+  # What xdg.portal.enable would install, without the xdg-utils it adds:
+  # its scripts are Perl, which service.nix's perlless profile refuses, and
+  # xdg-open here is the one above.
+  services.dbus.packages = [ pkgs.xdg-desktop-portal ];
+  systemd.packages = [ pkgs.xdg-desktop-portal ];
+  programs.fuse.enable = true;
+  environment.pathsToLink = [ "/share/xdg-desktop-portal" ];
+  environment.etc."xdg/xdg-desktop-portal/portals.conf".text = lib.generators.toINI { } {
+    preferred = {
+      default = "none";
       "org.freedesktop.impl.portal.FileChooser" = "losos";
       "org.freedesktop.impl.portal.Access" = "losos";
       "org.freedesktop.impl.portal.Account" = "losos";
@@ -148,6 +155,9 @@ in
   };
   systemd.user.services."losos-agent-launch@" = {
     description = "Open the Agent";
+    # systemd-run finds the Agent on the unit's PATH, which NixOS keeps to
+    # a handful of tools.
+    path = [ pkgs.derisk.agent ];
     serviceConfig = {
       ExecStart = "${channels} launch";
       StandardInput = "socket";
@@ -188,6 +198,14 @@ in
     };
   };
 
+  # perlless.nix, through service.nix, refuses Perl anywhere in the
+  # closure. Here it comes with `derisk mcp`: derisk links libvirt for its
+  # machines, and libvirt's Xen support carries syslinux's Perl scripts.
+  # Nothing in the machine runs them, its boot is still the profile's,
+  # Perl-free, and the machine runs from the host's store, which holds
+  # derisk and all of that already.
+  system.forbiddenDependenciesRegexes = lib.mkForce [ ];
+
   # Mesa's software renderers, as in common.nix: no GPU here, and the
   # Agent draws with egui.
   hardware.graphics.enable = true;
@@ -211,12 +229,17 @@ in
   programs.nix-ld.enable = true;
 
   environment.systemPackages = [
+    pkgs.xdg-desktop-portal
     pkgs.derisk.agent
     # `derisk mcp`, the desktop's tools for every chat, which the Agent
     # runs from PATH and which reach the desktop through the relay above.
     pkgs.derisk
-    pkgs.git
+    # Without Perl, which the perlless profile refuses: no send-email or
+    # git-svn, which an agent has no use for.
+    pkgs.gitMinimal
     pkgs.adwaita-icon-theme
     (lib.hiPrio xdgOpen)
-  ];
+  ]
+  # The portal backend's definition, which xdg.portal would have linked.
+  ++ config.xdg.portal.extraPortals;
 }
