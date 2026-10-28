@@ -168,7 +168,7 @@ in
 
       def routed(machine_name, count=1):
           return lambda ds: len(
-              [d for d in ds if d["machine"] == machine_name and not d["pending"]]
+              [d for d in ds if d["machine"] == machine_name and d["attached"]]
           ) >= count
 
       def nothing_plugged(ds):
@@ -237,7 +237,7 @@ in
 
       with subtest("a sound card gets a disposable machine, gone when it is pulled"):
           card = plug("usb-audio", audiodev="snd")
-          wait(lambda ds: any(d["route"] == "audio" and not d["pending"] for d in ds), "the sound card")
+          wait(lambda ds: any(d["route"] == "audio" and d["attached"] for d in ds), "the sound card")
           machine.succeed("virsh -c qemu:///system list --name | grep -q '^disposable-'")
           show("sound-card-in-disposable")
           machine.succeed("virsh -c qemu:///system dumpxml $(virsh -c qemu:///system list --name | grep '^disposable-') | grep -q '<pm:service>true</pm:service>'")
