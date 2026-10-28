@@ -69,6 +69,40 @@ in
     };
   };
 
+  # Between logins: read the box's people list and lock the accounts of
+  # people it removed or disabled, so a laptop does not keep logging them
+  # in offline (src/losos-login-bridge/src/sync.rs). Only a computer joined
+  # to a box that gave it a token has anything to do.
+  systemd.services.losos-login-bridge-sync = {
+    description = "Locking company accounts the company removed";
+    unitConfig.ConditionPathExists = "/var/lib/losos-login-bridge/directory-token";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    path = [ config.systemd.package ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${lib.getExe bridge} sync";
+      ProtectHome = true;
+      PrivateTmp = true;
+      NoNewPrivileges = true;
+      RestrictAddressFamilies = [
+        "AF_UNIX"
+        "AF_INET"
+        "AF_INET6"
+      ];
+    };
+  };
+  systemd.timers.losos-login-bridge-sync = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "2min";
+      # Often enough that someone let go is locked out within minutes of a
+      # laptop seeing the office network.
+      OnUnitActiveSec = "5min";
+      RandomizedDelaySec = "1min";
+    };
+  };
+
   systemd.services."losos-login-bridge@" = {
     description = "Joining this computer to a company's LosOS Login";
     # pkcheck, which asks polkit about the caller.

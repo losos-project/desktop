@@ -45,7 +45,12 @@ let
   people =
     pkgs:
     pkgs.runCommand "testbox-people" { nativeBuildInputs = [ pkgs.authelia ]; } ''
-      hash() { authelia crypto hash generate argon2 --password "$1" | sed -n 's/^Digest: //p'; }
+      # Cheap parameters: the default argon2id costs a TCG guest longer
+      # than the bridge waits for an answer.
+      hash() {
+        authelia crypto hash generate argon2 --password "$1" -i 1 -m 8192 -p 1 \
+          | sed -n 's/^Digest: //p'
+      }
       ada=$(hash ${adaPassword}); bob=$(hash ${bobPassword}); bob2=$(hash ${bobNewPassword})
       carol=$(hash ${carolPassword})
       write() {
@@ -72,6 +77,35 @@ let
       write changed.yml "$bob2" false
       write disabled.yml "$bob2" true
     '';
+  # The token lososd's `POST /api/devices/directory` gives the joined
+  # computer, and its people list (`GET /api/directory/people`) as the box
+  # has it when bob is disabled.
+  directoryToken = "losos_dir_0123abcd_${lib.fixedWidthString 40 "0" "f"}";
+  directoryPeople = builtins.toJSON {
+    people = [
+      {
+        name = "ada";
+        displayName = "Ada Lovelace";
+        email = "ada@example.com";
+        groups = [ "losos-admins" ];
+        disabled = false;
+      }
+      {
+        name = "bob";
+        displayName = "Bob Builder";
+        email = "";
+        groups = [ "staff" ];
+        disabled = true;
+      }
+      {
+        name = "carol";
+        displayName = "Carol";
+        email = "";
+        groups = [ "staff" ];
+        disabled = false;
+      }
+    ];
+  };
   # What lososd's `GET /api/edge` says on a box that goes through a gateway
   # of the secondary cluster `office`.
   edge = builtins.toJSON {
@@ -110,6 +144,8 @@ in
     in
     {
       environment.systemPackages = [ pkgs.curl ];
+      # The box asks itself by its own name, as nothing here answers mDNS.
+      networking.hosts."127.0.0.1" = [ boxName ];
       networking.firewall.allowedTCPPorts = [
         80
         443
@@ -197,6 +233,18 @@ in
             default_type application/json;
             return 200 '${edge}';
           '';
+          locations."= /api/devices/directory".extraConfig = ''
+            auth_request /internal/authz;
+            default_type application/json;
+            return 200 '{"token":"${directoryToken}","computer":{"id":"0123abcd","device":"desktop"}}';
+          '';
+          locations."= /api/directory/people".extraConfig = ''
+            if ($http_authorization != "Bearer ${directoryToken}") {
+              return 401;
+            }
+            default_type application/json;
+            return 200 '${directoryPeople}';
+          '';
         };
       };
     };
@@ -222,7 +270,13 @@ in
         isNormalUser = true;
         uid = 1500;
       };
-      # homed's LUKS homes, a few hundred megabytes each.
+      # Plain directories in place of the image's LUKS homes: formatting a
+      # LUKS volume takes a guest without KVM longer than homectl waits.
+      # The password is the record's either way, so the bridge cannot tell.
+      services.homed.settings.Home.DefaultStorage = lib.mkForce "directory";
+      # The people list goes out of step only when a subtest says so, so
+      # the sync runs when that subtest starts it, not on its timer.
+      systemd.timers.losos-login-bridge-sync.wantedBy = lib.mkForce [ ];
       virtualisation.diskSize = 6144;
       virtualisation.memorySize = 2048;
     };
@@ -287,6 +341,9 @@ in
         assert joined["gateway"]["url"] == "http://gateway.local:8443", joined
         assert joined["joinedBy"] == "ada", joined
         desktop.succeed("test $(stat -c %a /var/lib/losos-login-bridge/joined.json) = 644")
+        # The box's token for its people list: root's alone.
+        desktop.succeed("test $(stat -c %a /var/lib/losos-login-bridge/directory-token) = 600")
+        desktop.succeed("grep -qx '${directoryToken}' /var/lib/losos-login-bridge/directory-token")
 
     with subtest("the first login makes the person's home, in the company's realm"):
         ok, out = pam("bob", "${bobPassword}")
@@ -332,6 +389,17 @@ in
         ok, out = pam("bob", "${bobNewPassword}")
         assert not ok, out
 
+    with subtest("between logins, the box's people list locks them out offline too"):
+        desktop.succeed("systemctl start losos-login-bridge-sync.service")
+        assert record("bob").get("locked") is True, record("bob")
+        assert record("ada").get("locked") is not True, record("ada")
+        box.block()
+        ok, out = pam("bob", "${bobNewPassword}")
+        assert not ok, out
+        ok, out = pam("ada", "${adaPassword}")
+        assert ok, out
+        box.unblock()
+
     with subtest("local accounts are not the bridge's"):
         desktop.succeed(
             "NEWPASSWORD=Local-test-password-1 homectl create local --enforce-password-policy=no --no-ask-password"
@@ -343,6 +411,7 @@ in
 
     with subtest("leaving the company keeps the accounts, logged in by homed"):
         desktop.succeed("losos-login-bridge leave")
+        desktop.fail("test -e /var/lib/losos-login-bridge/directory-token")
         ok, out = pam("ada", "${adaPassword}")
         assert ok, out
         ok, out = pam("carol", "${carolPassword}")

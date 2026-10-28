@@ -6,6 +6,7 @@
 //!                                                 # ADMIN's password on stdin, then a code if asked
 //!     losos-login-bridge leave
 //!     losos-login-bridge serve                    # the join service, on its socket
+//!     losos-login-bridge sync                     # lock people the box removed (a timer runs it)
 //!
 //! `join` and `leave` go through the join service, which asks polkit for
 //! an administrator of this computer; the login itself is the PAM module.
@@ -26,7 +27,7 @@ use miette::{miette, IntoDiagnostic, Result};
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage: losos-login-bridge status | fingerprint HOST | join HOST FINGERPRINT ADMIN [--public-name NAME] [--admin-group GROUP]... | leave | serve";
+const USAGE: &str = "usage: losos-login-bridge status | fingerprint HOST | join HOST FINGERPRINT ADMIN [--public-name NAME] [--admin-group GROUP]... | leave | serve | sync";
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -122,6 +123,11 @@ fn main_inner() -> Result<ExitCode> {
             // uses fd 0.
             let stream = unsafe { UnixStream::from_raw_fd(0) };
             service::serve(stream).map_err(report)?;
+        }
+        ["sync"] => {
+            for change in losos_login_bridge::sync::run().map_err(report)? {
+                println!("{change:?}");
+            }
         }
         _ => return Err(miette!("{USAGE}")),
     }
