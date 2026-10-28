@@ -247,6 +247,7 @@
         // lib.genAttrs [
           "losos-installer"
           "losos-hardware"
+          "losos-peripherals"
           "losos-security"
           "losos-swap"
           "losos-windows-installer"
