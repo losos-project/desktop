@@ -94,7 +94,8 @@ Once Windows is installed:
 
 From then on, `losos-gaming start` starts the machine and
 `losos-gaming show` opens it in a window on the desktop. Right Ctrl
-releases the keyboard and pointer back to the desktop.
+releases the keyboard and pointer back to the desktop. While that window
+is open, [focus mode](focus-mode.md) holds the host's background work.
 
 ## Two ways to see it
 

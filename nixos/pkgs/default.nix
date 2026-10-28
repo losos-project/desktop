@@ -96,6 +96,9 @@ in
   # The gaming machine: a Windows machine with a graphics card of its own
   # (docs/gaming-machine.md).
   losos-gaming = callWithMold ./losos-gaming.nix { };
+  # Focus mode: background work waits while a game or an editor runs
+  # (docs/focus-mode.md).
+  losos-focus = callWithMold ./losos-focus.nix { };
   # The Windows installer's Linux build, for its tests and for installing
   # into a disk image; the .exe is windows-installer.nix's.
   losos-windows-installer = callWithMold ./losos-windows-installer.nix { };

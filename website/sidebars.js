@@ -51,6 +51,7 @@ module.exports = {
         'losos-boxes',
         'windows-apps',
         'gaming-machine',
+        'focus-mode',
         'android-apps',
         'macos-apps',
         'macos-arm64',
