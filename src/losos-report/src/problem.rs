@@ -352,9 +352,12 @@ pub fn build(problem: &Problem, system: &System, evidence: &Evidence) -> Report 
         } else {
             unit_name.to_owned()
         };
+        let count = match evidence.journal.len() {
+            1 => "1 line".to_owned(),
+            n => format!("{n} lines"),
+        };
         body.push_str(&format!(
-            "\n<details><summary>Journal of {from} from this boot ({} lines)</summary>\n\n{}\n\n</details>\n",
-            evidence.journal.len(),
+            "\n<details><summary>Journal of {from} from this boot ({count})</summary>\n\n{}\n\n</details>\n",
             fenced(&evidence.journal, remaining)
         ));
     }
