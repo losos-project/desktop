@@ -180,7 +180,11 @@ pub fn serve(config: Config) -> io::Result<()> {
 
     // The ports first, so nothing plugged in from now on is configured
     // behind the router's back; then what was there before.
-    let mut present: Vec<PathBuf> = fs::read_dir("/sys/bus/usb/devices")?
+    // A machine with no USB at all has no such directory, and still has
+    // Bluetooth's page to answer.
+    let mut present: Vec<PathBuf> = fs::read_dir("/sys/bus/usb/devices")
+        .into_iter()
+        .flatten()
         .flatten()
         .map(|e| e.path())
         .collect();

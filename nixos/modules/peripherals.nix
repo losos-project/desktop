@@ -245,7 +245,7 @@ in
       memory = 128;
       cid = 4110;
       # USB controllers: UHCI, OHCI, EHCI and xHCI, and USB4's.
-      passthrough.pciClasses = [ "0c03" ];
+      passthrough.pciClasses = [ "0x0c03" ];
       # The host's while the machine is stopped, ports held by the router;
       # libvirt takes them as it starts.
       passthrough.bindAtBoot = false;
