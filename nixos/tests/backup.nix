@@ -60,11 +60,9 @@ in
         # Its own vhost on loopback; the front one below carries it at
         # /nextcloud as the box does.
         hostName = "nextcloud.internal";
-        config = {
-          dbtype = "sqlite";
-          adminuser = "admin";
-          adminpassFile = "${pkgs.writeText "admin-pass" "Admin-test-password-1"}";
-        };
+        # No admin account: nixpkgs' module no longer makes one, and the
+        # test adds alice with occ below.
+        config.dbtype = "sqlite";
         settings = {
           trusted_domains = [ boxName ];
           trusted_proxies = [ "127.0.0.1" ];
