@@ -4,11 +4,15 @@
 //!
 //! It knows who asks from the connection itself: a machine by the vsock
 //! address libvirt gave it, the host's apps by their uid, which must be the
-//! person whose session is in front. It starts the portal machine for that
+//! person whose session is in front. A machine that belongs to one person,
+//! as pm's per-person machines do (`<pm:person>` in its libvirt metadata),
+//! is heard only while that person is in front. It starts the portal machine for that
 //! person when it is not running, with their home and their drives shared
 //! into it, and stops it once nothing has asked for a while. And it keeps
 //! the only record of which files the person picked for which machine:
-//! a machine may fetch those and write them back, and nothing else.
+//! a machine may fetch those and write them back, and nothing else. A
+//! folder picked for it counts with everything under it, so a machine may
+//! write, add and remove files there, never above it.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read, Write};
@@ -28,9 +32,9 @@ use tracing::{debug, info, warn};
 use vsock::{VsockListener, VMADDR_CID_ANY};
 
 use crate::{
-    connect_privileged, expect_frame, read_frame, read_json, receive_stream, response,
-    result_uris, safe_name, send_stream, write_frame, write_json, Body, Person, Reply, Request,
-    CLOSE, FILE_CHOOSER, PORTAL_CID, RELAY_PORT, RELAY_SOCKET, SCREENSHOT, SERVE_PORT,
+    connect_privileged, expect_frame, read_frame, read_json, receive_stream, response, result_uris,
+    safe_name, send_stream, write_frame, write_json, Body, Person, Reply, Request, CLOSE,
+    FILE_CHOOSER, PORTAL_CID, RELAY_PORT, RELAY_SOCKET, SCREENSHOT, SERVE_PORT,
 };
 
 /// Where the relay keeps what it must not forget across a restart: the
@@ -75,6 +79,9 @@ impl Caller {
 struct Access {
     read: bool,
     write: bool,
+    /// A folder: what is under it is granted with it.
+    #[serde(default)]
+    tree: bool,
 }
 
 /// Each machine's files, by host path.
@@ -131,7 +138,11 @@ pub fn run(config: Config) -> Result<()> {
     let machines = VsockListener::bind_with_cid_port(VMADDR_CID_ANY, RELAY_PORT)
         .into_diagnostic()
         .wrap_err_with(|| format!("listening on vsock port {RELAY_PORT}"))?;
-    info!(port = RELAY_PORT, socket = RELAY_SOCKET, "relaying portal requests");
+    info!(
+        port = RELAY_PORT,
+        socket = RELAY_SOCKET,
+        "relaying portal requests"
+    );
 
     thread::scope(|scope| {
         let relay = &relay;
@@ -163,7 +174,15 @@ pub fn run(config: Config) -> Result<()> {
                 let caller = match stream.peer_addr().map(|a| a.cid()) {
                     Ok(PORTAL_CID) => Caller::Portal,
                     Ok(cid) => match machine_at(cid) {
-                        Some(name) if name != relay.config.machine => Caller::Machine(name),
+                        Some(found) if found.name != relay.config.machine => {
+                            if let Some(owner) = &found.person {
+                                if active_person().is_none_or(|p| &p.name != owner) {
+                                    warn!(machine = %found.name, %owner, "refused: its person is not in front");
+                                    return;
+                                }
+                            }
+                            Caller::Machine(found.name)
+                        }
                         _ => {
                             warn!(cid, "refused: no machine has this address");
                             return;
@@ -236,7 +255,10 @@ impl Relay {
                 let path = PathBuf::from(path);
                 if !self.allowed(machine, &path, |a| a.read) {
                     warn!(%machine, path = %path.display(), "fetch refused");
-                    return write_json(&mut stream, &Reply::failed("not a file picked for this machine"));
+                    return write_json(
+                        &mut stream,
+                        &Reply::failed("not a file picked for this machine"),
+                    );
                 }
                 self.fetch(&person, &["read".as_ref(), path.as_os_str()], &mut stream)
             }
@@ -246,10 +268,34 @@ impl Relay {
                     warn!(%machine, path = %path.display(), "store refused");
                     // Read and drop what was sent, so the caller hears why.
                     receive_stream(&mut stream, &mut io::sink())?;
-                    return write_json(&mut stream, &Reply::failed("not a file picked for this machine to write"));
+                    return write_json(
+                        &mut stream,
+                        &Reply::failed("not a file picked for this machine to write"),
+                    );
                 }
                 info!(%machine, path = %path.display(), "written back");
                 let reply = store(&person, &path, &mut stream);
+                write_json(&mut stream, &reply)
+            }
+            (Caller::Machine(machine), Request::Remove { path }) => {
+                let path = PathBuf::from(path);
+                // Only under a folder picked for it, never the folder
+                // itself or a file picked alone.
+                if !self.under_tree(machine, &path, |a| a.write) {
+                    warn!(%machine, path = %path.display(), "remove refused");
+                    return write_json(
+                        &mut stream,
+                        &Reply::failed("not in a folder picked for this machine"),
+                    );
+                }
+                info!(%machine, path = %path.display(), "removed");
+                let removed = as_person(&person, &["remove".as_ref(), path.as_os_str()])
+                    .stdin(Stdio::null())
+                    .status();
+                let reply = match removed {
+                    Ok(status) if status.success() => Reply::ok(),
+                    _ => Reply::failed(format!("cannot remove {}", path.display())),
+                };
                 write_json(&mut stream, &reply)
             }
             (Caller::Machine(machine), Request::Upload { name }) => {
@@ -338,10 +384,12 @@ impl Relay {
             FILE_CHOOSER => Access {
                 read: true,
                 write: true,
+                tree: false,
             },
             SCREENSHOT => Access {
                 read: true,
                 write: false,
+                tree: false,
             },
             _ => return,
         };
@@ -358,26 +406,58 @@ impl Relay {
         let mut grants = self.grants.lock().unwrap();
         let files = grants.entry(machine.to_owned()).or_default();
         for path in paths {
-            info!(%machine, path = %path.display(), "picked for the machine");
-            files.insert(path, access);
+            // Not following a link: a folder is one the person picked as
+            // a folder.
+            let tree = std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir());
+            info!(%machine, path = %path.display(), tree, "picked for the machine");
+            files.insert(path, Access { tree, ..access });
         }
         if let Ok(bytes) = serde_json::to_vec(&*grants) {
             let _ = std::fs::write(GRANTS, bytes);
         }
     }
 
+    /// Whether `machine` may do `check` to `path`: a file picked for it,
+    /// or anything under a folder picked for it.
     fn allowed(&self, machine: &str, path: &Path, check: impl Fn(&Access) -> bool) -> bool {
-        self.grants
+        let exact = self
+            .grants
             .lock()
             .unwrap()
             .get(machine)
             .and_then(|files| files.get(path))
-            .is_some_and(check)
+            .is_some_and(&check);
+        exact || self.under_tree(machine, path, check)
+    }
+
+    /// Whether `path` is strictly under a folder picked for `machine`, by
+    /// its name and by where it really is: a link in the folder that
+    /// leads out of it does not take the machine along.
+    fn under_tree(&self, machine: &str, path: &Path, check: impl Fn(&Access) -> bool) -> bool {
+        let roots: Vec<PathBuf> = self
+            .grants
+            .lock()
+            .unwrap()
+            .get(machine)
+            .map(|files| {
+                files
+                    .iter()
+                    .filter(|(_, access)| access.tree && check(access))
+                    .map(|(root, _)| root.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        roots.iter().any(|root| within(root, path))
     }
 
     /// Runs a helper as the person and passes on what it prints: its
     /// first line, the kind, and then its bytes.
-    fn fetch(&self, person: &Person, args: &[&std::ffi::OsStr], stream: &mut impl Stream) -> io::Result<()> {
+    fn fetch(
+        &self,
+        person: &Person,
+        args: &[&std::ffi::OsStr],
+        stream: &mut impl Stream,
+    ) -> io::Result<()> {
         let mut child = match as_person(person, args).stdout(Stdio::piped()).spawn() {
             Ok(child) => child,
             Err(e) => return write_json(stream, &Reply::failed(e)),
@@ -518,7 +598,8 @@ fn store(person: &Person, path: &Path, stream: &mut impl Read) -> Reply {
 /// This program, run as `person` with nothing of root's: their uid, gid
 /// and groups, and an environment of their own.
 fn as_person(person: &Person, args: &[&std::ffi::OsStr]) -> Command {
-    let mut command = Command::new(std::env::current_exe().unwrap_or_else(|_| "losos-portal".into()));
+    let mut command =
+        Command::new(std::env::current_exe().unwrap_or_else(|_| "losos-portal".into()));
     command
         .args(args)
         .env_clear()
@@ -583,26 +664,89 @@ pub fn active_person() -> Option<Person> {
     Person::named(&name)
 }
 
+/// Whether `path` is strictly under `root`: every part of it a plain
+/// name, and the deepest part that exists, links followed, still under
+/// `root` with its links followed.
+fn within(root: &Path, path: &Path) -> bool {
+    use std::path::Component;
+    let Ok(rest) = path.strip_prefix(root) else {
+        return false;
+    };
+    if rest.as_os_str().is_empty() || !rest.components().all(|c| matches!(c, Component::Normal(_)))
+    {
+        return false;
+    }
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    // The file itself may be new, and so may folders above it; a link as
+    // the last part is replaced, not followed, when it is written.
+    let mut existing = path.parent();
+    while let Some(dir) = existing {
+        if let Ok(real) = dir.canonicalize() {
+            return real.starts_with(&root);
+        }
+        existing = dir.parent();
+    }
+    false
+}
+
+/// A machine libvirt runs.
+struct Found {
+    name: String,
+    /// The person it belongs to, when pm made it for one.
+    person: Option<String>,
+}
+
+/// pm's metadata on a machine's libvirt definition.
+const PM_MACHINE_NS: &str = "https://losos-project.github.io/xmlns/pm-machine/1";
+
 /// The libvirt machine whose vsock address is `cid`.
-fn machine_at(cid: u32) -> Option<String> {
-    let names = Command::new("virsh").args(["-q", "list", "--name"]).output().ok()?;
+fn machine_at(cid: u32) -> Option<Found> {
+    let names = Command::new("virsh")
+        .args(["-q", "list", "--name"])
+        .output()
+        .ok()?;
     let wanted = format!("address='{cid}'");
     let wanted_dq = format!("address=\"{cid}\"");
     String::from_utf8_lossy(&names.stdout)
         .lines()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .find(|name| {
-            Command::new("virsh")
+        .find_map(|name| {
+            let xml = Command::new("virsh")
                 .args(["-q", "dumpxml", name])
                 .output()
-                .is_ok_and(|xml| {
-                    String::from_utf8_lossy(&xml.stdout)
-                        .lines()
-                        .any(|line| line.contains("<cid ") && (line.contains(&wanted) || line.contains(&wanted_dq)))
+                .ok()?;
+            let xml = String::from_utf8_lossy(&xml.stdout);
+            xml.lines()
+                .any(|line| {
+                    line.contains("<cid ") && (line.contains(&wanted) || line.contains(&wanted_dq))
+                })
+                .then(|| Found {
+                    name: name.to_owned(),
+                    person: pm_person(&xml),
                 })
         })
-        .map(str::to_owned)
+}
+
+/// The account named in `<pm:person>` under pm's metadata, whatever
+/// prefix libvirt gave its namespace.
+fn pm_person(xml: &str) -> Option<String> {
+    let at = xml.find(PM_MACHINE_NS)?;
+    // `xmlns:pm='…'` or `xmlns="…"`, just before the namespace.
+    let before = xml[..at].trim_end_matches(['\'', '"', '=']);
+    let declaration = &before[before.rfind("xmlns")?..];
+    let prefix = declaration
+        .strip_prefix("xmlns:")
+        .map(|p| format!("{p}:"))
+        .unwrap_or_default();
+    let open = format!("<{prefix}person>");
+    let close = format!("</{prefix}person>");
+    let start = xml[at..].find(&open)? + at + open.len();
+    let end = xml[start..].find(&close)? + start;
+    let name = xml[start..end].trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
@@ -676,7 +820,11 @@ mod tests {
             "uri".to_owned(),
             OwnedValue::try_from(Value::from("file:///home/a/Pictures/s.png")).unwrap(),
         );
-        relay.grant("work", SCREENSHOT, &crate::response_body(0, results).unwrap());
+        relay.grant(
+            "work",
+            SCREENSHOT,
+            &crate::response_body(0, results).unwrap(),
+        );
         let shot = Path::new("/home/a/Pictures/s.png");
         assert!(relay.allowed("work", shot, |a| a.read));
         assert!(!relay.allowed("work", shot, |a| a.write));
@@ -690,8 +838,52 @@ mod tests {
             "uris".to_owned(),
             OwnedValue::try_from(Value::from(vec!["file:///home/a/x"])).unwrap(),
         );
-        relay.grant("work", FILE_CHOOSER, &crate::response_body(1, results).unwrap());
+        relay.grant(
+            "work",
+            FILE_CHOOSER,
+            &crate::response_body(1, results).unwrap(),
+        );
         assert!(!relay.allowed("work", Path::new("/home/a/x"), |a| a.read));
+    }
+
+    #[test]
+    fn a_folder_counts_with_what_is_under_it() {
+        let home = std::env::temp_dir().join(format!("losos-portal-relay-{}", std::process::id()));
+        let project = home.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh"), project.join("keys")).unwrap();
+        let relay = relay();
+        let uri = crate::uri_from_path(&project);
+        relay.grant("agent-a", FILE_CHOOSER, &picked(&[&uri]));
+        let write = |p: &Path| relay.allowed("agent-a", p, |a| a.write);
+        assert!(write(&project.join("src/main.rs")));
+        // New folders under it, too.
+        assert!(write(&project.join("new/dir/file")));
+        assert!(!write(&project.join("../.ssh/authorized_keys")));
+        assert!(!write(&home.join(".ssh/authorized_keys")));
+        // A link in the folder that leads out of it.
+        assert!(!write(&project.join("keys/authorized_keys")));
+        // Never the folder itself, to remove.
+        assert!(relay.under_tree("agent-a", &project.join("src"), |a| a.write));
+        assert!(!relay.under_tree("agent-a", &project, |a| a.write));
+        // A file picked alone is not a folder.
+        std::fs::write(home.join("note.txt"), "").unwrap();
+        let note = crate::uri_from_path(&home.join("note.txt"));
+        relay.grant("agent-a", FILE_CHOOSER, &picked(&[&note]));
+        assert!(!write(&home.join("note.txt/x")));
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn reads_the_person_from_pm_metadata() {
+        let xml = "<domain type='kvm'>\n  <name>agent-alice</name>\n  <metadata>\n    <pm:machine xmlns:pm=\"https://losos-project.github.io/xmlns/pm-machine/1\">\n      <pm:person>alice</pm:person>\n    </pm:machine>\n  </metadata>\n</domain>";
+        assert_eq!(pm_person(xml).as_deref(), Some("alice"));
+        let other = xml.replace("pm:", "m:").replace("xmlns:pm", "xmlns:m");
+        assert_eq!(pm_person(&other).as_deref(), Some("alice"));
+        assert_eq!(pm_person("<domain><name>work</name></domain>"), None);
+        let without = xml.replace("<pm:person>alice</pm:person>", "");
+        assert_eq!(pm_person(&without), None);
     }
 
     #[test]
@@ -703,6 +895,9 @@ mod tests {
             home: "/home/alice".into(),
             gecos: "Alice: B\nC".into(),
         };
-        assert_eq!(person_line(&person), "alice:1000:100:Alice  B C:/home/alice\n");
+        assert_eq!(
+            person_line(&person),
+            "alice:1000:100:Alice  B C:/home/alice\n"
+        );
     }
 }

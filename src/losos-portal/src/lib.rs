@@ -117,6 +117,10 @@ pub enum Request {
     /// whole: its bytes follow in frames ended by an empty one, then a
     /// [`Reply`].
     Store { path: String },
+    /// A file, or an empty folder, under a folder the person picked for
+    /// this machine, removed because an app in the machine removed its
+    /// copy: a [`Reply`] comes back.
+    Remove { path: String },
     /// A picture for the Wallpaper portal, which reads it on the host:
     /// its bytes follow as for `store`, and the [`Reply`]'s `path` is where
     /// it landed.
@@ -428,8 +432,7 @@ pub fn connect_privileged(cid: u32, port: u32) -> io::Result<vsock::VsockStream>
     let mut last = io::Error::from(io::ErrorKind::AddrInUse);
     for local in PRIVILEGED_PORTS.rev() {
         // SAFETY: a plain socket call; the fd is owned at once.
-        let fd =
-            unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+        let fd = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -437,8 +440,13 @@ pub fn connect_privileged(cid: u32, port: u32) -> io::Result<vsock::VsockStream>
         let fd = unsafe { OwnedFd::from_raw_fd(fd) };
         let mine = address(libc::VMADDR_CID_ANY, local);
         // SAFETY: mine is a valid sockaddr_vm of len bytes.
-        if unsafe { libc::bind(fd.as_raw_fd(), (&mine as *const libc::sockaddr_vm).cast(), len) }
-            != 0
+        if unsafe {
+            libc::bind(
+                fd.as_raw_fd(),
+                (&mine as *const libc::sockaddr_vm).cast(),
+                len,
+            )
+        } != 0
         {
             last = io::Error::last_os_error();
             if last.kind() == io::ErrorKind::AddrInUse {
@@ -587,7 +595,10 @@ mod tests {
         assert_eq!(body.signature, "osssa{sv}");
         let fields = body.fields().unwrap();
         assert_eq!(fields.len(), 5);
-        assert_eq!(String::try_from(fields[3].try_clone().unwrap()).unwrap(), "Open");
+        assert_eq!(
+            String::try_from(fields[3].try_clone().unwrap()).unwrap(),
+            "Open"
+        );
     }
 
     #[test]

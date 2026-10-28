@@ -40,8 +40,11 @@
     another machine's display, so they open as windows of their own.
   - What a machine may write back is kept until the host restarts. After
     that, saving a copy a machine was given before changes only the copy.
-  - A folder picked for an app in a machine is copied in to read. Changes
-    to it are not written back.
+  - A folder picked for an app in a machine goes back file by file. An
+    empty folder made in the copy reaches the host only once a file is
+    put in it, and a link made in the copy stays in the machine.
+  - Changes made to a picked folder on the host after it was copied do
+    not reach the machine's copy.
   - Only the files and screenshot portals copy files. A portal that hands
     an app a file in another way, such as the Account portal's picture,
     hands a machine's app a path it cannot open.

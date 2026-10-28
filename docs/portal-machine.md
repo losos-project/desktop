@@ -48,8 +48,15 @@ place picked the same way. A machine can fetch and write only the files
 picked for it, and the relay does both as the person, so the kernel checks
 their own access.
 
-A folder picked for an app in a machine is copied in whole. Changes to
-it stay in the machine.
+A folder picked for an app in a machine is copied in whole, and it goes
+back the same way. A file the app saves or adds anywhere in the copy is
+written to the same place in the host's folder, and a file it removes is
+removed there. The relay lets the machine write only under that folder,
+and a link in the folder that leads out of it does not count as under it.
+
+A machine pm made for one person, such as their Agent machine, says so in
+its libvirt definition (`<pm:person>`). The relay answers it only while
+that person is the one in front.
 
 A picture an app in a machine makes the wallpaper goes the other way:
 the relay copies it to `~/.cache/losos-portal/uploads` on the host, where

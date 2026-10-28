@@ -44,7 +44,11 @@ pub fn run() -> Result<()> {
         match stream.peer_addr() {
             Ok(peer) if peer.cid() == HOST_CID && PRIVILEGED_PORTS.contains(&peer.port()) => {}
             Ok(peer) => {
-                warn!(cid = peer.cid(), port = peer.port(), "refused: not the host's relay");
+                warn!(
+                    cid = peer.cid(),
+                    port = peer.port(),
+                    "refused: not the host's relay"
+                );
                 continue;
             }
             Err(e) => {
