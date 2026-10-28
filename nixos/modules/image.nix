@@ -67,16 +67,21 @@ in
     # filesystem, marks it SYSTEMD_READY=0, and the initrd waits out the
     # device with /usr unmounted. A later -b wins over repart's own.
     #
-    # Compressed with LZ4HC, because every release has to fit the fixed
-    # update slot an installed disk already has (losos.usrSize, 8G): the
-    # store had reached 7.7G uncompressed, and Sonne's 0.9G took it past.
-    # Sonne has left since; the compression stays as the slot's headroom.
-    # LZ4 decompresses faster than the disk reads, and the kernel's erofs
-    # carries it (CONFIG_EROFS_FS_ZIP); a sample of the store came out at
-    # 53% of its size.
+    # Compressed, because every release has to fit the fixed update slot an
+    # installed disk already has (losos.usrSize, 8G; releaseArtifacts
+    # refuses a /usr that does not). LZ4HC did until the store grew past it:
+    # the 23 October 2026 nightly's /usr was 8.24G, 11.7G uncompressed.
+    # The same store as Zstandard level 3 in 128K physical clusters (-C) is
+    # 7.32G. On a 3G part of it, level 3 took 41s where LZ4HC 12 took 112s,
+    # level 9 saved 2% more in four times as long, and libdeflate 9 saved
+    # less than level 3. A third of the store is the machine templates (machines.nix),
+    # compressed qcow2 that nothing here shrinks. The kernel's erofs reads
+    # Zstandard (CONFIG_EROFS_FS_ZIP_ZSTD, on in nixpkgs from 6.10); it has
+    # no LZMA.
     mkfsOptions.erofs = [
       "-b4096"
-      "-zlz4hc,level=12"
+      "-zzstd,level=3"
+      "-C131072"
     ];
 
     partitions = {
@@ -189,6 +194,19 @@ in
             skip="$offset" count="$size" status=none
           xz --threads=$NIX_BUILD_CORES "${prefix}_''${type}_$uuid.raw"
         }
+
+        # Every installed disk has /usr slots of losos.usrSize, which cannot
+        # grow, so a /usr larger than that is a release nothing can install
+        # or update to. The nightlies from 22 October 2026 were: their
+        # store passed 8G, and installs stopped at 97% with "File too
+        # large".
+        usr=$(jq -er '.[] | select(.type=="${arch.usr}") | .raw_size' ${image}/repart-output.json)
+        slot=$(numfmt --from=iec ${cfg.usrSize})
+        if [ "$usr" -gt "$slot" ]; then
+          echo "/usr is $(numfmt --to=iec "$usr"), larger than its ${cfg.usrSize} update slot (losos.usrSize)" >&2
+          exit 1
+        fi
+        echo "/usr is $(numfmt --to=iec "$usr") of its ${cfg.usrSize} slot"
 
         cp ${config.system.build.uki}/${ukiFile} ${prefix}_${arch.name}.efi
         ${lib.optionalString (config.system.build ? biosBootFiles) ''
