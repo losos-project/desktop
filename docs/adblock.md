@@ -14,6 +14,9 @@ records for other types, so a program fails at once instead of retrying. It
 passes every other query on, byte for byte, to the servers the network gave.
 It asks NetworkManager for those with `nmcli`, and asks again whenever none
 of them answers.
+While `/run/losos-adblock/upstreams` exists, its `nameserver` lines are the
+only servers the forwarder uses. [Schizo mode](schizo-mode.md) writes the Tor
+gateway there.
 
 This half covers Flatpaks, the Android layer and anything else that resolves
 names, but it can only block whole domains. A local network's names still

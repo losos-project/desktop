@@ -7,6 +7,7 @@ module.exports = {
     'index',
     'building',
     'troubleshooting',
+    'reporting',
     {
       type: 'category',
       label: 'The system',
@@ -32,6 +33,7 @@ module.exports = {
         'allocator',
         'security-report',
         'kernel-hardening',
+        'schizo-mode',
       ],
     },
     {

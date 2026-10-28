@@ -79,8 +79,8 @@ in
 
     release.repository = mkOption {
       type = types.nullOr types.str;
-      default = "losos-project/losos-desktop";
-      example = "someone/losos-desktop";
+      default = "losos-project/desktop";
+      example = "someone/desktop";
       description = ''
         The GitHub repository, `owner/name`, whose release of this version
         the installer ISO installs (docs/releases.md). The flake sets it from
@@ -95,12 +95,13 @@ in
         default = null;
         example = "Iv23liAbCdEfGhIjKlMn";
         description = ''
-          The client ID of the GitHub App the installer signs in with to
-          report a failed install as an issue (docs/installer.md, "Reporting
-          a failed install"). It is not a secret: GitHub shows it on the
+          The client ID of the GitHub App that the installer and the
+          desktop sign in with to report a problem as an issue: a failed
+          install (docs/installer.md, "Reporting a failed install"), or a
+          window, service or action that stopped responding
+          (docs/reporting.md). It is not a secret: GitHub shows it on the
           sign-in page. The flake sets it from LOSOS_REPORT_CLIENT_ID, a
-          repository variable in CI; with none, the installer offers no
-          report.
+          repository variable in CI; with none, nothing offers a report.
         '';
       };
       repository = mkOption {
@@ -108,19 +109,35 @@ in
         default = config.losos.release.repository;
         defaultText = lib.literalExpression "config.losos.release.repository";
         description = ''
-          The repository, `owner/name`, that failed installs are reported to,
-          the one the releases come from unless set.
+          The repository, `owner/name`, that problems are reported to, the
+          one the releases come from unless set.
         '';
       };
     };
 
     docs.url = mkOption {
       type = types.nullOr types.str;
-      default = "https://losos-project.github.io/losos-desktop";
+      # GitHub Pages serves a repository's site at /<name>/, so the site
+      # moves when the repository is renamed and the old path answers 404;
+      # it does not redirect. The address was written out here once, and
+      # when losos-desktop became desktop every image went on asking the
+      # old path for its update index: none of them could update, and no
+      # ISO could install over the network. Taken from the repository the
+      # releases come from, it follows a rename or a fork's CI by itself.
+      default =
+        let
+          repository = config.losos.release.repository;
+          owner = lib.toLower (builtins.head (lib.splitString "/" repository));
+          name = lib.last (lib.splitString "/" repository);
+        in
+        if repository == null then null else "https://${owner}.github.io/${name}";
+      defaultText = lib.literalExpression ''"https://<owner>.github.io/<name>", from config.losos.release.repository'';
       description = ''
         The published documentation site, where derisk's error alerts open a
-        section the image's own copy lacks (docs.nix). `null` keeps them to
-        the copy on the machine.
+        section the image's own copy lacks (docs.nix), and whose
+        `updates/` holds each channel's release index (update-source.nix).
+        `null` keeps the alerts to the copy on the machine and serves no
+        updates from GitHub Releases.
       '';
     };
 

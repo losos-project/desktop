@@ -397,7 +397,8 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
                             }
                         });
                     };
-                    if let Err(e) = report::send(&target, &built, &note, &scratch, &stop, tell) {
+                    let body = report::with_note(&built, report::NOTE_HEADING, &note);
+                    if let Err(e) = report::send(&target, &built, &body, &scratch, &stop, tell) {
                         let _ = events.send(report_failed(e));
                     }
                 });

@@ -27,6 +27,7 @@
     # No perl in its closure, as on the host (base.nix): the /etc overlay
     # instead of the activation script that needs it.
     "${modulesPath}/profiles/perlless.nix"
+    ./kicksecure.nix
   ];
 
   options.losos.service = {

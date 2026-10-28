@@ -11,6 +11,9 @@ miette = { version = "7.6.0", features = ["fancy"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde_json = "1"
+# Signing in to GitHub and filing a report, shared with the desktop's own
+# reporter.
+losos-report = { path = "../losos-report" }
 
 # Fat LTO and one codegen unit, as every Rust crate in losos-desktop builds:
 # the release binary is the one on the installer ISO, so it trades build time
