@@ -40,6 +40,9 @@ let
 in
 {
   name = "losos-desktop-peripherals";
+  # sys-usb boots under emulation four times over, and the files machine
+  # and a disposable machine besides.
+  globalTimeout = 2 * 3600;
 
   node.pkgsReadOnly = false;
 
@@ -94,11 +97,23 @@ in
         qemu.options = [
           "-machine q35,kernel-irqchip=split"
           "-device intel-iommu,intremap=on,caching-mode=on"
-          "-device qemu-xhci,id=pt,addr=0x1d"
+          "-device qemu-xhci,id=pt,addr=0x0e"
           "-audiodev none,id=snd"
         ];
       };
 
+      # The console a screenshot shows: which machines run, and where each
+      # device went.
+      environment.systemPackages = [
+        (pkgs.writeShellScriptBin "losos-test-show" ''
+          printf '\033c'
+          echo
+          virsh -c qemu:///system list --all
+          ${pkgs.jq}/bin/jq -r '.[] | "\(.busid)  \(.name)  ->  \(.machine // "host")"' \
+            /run/losos-peripherals/devices.json
+          lsblk -o NAME,SIZE,TRAN
+        '')
+      ];
       users.users.alice = {
         isNormalUser = true;
         uid = 1000;
@@ -113,7 +128,7 @@ in
     ''
       import json
 
-      pt = "0000:00:1d.0"
+      pt = "0000:00:0e.0"
       plugs = 0
 
       virsh = "virsh -c qemu:///system"
@@ -169,6 +184,12 @@ in
           )
           retry(lambda _: controller_driver() == "xhci_hcd", 120)
 
+      # What a person would see on the console: which machines run, and
+      # where each device went.
+      def show(name):
+          machine.execute("losos-test-show > /dev/tty1 2>&1")
+          machine.screenshot(name)
+
       machine.wait_for_unit("losos-peripherals.service")
 
       with subtest("pt is sys-usb's, held by the router, and nothing runs yet"):
@@ -187,6 +208,8 @@ in
           for cycle in range(3):
               s = plug("usb-storage")
               wait(routed("sys-files"), f"stick {s} in the files machine")
+              if cycle == 0:
+                  show("stick-in-sys-files")
               machine.succeed("systemctl is-active losos-service-machine-sys-usb.service")
               assert controller_driver() == "vfio-pci", controller_driver()
               unplug(s)
@@ -207,6 +230,7 @@ in
           for _ in range(2):
               many = [plug("usb-storage") for _ in range(6)]
               wait(routed("sys-files", 7), "six sticks")
+              show("six-sticks")
               for n in many:
                   unplug(n)
               wait(lambda ds: not routed("sys-files", 2)(ds), "six sticks to go")
@@ -215,6 +239,7 @@ in
           card = plug("usb-audio", audiodev="snd")
           wait(lambda ds: any(d["route"] == "audio" and not d["pending"] for d in ds), "the sound card")
           machine.succeed("virsh -c qemu:///system list --name | grep -q '^disposable-'")
+          show("sound-card-in-disposable")
           machine.succeed("virsh -c qemu:///system dumpxml $(virsh -c qemu:///system list --name | grep '^disposable-') | grep -q '<pm:service>true</pm:service>'")
           unplug(card)
           retry(lambda _: machine.execute("virsh -c qemu:///system list --name | grep -q '^disposable-'")[0] != 0, 300)
