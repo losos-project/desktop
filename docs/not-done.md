@@ -4,6 +4,20 @@
   on a PC, or under KVM on an arm64 host, with a GPU from Reims. Nobody has
   booted macOS on it yet, no guest has drawn through Reims, and nothing in
   derisk starts it. [arm64 macOS machines](macos-arm64.md) lists the rest.
+- **Peripherals in their machines.** [Peripherals](peripherals.md) moves
+  USB devices and Bluetooth radios into machines of their own. Some of it
+  is not finished:
+  - Bluetooth headphones pair and connect in sys-bluetooth, but there is
+    no PipeWire there and no path for their sound to the host's.
+  - A camera or sound card in its disposable machine is driven there, but
+    nothing yet carries its video or sound back to apps on the host.
+  - A keyboard or mouse plugged into a port sys-usb holds comes to the
+    host over USB/IP, so the host parses its HID descriptors. Qubes's input
+    proxy, which passes only key and pointer events, is not done.
+  - A Bluetooth radio that is not on USB, on a UART or SDIO as on some
+    Arm laptops, stays the host's, and Settings does not see it.
+  - Controller passthrough has only run under QEMU, never on a PC's own
+    USB controllers.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
