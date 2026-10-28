@@ -103,6 +103,40 @@ in
     };
   };
 
+  # The company's Mesh CI jobs for this computer: `runs-on: [losos-desktop,
+  # <this computer>]` in a workflow of the box's LosOS Git
+  # (src/losos-login-bridge/src/manage.rs). It asks the box for work with
+  # the same token and runs only the fixed losos/desktop-* steps: status,
+  # update, reboot, channel, lock and unlock. It runs while a token exists;
+  # the path unit starts it when a join writes one, and it ends on leave.
+  systemd.services.losos-login-bridge-manage = {
+    description = "Running the company's Mesh CI jobs";
+    unitConfig.ConditionPathExists = "/var/lib/losos-login-bridge/directory-token";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    # systemctl and journalctl for update, channel and reboot, homectl and
+    # userdbctl for status, lock and unlock.
+    path = [ config.systemd.package ];
+    serviceConfig = {
+      ExecStart = "${lib.getExe bridge} manage";
+      Restart = "on-failure";
+      RestartSec = "30s";
+      ProtectHome = true;
+      PrivateTmp = true;
+      NoNewPrivileges = true;
+      RestrictAddressFamilies = [
+        "AF_UNIX"
+        "AF_INET"
+        "AF_INET6"
+      ];
+    };
+  };
+  systemd.paths.losos-login-bridge-manage = {
+    wantedBy = [ "paths.target" ];
+    pathConfig.PathExists = "/var/lib/losos-login-bridge/directory-token";
+  };
+
   systemd.services."losos-login-bridge@" = {
     description = "Joining this computer to a company's LosOS Login";
     # pkcheck, which asks polkit about the caller.

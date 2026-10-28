@@ -23,6 +23,7 @@
 pub mod homed;
 pub mod join;
 pub mod login;
+pub mod manage;
 pub mod pam;
 pub mod service;
 pub mod sync;

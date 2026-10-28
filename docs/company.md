@@ -132,14 +132,54 @@ password, so nothing else can do this step for them.
 
 > [!IMPORTANT]
 > While the computer is offline, the password that logs in is the one LosOS
-> Login last accepted on this computer. A password changed or an account
-> removed at the box takes effect here at the next login that reaches the box.
+> Login last accepted on this computer. A password changed at the box takes
+> effect here at the next login that reaches the box, and an account removed
+> or disabled there once the computer next sees the office network.
+
+### Someone the company let go
+
+Joining also gets the computer a token of its own for the box's people
+list. Every five minutes, while the computer is on the office network,
+`losos-login-bridge sync` reads that list. It locks the homed account of
+anyone the box no longer has or has disabled, and takes `wheel` from anyone
+no longer in an administrator group. It never unlocks anyone or grants
+anything: that waits for the person's own login, which LosOS Login answers.
+A box without the list (an older LosOS) joins as before, and the lock then
+waits for the next login that reaches it.
+
+## Managing the computer through Mesh CI
+
+The company manages its computers from a repository in the box's LosOS
+Git, with Mesh CI. A job whose `runs-on` is `[losos-desktop, <computer>]`
+waits on the box for that joined computer, and
+`losos-login-bridge-manage.service` asks the box for it with the same token,
+through lososd, on the office network. The LosOS handbook's Mesh CI page
+says how to write one.
+
+Such a job runs no shell and no other action. Its steps are only these:
+
+| Step | `with:` | What the computer does |
+|---|---|---|
+| `losos/desktop-status` | | Says its version, update channel and company accounts |
+| `losos/desktop-update` | | Runs `systemd-sysupdate` now |
+| `losos/desktop-reboot` | | Restarts a minute after the job ends |
+| `losos/desktop-channel` | `channel` | Follows another update channel (`losos-update-channel@`) |
+| `losos/desktop-lock` | `user` | Locks a company account |
+| `losos/desktop-unlock` | `user` | Unlocks a company account |
+
+The box refuses anything else when it plans the job, and the computer
+checks every step again before it runs any, so a job with one step it does
+not know runs nothing. Lock and unlock touch company accounts only. The
+service runs as root, which these steps need, and only while the computer
+has a token: a path unit starts it when a join writes one, and it ends on
+leave.
 
 ## Limits
 
 [What is not done](not-done.md) lists them too. In short:
 
-- Someone removed from LosOS Login is locked out only when they next try to
-  log in while the box answers.
+- A computer away from the office network is locked out of a removed
+  person's account only when it next sees that network, and takes Mesh CI
+  jobs only there.
 - There is no page in Settings for joining yet.
 - An account whose only second factor is a passkey cannot log in here.

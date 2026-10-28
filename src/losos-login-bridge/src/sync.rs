@@ -91,7 +91,7 @@ pub fn parse_homes(listing: &str) -> Vec<(String, Record)> {
         .collect()
 }
 
-fn homes() -> Vec<(String, Record)> {
+pub(crate) fn homes() -> Vec<(String, Record)> {
     homed::userdb(true, &[]).map_or_else(Vec::new, |listing| parse_homes(&listing))
 }
 

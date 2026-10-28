@@ -11,7 +11,10 @@
 # in the realm `office`, an administrator of the box becomes one here, a
 # wrong password and a person disabled at the box are refused, the box out
 # of reach falls back to homed for those who logged in before and to
-# nobody else, and a password changed at the box re-keys the home.
+# nobody else, and a password changed at the box re-keys the home. Between
+# logins the box's people list locks those it removed, and the company's
+# Mesh CI jobs (a stand-in for the box's, as lososd relays them) run their
+# fixed steps here and refuse anything else.
 #
 # Not the whole image, only what the bridge needs, so it boots the test
 # driver's kernel quickly and runs without KVM too.
@@ -119,6 +122,54 @@ let
       member = "office-1";
     };
   };
+  # A stand-in for the box's Mesh CI as lososd relays it to a joined
+  # computer: a job the test puts in /var/lib/fake-ci/queued.json is handed
+  # out once, and every report is kept, one JSON line each.
+  fakeCi =
+    pkgs:
+    pkgs.writers.writePython3 "fake-mesh-ci" { flakeIgnore = [ "E501" ]; } ''
+      import json
+      import os
+      import time
+      from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+      DIR = "/var/lib/fake-ci"
+      TOKEN = "Bearer ${directoryToken}"
+
+
+      class Handler(BaseHTTPRequestHandler):
+          def answer(self, code, body=None):
+              data = json.dumps(body).encode() if body is not None else b""
+              self.send_response(code)
+              self.send_header("Content-Type", "application/json")
+              self.send_header("Content-Length", str(len(data)))
+              self.end_headers()
+              self.wfile.write(data)
+
+          def do_POST(self):
+              length = int(self.headers.get("Content-Length") or 0)
+              body = self.rfile.read(length)
+              if self.headers.get("Authorization") != TOKEN:
+                  return self.answer(401, {"error": "nobody"})
+              if self.path == "/api/directory/jobs/claim":
+                  queued = os.path.join(DIR, "queued.json")
+                  for _ in range(4):
+                      if os.path.exists(queued):
+                          with open(queued) as f:
+                              job = json.load(f)
+                          os.remove(queued)
+                          return self.answer(200, job)
+                      time.sleep(0.5)
+                  return self.answer(204)
+              if self.path == "/api/directory/jobs/report":
+                  with open(os.path.join(DIR, "reports.jsonl"), "a") as f:
+                      f.write(body.decode() + "\n")
+                  return self.answer(200, {"stop": False})
+              self.answer(404, {"error": "not found"})
+
+
+      ThreadingHTTPServer(("127.0.0.1", 8099), Handler).serve_forever()
+    '';
 in
 {
   name = "losos-desktop-company";
@@ -210,6 +261,13 @@ in
           mode = "0644";
         };
       };
+      systemd.services.fake-mesh-ci = {
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          ExecStart = fakeCi pkgs;
+          StateDirectory = "fake-ci";
+        };
+      };
       services.nginx = {
         enable = true;
         virtualHosts.${boxName} = {
@@ -238,6 +296,7 @@ in
             default_type application/json;
             return 200 '{"token":"${directoryToken}","computer":{"id":"0123abcd","device":"desktop"}}';
           '';
+          locations."/api/directory/jobs/".proxyPass = "http://127.0.0.1:8099";
           locations."= /api/directory/people".extraConfig = ''
             if ($http_authorization != "Bearer ${directoryToken}") {
               return 401;
@@ -400,10 +459,59 @@ in
         assert ok, out
         box.unblock()
 
-    with subtest("local accounts are not the bridge's"):
+    def ci_job(job_id, *steps):
+        """Hands the desktop a Mesh CI job and returns its reports once it
+        reported how it ended."""
+        job = {
+            "id": job_id,
+            "name": f"Fleet / {job_id}",
+            "timeoutSecs": 600,
+            "payload": {"desktop": "desktop", "steps": list(steps)},
+        }
+        box.succeed(f"echo {shlex.quote(json.dumps(job))} > /var/lib/fake-ci/queued.json.new")
+        box.succeed("mv /var/lib/fake-ci/queued.json.new /var/lib/fake-ci/queued.json")
+        box.wait_until_succeeds(
+            f"grep -h '\"id\": *\"{job_id}\"' /var/lib/fake-ci/reports.jsonl | grep -q state",
+            timeout=180,
+        )
+        lines = box.succeed("cat /var/lib/fake-ci/reports.jsonl").splitlines()
+        return [r for r in map(json.loads, lines) if r["id"] == job_id]
+
+    with subtest("the company's Mesh CI jobs run fixed steps here, and nothing else"):
+        desktop.wait_for_unit("losos-login-bridge-manage.service")
+        reports = ci_job(
+            "1",
+            {"uses": "losos/desktop-status", "with": {}, "name": "Status"},
+            {"uses": "losos/desktop-lock", "with": {"user": "carol"}, "name": "Lock carol"},
+        )
+        assert reports[-1]["state"] == "success", reports
+        log = "".join(r["log"] for r in reports)
+        assert "Company account ada" in log, log
+        assert "carol is locked" in log, log
+        assert record("carol").get("locked") is True, record("carol")
+
+        # A step outside the list: nothing of the job runs.
+        reports = ci_job(
+            "2",
+            {"uses": "losos/desktop-unlock", "with": {"user": "carol"}},
+            {"uses": "losos/desktop-shell", "with": {}},
+        )
+        assert reports[-1]["state"] == "error", reports
+        assert record("carol").get("locked") is True, record("carol")
+
+        # Nor does it touch an account that is not the company's.
         desktop.succeed(
             "NEWPASSWORD=Local-test-password-1 homectl create local --enforce-password-policy=no --no-ask-password"
         )
+        reports = ci_job("3", {"uses": "losos/desktop-lock", "with": {"user": "local"}})
+        assert reports[-1]["state"] == "failure", reports
+        assert record("local").get("locked") is not True, record("local")
+
+        reports = ci_job("4", {"uses": "losos/desktop-unlock", "with": {"user": "carol"}})
+        assert reports[-1]["state"] == "success", reports
+        assert record("carol").get("locked") is not True, record("carol")
+
+    with subtest("local accounts are not the bridge's"):
         box.block()
         ok, out = pam("local", "Local-test-password-1")
         assert ok, out
