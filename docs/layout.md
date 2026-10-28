@@ -37,6 +37,12 @@ Swap's key is random and nobody keeps it, so it is new every boot and nothing
 swapped out survives a power cut. That is also one reason nothing
 [hibernates](hibernation.md).
 
+Swap comes from the disk the system started from, as root and `/home` do.
+Every LosOS disk has a partition labelled `losos-swap`, so with two in one PC
+the label alone could name the other disk's. A udev rule in `disk.nix` links
+`/dev/disk/by-loader/swap` to the one beside the mounted root, and that link
+is what `crypttab` opens.
+
 This layout fixes two things the pm tree listed as limits:
 
 - **`/usr` really is immutable.** The pm tree's boot documentation named
