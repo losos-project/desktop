@@ -3,7 +3,7 @@
 # value here in a pull request when it tags a release; the hashes are the
 # client's sparse fetch, its vendored crates and the box's sparse fetch.
 {
-  rev = "88bbd5d65c69fee33b8a6a2c276d94f7d0a1c290";
+  rev = "21fd4c827363945b4533ccf7372a647e24144599";
   # The release, or the release this commit follows and the commit's date.
   version = "0.6.1-unstable-2026-10-28";
   # What `losos --version` says: the tag, or the newest tag before it.
