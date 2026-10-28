@@ -46,6 +46,25 @@
     };
   };
 
+  # The networkmanager group is how NixOS's polkit rule lets an account
+  # change networks, and first-boot setup and the Users page put every
+  # account they make in it. An account made any other way (homectl, or setup from before
+  # it did so) was not, and its Network page could list networks but not
+  # join one until someone ran `homectl update --member-of=` for it, which
+  # an inactive LUKS home asks its password for. Every account the system
+  # makes gets the group, so asking for it adds no rights: the person
+  # sitting at the machine may change its networks, as on any desktop.
+  # A remote session (ssh) or one in the background is still not let in.
+  security.polkit.extraConfig = ''
+    polkit.addRule(function (action, subject) {
+      if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0
+          && subject.local && subject.active) {
+        return polkit.Result.YES;
+      }
+      return polkit.Result.NOT_HANDLED;
+    });
+  '';
+
   # resolved answers mDNS and LLMNR for the whole machine, on the links
   # NetworkManager turns them on for above. DNS over TLS where the network's
   # server offers it; adblock.nix turns it off for its forwarder.
