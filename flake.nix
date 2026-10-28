@@ -301,6 +301,9 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # Encrypted DNS: names over HTTPS and no plain query leaving while
+          # it is on, failing closed when the server is gone (adblock.nix).
+          encrypted-dns = pkgs.testers.runNixOSTest ./nixos/tests/encrypted-dns.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;
