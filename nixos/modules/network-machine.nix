@@ -267,6 +267,16 @@ in
         }
       ];
       files."/etc/losos-netd.conf" = netdConfig;
+      kicksecure.sysctl = {
+        # The host checks the machine is up by pinging it, as the stress
+        # test does; nothing past the host can reach it to ping.
+        "net.ipv4.icmp_echo_ignore_all" = 0;
+        # Loose, not strict: strict drops the multicast replies the LAN's
+        # edges answer a DNS-SD browse with, and the machine routes for
+        # the host over a second interface.
+        "net.ipv4.conf.all.rp_filter" = 2;
+        "net.ipv4.conf.default.rp_filter" = 2;
+      };
     };
 
     losos.serviceMachines.${name} = {

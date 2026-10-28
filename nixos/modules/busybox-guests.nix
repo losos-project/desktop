@@ -30,6 +30,13 @@ let
   # The console QEMU's machine type has as its first serial port.
   console = if pkgs.stdenv.hostPlatform.isx86 then "ttyS0" else "ttyAMA0";
 
+  # Kicksecure's hardening, the same data the NixOS service machines take
+  # through kicksecure.nix: a BusyBox machine has no sysctl.d, so /init sets
+  # the sysctls, and its modprobe reads the modules from a modprobe.d file.
+  kicksecure = import ../guest/kicksecure-settings.nix {
+    inherit (pkgs.stdenv.hostPlatform) isx86;
+  };
+
   guest =
     { name, config, ... }:
     {
@@ -128,6 +135,35 @@ let
             machine's program.
           '';
         };
+        kicksecure = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = ''
+              Whether the machine is hardened the way Kicksecure hardens a
+              system (nixos/guest/kicksecure-settings.nix): its kernel
+              command line, its sysctls, and its rarely used kernel
+              modules never loading.
+            '';
+          };
+          allowModules = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            description = ''
+              Modules Kicksecure disables or blacklists that this machine
+              loads anyway, such as the network shares machine's cifs and
+              nfs.
+            '';
+          };
+          sysctl = lib.mkOption {
+            type = lib.types.attrsOf (lib.types.either lib.types.int lib.types.str);
+            default = { };
+            description = ''
+              Sysctls the machine sets in place of Kicksecure's, such as the
+              network machine's, which answers the host's pings.
+            '';
+          };
+        };
         build = lib.mkOption {
           type = lib.types.attrs;
           readOnly = true;
@@ -141,6 +177,23 @@ let
 
       config.build =
         let
+          hardened = config.kicksecure.enable;
+          allowed = config.kicksecure.allowModules;
+          # `install <module> false` stops a module even when it is asked
+          # for by name, as security-misc does it; a blacklisted one only
+          # never loads by its device's alias, which is how mdev asks.
+          modprobeConf = pkgs.writeText "losos-guest-${name}-kicksecure.conf" (
+            lib.concatMapStrings (m: "install ${m} /bin/false\n") (
+              lib.subtractLists allowed (lib.flatten (lib.attrValues kicksecure.disabledModules))
+            )
+            + lib.concatMapStrings (m: "blacklist ${m}\n") (
+              lib.subtractLists allowed kicksecure.blacklistedModules
+            )
+          );
+          sysctl = kicksecure.sysctl // config.kicksecure.sysctl;
+          files =
+            config.files // lib.optionalAttrs hardened { "/etc/modprobe.d/kicksecure.conf" = modprobeConf; };
+
           modules = pkgs.makeModulesClosure {
             kernel = config'.system.modulesTree;
             firmware = config'.hardware.firmware;
@@ -200,7 +253,7 @@ let
             mdevConf
             config'.system.modulesTree
           ]
-          ++ lib.attrValues config.files;
+          ++ lib.attrValues files;
 
           storeInit = ''
             #!${pkgs.busybox}/bin/sh
@@ -227,7 +280,7 @@ let
               lib.mapAttrsToList (target: object: ''
                 mkdir -p "$(dirname ${lib.escapeShellArg target})"
                 ln -sfn ${object} ${lib.escapeShellArg target}
-              '') (config.files // { "/etc/mdev.conf" = mdevConf; })
+              '') (files // { "/etc/mdev.conf" = mdevConf; })
             )}
             for tool in ${path}/bin/*; do
               ln -sf "$tool" /bin/
@@ -241,6 +294,14 @@ let
             mkdir -p /dev/pts /dev/shm
             mount -t devpts devpts /dev/pts
             hostname ${name}
+            ${lib.optionalString hardened (
+              lib.concatStrings (
+                lib.mapAttrsToList (key: value: ''
+                  sysctl -q -w ${lib.escapeShellArg "${key}=${toString value}"} \
+                    || echo "losos-guest: cannot set ${key}" >&2
+                '') sysctl
+              )
+            )}
             for m in virtio_pci vmw_vsock_virtio_transport 9pnet_virtio 9p ${lib.escapeShellArgs config.modules}; do
               modprobe -q "$m" || echo "losos-guest: cannot load $m" >&2
             done
@@ -291,7 +352,7 @@ let
           ++ lib.mapAttrsToList (target: object: {
             inherit object;
             symlink = target;
-          }) config.files;
+          }) files;
 
           hostContents = [
             {
@@ -309,6 +370,9 @@ let
           ];
         in
         {
+          # /init on its own, to read what a machine starts with without
+          # building its initrd.
+          inherit init;
           kernel = kernelFile;
           initrd = "${
             pkgs.makeInitrd {
@@ -327,6 +391,9 @@ let
               "loglevel=4"
             ]
             ++ lib.optional (config.firmwarePath != null) "firmware_class.path=${config.firmwarePath}"
+            # The kernel takes what it knows; what it does not reaches
+            # /init as arguments and variables, which it ignores.
+            ++ lib.optionals hardened kicksecure.kernelParams
           );
         };
     };
