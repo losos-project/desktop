@@ -110,6 +110,9 @@ in
   # The files machine's init and daemon: the storage it is given, mounted
   # there and served to the host (docs/files-machine.md).
   losos-filesd = callWithMold ./losos-filesd.nix { };
+  # sys-vpn's program (docs/vpn.md): the providers, the check of their
+  # WireGuard files on the host, and the tunnel in the machine.
+  losos-vpn = callWithMold ./losos-vpn.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.
