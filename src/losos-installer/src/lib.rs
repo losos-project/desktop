@@ -10,5 +10,6 @@
 pub mod disks;
 pub mod github;
 pub mod install;
+pub mod report;
 pub mod serve;
 pub mod stage;

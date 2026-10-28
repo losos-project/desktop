@@ -98,6 +98,9 @@ jobs:
       # while that deployment is down. The optional key configures it
       # alongside cache.nixos.org.
       LOSOS_PROXY_URL: ${{ vars.LOSOS_PROXY_URL }}
+      # The GitHub App the installer ISO signs in with to report a failed
+      # install as an issue (docs/installer.md); unset, it offers no report.
+      LOSOS_REPORT_CLIENT_ID: ${{ vars.LOSOS_REPORT_CLIENT_ID }}
       NIX_CACHE_URL: http://127.0.0.1:8484
       NIX_CACHE_PUBLIC_KEY: ${{ vars.NIX_CACHE_PUBLIC_KEY }}
       NIX_VERSION: "2.34.8"
@@ -942,7 +945,13 @@ jobs:
             | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           for arch in x86_64 aarch64; do
             reference=$(cat "refs/release-ref-$arch.txt")
-            repository=${reference%:*}
+            # `oras push --format json` reports the artifact by digest,
+            # `<repo>@sha256:<hex>`. Cutting at the last colon alone left
+            # `<repo>@sha256`, so every blob fetch asked for
+            # `<repo>@sha256@sha256:...` and no nightly was published after
+            # 2026-10-23. Drop a digest first, then a tag.
+            repository=${reference%@*}
+            repository=${repository%:*}
             manifest="$RUNNER_TEMP/release-manifest-$arch.json"
             layers="$RUNNER_TEMP/release-layers-$arch.tsv"
             oras manifest fetch "$reference" > "$manifest"

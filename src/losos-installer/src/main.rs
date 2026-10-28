@@ -20,7 +20,7 @@ use tracing_subscriber::EnvFilter;
 // only drift from it.
 const USAGE: &str = "usage: losos-installer serve --name NAME --repart-definitions DIR --sysupdate-definitions DIR \
 --esp DIR --medium DIR --work DIR [--source URL] [--index URL] [--local-source DIR] [--release-repo OWNER/NAME --release-version VERSION [--release-channel CHANNEL]] \
-[--bios-boot PROGRAM]";
+[--bios-boot PROGRAM] [--report-client-id ID [--report-repo OWNER/NAME] [--report-login URL] [--report-api URL]]";
 
 fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
     if args.next().as_deref() != Some("serve") {
@@ -46,6 +46,10 @@ fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
         release_repo: None,
         release_version: None,
         release_channel: None,
+        report_repo: None,
+        report_client_id: None,
+        report_login: None,
+        report_api: None,
     };
     while let Some(flag) = args.next() {
         let value = args
@@ -64,6 +68,11 @@ fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
             "--release-repo" => config.release_repo = Some(value),
             "--release-version" => config.release_version = Some(value),
             "--release-channel" => config.release_channel = Some(value),
+            "--report-repo" => config.report_repo = Some(value),
+            "--report-client-id" => config.report_client_id = Some(value),
+            // GitHub's own unless a test stands something in for it.
+            "--report-login" => config.report_login = Some(value),
+            "--report-api" => config.report_api = Some(value),
             "--name" => name = Some(value),
             _ => return Err(miette!(help = USAGE, "unknown argument {flag}")),
         }
