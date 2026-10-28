@@ -24,6 +24,7 @@
     ./kernel-hardening.nix
     ./pm.nix
     ./ping.nix
+    ./report.nix
     ./backup.nix
     ./docs.nix
     ./losos-boxes.nix

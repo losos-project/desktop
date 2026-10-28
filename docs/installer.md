@@ -165,6 +165,9 @@ whose only permission is issues. It stays in the backend's memory for that
 one report and is never written to disk. The page then shows the issue's
 address and its QR code.
 
+The desktop reports its own problems the same way, as
+[Reporting a problem](reporting.md) describes.
+
 The same failure on many machines should be one issue. A report's title ends
 with a fingerprint of its step and error message, with numbers and device
 names taken out, so `/dev/nvme0n1p2` and `/dev/sda2` match. When an open
