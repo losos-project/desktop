@@ -25,6 +25,7 @@ module.exports = {
         'first-boot',
         'sign-in',
         'users',
+        'company',
         'releases',
         'allocator',
         'security-report',

@@ -293,3 +293,12 @@
   setting to change that. They have run against Nextcloud and Forgejo laid
   out the way a box lays them out, not against a real box. See
   [Backups to a LosOS box](backup.md).
+- **Company accounts are half done.** The bridge logs people in with their
+  LosOS Login password and keeps their homed records in step at each login.
+  Nothing tells the computer that someone was removed from LosOS Login
+  until they try to log in while the box answers, and the box has no route
+  that lists its people to a joined computer yet. Joining is a command, with no Settings
+  page. An account whose only second factor is a passkey cannot log in,
+  because PAM cannot ask for one. The bridge has logged in against Authelia
+  set up as LosOS Login sets it up, not against a real box behind a real
+  gateway. See [Company accounts](company.md).

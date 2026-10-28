@@ -1,0 +1,351 @@
+# Company accounts (company.nix, docs/company.md).
+#
+# `box` is a LosOS box as far as the bridge can tell: Authelia, which is
+# what LosOS Login is, under /auth/ behind one nginx with a self-signed
+# certificate for testbox.local, made and stated under /setup/ the way the
+# box does it (modules/tls.nix in the LosOS repository), and a `GET
+# /api/edge` behind Authelia that names a gateway of the secondary cluster
+# `office`, as lososd says when the box goes through one. `desktop` has
+# homed, the bridge and the console's PAM stack. It is joined to the box,
+# then people log in through PAM: the first login makes each a homed record
+# in the realm `office`, an administrator of the box becomes one here, a
+# wrong password and a person disabled at the box are refused, the box out
+# of reach falls back to homed for those who logged in before and to
+# nobody else, and a password changed at the box re-keys the home.
+#
+# Not the whole image, only what the bridge needs, so it boots the test
+# driver's kernel quickly and runs without KVM too.
+{ lib, ... }:
+
+let
+  boxName = "testbox.local";
+  adaPassword = "Ada-test-password-1";
+  bobPassword = "Bob-test-password-1";
+  bobNewPassword = "Bob-test-password-2";
+  carolPassword = "Carol-test-password-1";
+  # The box's certificate as tls.nix makes it, with state.json's
+  # fingerprint, made once at build time.
+  certificate =
+    pkgs:
+    pkgs.runCommand "testbox-certificate" { nativeBuildInputs = [ pkgs.openssl ]; } ''
+      mkdir -p $out/setup
+      openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+        -keyout $out/box.key -out $out/box.crt \
+        -subj "/CN=${boxName}/O=losos" \
+        -addext "subjectAltName=DNS:${boxName},DNS:testbox,DNS:localhost,IP:127.0.0.1" \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,digitalSignature,keyCertSign"
+      cp $out/box.crt $out/setup/losos-ca.crt
+      hex=$(openssl x509 -in $out/box.crt -noout -fingerprint -sha256 | cut -d= -f2 | tr -d : | tr A-F a-f)
+      printf '{"hostName":"testbox","fqdn":"${boxName}","fingerprint":"sha256:%s"}' "$hex" > $out/setup/state.json
+    '';
+  # LosOS Login's people file as lososd writes it: argon2id hashes in
+  # Authelia's format. Three versions: as joined, after bob changed his
+  # password, and with bob disabled.
+  people =
+    pkgs:
+    pkgs.runCommand "testbox-people" { nativeBuildInputs = [ pkgs.authelia ]; } ''
+      hash() { authelia crypto hash generate argon2 --password "$1" | sed -n 's/^Digest: //p'; }
+      ada=$(hash ${adaPassword}); bob=$(hash ${bobPassword}); bob2=$(hash ${bobNewPassword})
+      carol=$(hash ${carolPassword})
+      write() {
+        cat > $out/$1 <<EOF
+      users:
+        ada:
+          displayname: Ada Lovelace
+          email: ada@example.com
+          password: "$ada"
+          groups: [losos-admins]
+        bob:
+          displayname: Bob Builder
+          password: "$2"
+          disabled: $3
+          groups: [staff]
+        carol:
+          displayname: Carol
+          password: "$carol"
+          groups: [staff]
+      EOF
+      }
+      mkdir -p $out
+      write joined.yml "$bob" false
+      write changed.yml "$bob2" false
+      write disabled.yml "$bob2" true
+    '';
+  # What lososd's `GET /api/edge` says on a box that goes through a gateway
+  # of the secondary cluster `office`.
+  edge = builtins.toJSON {
+    path = {
+      name = "office-1";
+      url = "http://gateway.local:8443";
+      tunnel = "gateway.local:7000";
+      source = "lan";
+      tier = "secondary";
+      cluster = "office";
+      member = "office-1";
+    };
+  };
+in
+{
+  name = "losos-desktop-company";
+
+  # The desktop's packages come from the OS's overlay; the box's are
+  # nixpkgs' own.
+  node.pkgsReadOnly = false;
+
+  nodes.box =
+    { pkgs, ... }:
+    let
+      cert = certificate pkgs;
+      authz = ''
+        internal;
+        proxy_pass http://127.0.0.1:9091/auth/api/authz/auth-request;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-Method $request_method;
+        proxy_set_header X-Original-URL https://$host$request_uri;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+      '';
+    in
+    {
+      environment.systemPackages = [ pkgs.curl ];
+      networking.firewall.allowedTCPPorts = [
+        80
+        443
+      ];
+      services.authelia.instances.losos = {
+        enable = true;
+        secrets = {
+          storageEncryptionKeyFile = "/etc/authelia/storage";
+          jwtSecretFile = "/etc/authelia/jwt";
+          sessionSecretFile = "/etc/authelia/session";
+        };
+        # As modules/identity.nix in the LosOS repository has it, where it
+        # matters here: under /auth, the file backend read on every request,
+        # everyone with an account let through at one factor.
+        settings = {
+          server.address = "tcp://127.0.0.1:9091/auth";
+          ntp.disable_startup_check = true;
+          authentication_backend = {
+            password_reset.disable = true;
+            password_change.disable = true;
+            refresh_interval = "always";
+            file = {
+              path = "/var/lib/losos-identity/users.yml";
+              watch = true;
+            };
+          };
+          access_control = {
+            default_policy = "deny";
+            rules = [
+              {
+                domain = boxName;
+                policy = "one_factor";
+              }
+            ];
+          };
+          # A test of wrong passwords must not get its people banned.
+          regulation.max_retries = 0;
+          session.cookies = [
+            {
+              domain = boxName;
+              authelia_url = "https://${boxName}/auth/";
+            }
+          ];
+          storage.local.path = "/var/lib/authelia-losos/db.sqlite3";
+          notifier.filesystem.filename = "/var/lib/authelia-losos/notifications.txt";
+        };
+      };
+      environment.etc =
+        lib.genAttrs [ "authelia/storage" "authelia/jwt" "authelia/session" ] (_: {
+          mode = "0400";
+          user = "authelia-losos";
+          text = "a-test-secret-of-more-than-twenty-characters";
+        })
+        // {
+          # Each version of the people file, for the test to put in place.
+          "people".source = people pkgs;
+        };
+      systemd.tmpfiles.settings."10-people" = {
+        "/var/lib/losos-identity".d.mode = "0755";
+        "/var/lib/losos-identity/users.yml".C = {
+          argument = "${people pkgs}/joined.yml";
+          mode = "0644";
+        };
+      };
+      services.nginx = {
+        enable = true;
+        virtualHosts.${boxName} = {
+          default = true;
+          addSSL = true;
+          sslCertificate = "${cert}/box.crt";
+          sslCertificateKey = "${cert}/box.key";
+          locations."/setup/".alias = "${cert}/setup/";
+          locations."/auth/" = {
+            proxyPass = "http://127.0.0.1:9091";
+            extraConfig = ''
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto https;
+              proxy_set_header X-Forwarded-Host $host;
+              proxy_set_header X-Forwarded-For $remote_addr;
+            '';
+          };
+          locations."= /internal/authz".extraConfig = authz;
+          locations."= /api/edge".extraConfig = ''
+            auth_request /internal/authz;
+            default_type application/json;
+            return 200 '${edge}';
+          '';
+        };
+      };
+    };
+
+  nodes.desktop =
+    { nodes, pkgs, ... }:
+    {
+      imports = [
+        ../modules/accounts.nix
+        ../modules/company.nix
+      ];
+      nixpkgs.overlays = [ (import ../pkgs) ];
+      security.polkit.enable = true;
+      environment.systemPackages = [
+        pkgs.curl
+        pkgs.openssl
+        pkgs.pamtester
+      ];
+      networking.hosts.${nodes.box.networking.primaryIPAddress} = [ boxName ];
+      # Someone who may not join the computer: a plain account, no polkit
+      # agent to ask an administrator.
+      users.users.eve = {
+        isNormalUser = true;
+        uid = 1500;
+      };
+      # homed's LUKS homes, a few hundred megabytes each.
+      virtualisation.diskSize = 6144;
+      virtualisation.memorySize = 2048;
+    };
+
+  testScript = ''
+    import json
+    import shlex
+
+    def pam(user, *answers):
+        """Authenticates through the console's `login` stack, as the
+        console and derisk's own stack do, and returns (ok, output)."""
+        stdin = "".join(a + "\n" for a in answers)
+        status, out = desktop.execute(
+            f"printf %s {shlex.quote(stdin)} | pamtester login {user} authenticate 2>&1"
+        )
+        return status == 0, out
+
+    def record(user):
+        return json.loads(desktop.succeed(f"userdbctl user {user} --json=short"))
+
+    def box_people(version):
+        box.succeed(f"install -m 0644 /etc/people/{version}.yml /var/lib/losos-identity/users.yml")
+        # Authelia watches the file and reads it again on its own.
+        box.sleep(3)
+
+    start_all()
+    box.wait_for_unit("nginx.service")
+    box.wait_for_unit("authelia-losos.service")
+    box.wait_until_succeeds("curl -skf https://${boxName}/auth/api/health")
+    desktop.wait_for_unit("multi-user.target")
+    desktop.wait_for_unit("systemd-homed.service")
+    desktop.wait_for_unit("losos-login-bridge.socket")
+
+    with subtest("a computer nobody joined has no company accounts"):
+        ok, out = pam("ada", "${adaPassword}")
+        assert not ok, out
+        assert json.loads(desktop.succeed("losos-login-bridge status")) == {"joined": None}
+
+    fingerprint = desktop.succeed("losos-login-bridge fingerprint ${boxName}").strip()
+    expected = desktop.succeed(
+        "curl -s http://${boxName}/setup/losos-ca.crt | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2"
+    ).strip()
+    assert fingerprint == expected, (fingerprint, expected)
+
+    with subtest("only an administrator here, as one of the box's, joins it"):
+        out = desktop.fail(
+            f"printf '%s\\n' ${adaPassword} | runuser -u eve -- losos-login-bridge join ${boxName} {fingerprint} ada"
+        )
+        assert "Only an administrator" in out, out
+        out = desktop.fail(
+            f"printf '%s\\n' ${bobPassword} | losos-login-bridge join ${boxName} {fingerprint} bob"
+        )
+        assert "does not administer" in out, out
+        out = desktop.fail(
+            "printf '%s\\n' ${adaPassword} | losos-login-bridge join ${boxName} 00:11 ada"
+        )
+        assert "not the one you compared" in out, out
+        joined = json.loads(desktop.succeed(
+            f"printf '%s\\n' ${adaPassword} | losos-login-bridge join ${boxName} {fingerprint} ada"
+        ))["joined"]
+        assert joined["realm"] == "office", joined
+        assert joined["gateway"]["url"] == "http://gateway.local:8443", joined
+        assert joined["joinedBy"] == "ada", joined
+        desktop.succeed("test $(stat -c %a /var/lib/losos-login-bridge/joined.json) = 644")
+
+    with subtest("the first login makes the person's home, in the company's realm"):
+        ok, out = pam("bob", "${bobPassword}")
+        assert ok, out
+        assert "Setting up this computer for Bob Builder" in out, out
+        bob = record("bob")
+        assert bob["realm"] == "office" and bob["realName"] == "Bob Builder", bob
+        assert "wheel" not in bob.get("memberOf", []), bob
+        ok, out = pam("ada", "${adaPassword}")
+        assert ok, out
+        ada = record("ada")
+        assert "wheel" in ada["memberOf"] and ada["emailAddress"] == "ada@example.com", ada
+
+    with subtest("LosOS Login refusing keeps them out"):
+        ok, out = pam("bob", "not-the-password")
+        assert not ok and "did not accept" in out, out
+        ok, out = pam("nobody", "whatever")
+        assert not ok, out
+
+    with subtest("out of reach, homed decides for those who logged in before"):
+        box.block()
+        ok, out = pam("bob", "${bobPassword}")
+        assert ok, out
+        ok, out = pam("bob", "not-the-password")
+        assert not ok, out
+        ok, out = pam("carol", "${carolPassword}")
+        assert not ok and "cannot reach LosOS Login" in out, out
+        box.unblock()
+
+    with subtest("a password changed at the box re-keys the home"):
+        box_people("changed")
+        ok, out = pam("bob", "${bobNewPassword}", "${bobPassword}")
+        assert ok, out
+        assert "previous password" in out, out
+        desktop.succeed("PASSWORD=${bobNewPassword} homectl authenticate --no-ask-password bob")
+        desktop.fail("PASSWORD=${bobPassword} homectl authenticate --no-ask-password bob")
+        # And the next login goes straight through.
+        ok, out = pam("bob", "${bobNewPassword}")
+        assert ok and "previous password" not in out, out
+
+    with subtest("someone the box disabled cannot log in while it can be asked"):
+        box_people("disabled")
+        ok, out = pam("bob", "${bobNewPassword}")
+        assert not ok, out
+
+    with subtest("local accounts are not the bridge's"):
+        desktop.succeed(
+            "NEWPASSWORD=Local-test-password-1 homectl create local --enforce-password-policy=no --no-ask-password"
+        )
+        box.block()
+        ok, out = pam("local", "Local-test-password-1")
+        assert ok, out
+        box.unblock()
+
+    with subtest("leaving the company keeps the accounts, logged in by homed"):
+        desktop.succeed("losos-login-bridge leave")
+        ok, out = pam("ada", "${adaPassword}")
+        assert ok, out
+        ok, out = pam("carol", "${carolPassword}")
+        assert not ok, out
+  '';
+}
