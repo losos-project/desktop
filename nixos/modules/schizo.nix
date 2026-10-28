@@ -36,7 +36,7 @@
 
 let
   addresses = import ./schizo-addresses.nix;
-  inherit (addresses) inside uplink;
+  inherit (addresses) inside uplink edge;
   libvirt = config.virtualisation.libvirtd.package;
   flag = "/var/lib/losos/schizo";
   name = "losos-tor-gateway";
@@ -270,6 +270,11 @@ let
             fi
           fi
           echo "tor=$tor"
+          # Set: connections leave Tor through the edge (losos-edge-chain
+          # in the gateway), and nowhere while it cannot be reached.
+          edge=none
+          [ -e ${edge.hostDir}/${edge.file} ] && edge=set
+          echo "edge=$edge"
           ;;
         *)
           echo "usage: losos-schizo [on|off|status]" >&2
@@ -400,6 +405,16 @@ in
       memory = 384;
       # Tor's guards and what it knows of the network: a few MiB.
       stateSize = "256M";
+      # The edge to leave Tor through, which whoever chose it writes here
+      # (docs/schizo-mode.md, "Through an edge"): read-only in the gateway,
+      # and the one directory of the host's it sees besides the store.
+      extraDevices = ''
+        <filesystem type='mount' accessmode='squash'>
+          <source dir='${edge.hostDir}'/>
+          <target dir='${edge.share}'/>
+          <readonly/>
+        </filesystem>
+      '';
       interfaces = [
         {
           network = uplink.bridge;
@@ -411,6 +426,8 @@ in
         }
       ];
     };
+    # Only root's: the file holds the edge's credentials.
+    systemd.tmpfiles.rules = [ "d ${edge.hostDir} 0700 root root -" ];
     systemd.services."losos-service-machine-${name}" = lib.recursiveUpdate partOf {
       requires = [ "losos-schizo-network.service" ];
       after = [ "losos-schizo-network.service" ];

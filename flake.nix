@@ -261,6 +261,7 @@
           "losos-vm-call"
           "losos-netd"
           "losos-filesd"
+          "losos-edge-chain"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {

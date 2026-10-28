@@ -30,5 +30,17 @@
     trans = 9040;
     dns = 5300;
     socks = 9050;
+    # losos-edge-chain, which takes the inside's TCP instead of the
+    # TransPort while an edge is set. It dials Tor's SOCKS on the
+    # gateway's loopback, at the same port as `socks`.
+    edge = 9041;
+  };
+  # The edge schizo mode leaves Tor through, when one is set: what the host
+  # writes, and where the gateway reads it over a read-only 9p share.
+  edge = {
+    hostDir = "/run/losos-schizo/edge";
+    share = "losos-edge";
+    gatewayDir = "/run/losos-edge";
+    file = "edge.json";
   };
 }
