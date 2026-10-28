@@ -11,6 +11,11 @@
 //! replaces, and a newer card for the same download waits for it (and
 //! replaces any card already waiting), so a fast download costs one call
 //! a second, not one per chunk.
+//!
+//! A site's notifications, once the person allowed them (permissions.rs),
+//! go the same way, one call each: clicking one brings its tab to the
+//! front and runs the page's `onclick`, dismissing it runs `onclose`, and
+//! a page closing its own takes the desktop's away.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,8 +26,8 @@ use tracing::{debug, warn};
 
 use crate::downloads::DownloadId;
 use crate::engine::{emit, later};
-use crate::shared::{Command, DownloadCommand, Event};
-use crate::webkit::{Arg, Bus, Var};
+use crate::shared::{Command, DownloadCommand, Event, TabId};
+use crate::webkit::{Arg, Bus, Notification, Var};
 
 const SERVER: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
@@ -65,6 +70,9 @@ pub struct Notifier {
     /// Whether anyone serves notifications; `None` until a call says.
     served: Option<bool>,
     notes: HashMap<DownloadId, Note>,
+    /// Sites' notifications on screen, by the server's id, with the tab
+    /// that showed each.
+    sites: HashMap<u32, (Notification, TabId)>,
     me: Weak<RefCell<Notifier>>,
 }
 
@@ -75,6 +83,7 @@ impl Notifier {
                 bus: None,
                 served: None,
                 notes: HashMap::new(),
+                sites: HashMap::new(),
                 me: me.clone(),
             })
         })
@@ -101,6 +110,51 @@ impl Notifier {
             return;
         }
         self.send(download, card);
+    }
+
+    /// Shows a site's `notification` from tab `tab`, whose page is at
+    /// `host`; one with the tag of one already shown replaces it.
+    pub fn show_site(&mut self, notification: Notification, tab: TabId, host: &str) {
+        let (title, body) = (notification.title(), notification.body());
+        if self.served == Some(false) || (self.bus.is_none() && !self.connect()) {
+            return emit(Event::Notice(if body.is_empty() { title } else { format!("{title}: {body}") }));
+        }
+        let Some(bus) = &self.bus else { return };
+        let tag = notification.tag();
+        let replaces = self
+            .sites
+            .iter()
+            .find(|(_, (shown, _))| tag.is_some() && shown.tag() == tag)
+            .map_or(0, |(id, _)| *id);
+        let me = self.me.clone();
+        let args = site_args(replaces, &title, &body, host);
+        bus.call(SERVER, PATH, SERVER, "Notify", &args, move |reply| {
+            let Some(me) = me.upgrade() else { return };
+            let Ok(mut me) = me.try_borrow_mut() else { return };
+            let id = match reply.as_deref() {
+                Ok([Arg::U32(id), ..]) => *id,
+                Ok(_) => return,
+                Err(error) => {
+                    warn!(error, "nothing shows notifications; a site's is shown as a toast");
+                    me.served = Some(false);
+                    return emit(Event::Notice(title));
+                }
+            };
+            me.served = Some(true);
+            // The page closed it (or the person did, through the server):
+            // the desktop's goes too.
+            let closer = me.me.clone();
+            notification.on_closed(move |_| {
+                let Some(me) = closer.upgrade() else { return };
+                let Ok(mut me) = me.try_borrow_mut() else { return };
+                if me.sites.remove(&id).is_some() {
+                    if let Some(bus) = &me.bus {
+                        bus.call(SERVER, PATH, SERVER, "CloseNotification", &Var::Tuple(vec![Var::U32(id)]), |_| {});
+                    }
+                }
+            });
+            me.sites.insert(id, (notification, tab));
+        });
     }
 
     fn connect(&mut self) -> bool {
@@ -176,6 +230,9 @@ impl Notifier {
     /// The person pressed Cancel, or closed a notification.
     fn signal(&mut self, signal: &str, args: &[Arg]) {
         let Some(Arg::U32(id)) = args.first() else { return };
+        if self.sites.contains_key(id) {
+            return self.site_signal(*id, signal, args);
+        }
         let Some((&download, note)) = self.notes.iter_mut().find(|(_, n)| n.id == *id) else {
             return;
         };
@@ -198,6 +255,51 @@ impl Notifier {
             _ => {}
         }
     }
+}
+
+impl Notifier {
+    fn site_signal(&mut self, id: u32, signal: &str, args: &[Arg]) {
+        match (signal, args.get(1)) {
+            ("ActionInvoked", Some(Arg::Str(action))) if action == "default" => {
+                if let Some((notification, tab)) = self.sites.get(&id) {
+                    later(Command::Activate(*tab));
+                    notification.clicked();
+                }
+            }
+            ("NotificationClosed", reason) => {
+                // Taken out first: `close` emits `closed`, whose handler
+                // would close it on the server again.
+                if let Some((notification, _)) = self.sites.remove(&id) {
+                    // Dismissed by the person (2); not expired or replaced.
+                    if reason == Some(&Arg::U32(2)) {
+                        notification.close();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `Notify`'s arguments for a site's notification: what the page said,
+/// and which site said it, so that a page cannot pass its words off as
+/// the system's.
+fn site_args(replaces: u32, title: &str, body: &str, host: &str) -> Var {
+    let body = match (body.is_empty(), host.is_empty()) {
+        (_, true) => body.to_owned(),
+        (true, false) => host.to_owned(),
+        (false, false) => format!("{body}\n{host}"),
+    };
+    Var::Tuple(vec![
+        Var::Str("Danube".into()),
+        Var::U32(replaces),
+        Var::Str("org.losos.Danube".into()),
+        Var::Str(title.to_owned()),
+        Var::Str(body),
+        Var::Strings(vec!["default".into(), "Open".into()]),
+        Var::Dict(vec![("desktop-entry".into(), Var::Str("org.losos.Danube".into()))]),
+        Var::I32(-1),
+    ])
 }
 
 /// `Notify`'s arguments for `card`, replacing notification `replaces`.
@@ -310,6 +412,17 @@ mod tests {
         assert_eq!(percent(50, Some(200)), Some(25));
         assert_eq!(percent(300, Some(200)), Some(100));
         assert_eq!(percent(1, None), None);
+    }
+
+    #[test]
+    fn site_notifications_say_which_site() {
+        let Var::Tuple(args) = site_args(0, "New message", "Hi", "chat.example") else { panic!() };
+        assert_eq!(args[3], Var::Str("New message".into()));
+        assert_eq!(args[4], Var::Str("Hi\nchat.example".into()));
+        assert_eq!(args[5], Var::Strings(vec!["default".into(), "Open".into()]));
+        let Var::Tuple(args) = site_args(5, "Ping", "", "chat.example") else { panic!() };
+        assert_eq!(args[1], Var::U32(5));
+        assert_eq!(args[4], Var::Str("chat.example".into()));
     }
 
     #[test]

@@ -2,7 +2,8 @@
 //! loop: one [`WebView`] per tab on WPE's headless display, each frame
 //! copied out for the window to draw, the window's input turned into WPE
 //! events, the content blockers losos-adblock compiles loaded into every
-//! page, and the extension runtime (extensions/runtime.rs). Each tab has a
+//! page, the extension runtime (extensions/runtime.rs), and the history
+//! and bookmarks (library.rs). Each tab has a
 //! content manager of its own, so that a script message from an extension
 //! says which tab it came from.
 //!
@@ -29,7 +30,7 @@ use crate::config::{self, Settings};
 use crate::downloads::{DownloadId, Job, Request, Update};
 use crate::extensions::runtime::{self, Runtime};
 use crate::ffi::{
-    WEBKIT_LOAD_STARTED, WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION,
+    WEBKIT_LOAD_FINISHED, WEBKIT_LOAD_STARTED, WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION,
     WEBKIT_POLICY_DECISION_TYPE_RESPONSE, WPE_EVENT_KEYBOARD_KEY_DOWN, WPE_EVENT_KEYBOARD_KEY_UP,
     WPE_EVENT_POINTER_DOWN, WPE_EVENT_POINTER_LEAVE, WPE_EVENT_POINTER_MOVE, WPE_EVENT_POINTER_UP,
     WPE_EVENT_TOUCH_CANCEL, WPE_EVENT_TOUCH_DOWN, WPE_EVENT_TOUCH_MOVE, WPE_EVENT_TOUCH_UP,
@@ -37,12 +38,14 @@ use crate::ffi::{
     WPE_MODIFIER_POINTER_BUTTON1, WPE_MODIFIER_POINTER_BUTTON2, WPE_MODIFIER_POINTER_BUTTON3,
 };
 use crate::input::Input;
+use crate::library::Library;
 use crate::notify::{self, Card, Notifier};
 use crate::permissions::{self, Kind};
+use crate::portal::FileChooser;
 use crate::shared::{Command, DownloadCommand, Event, Events, ExtCommand, PermissionAsk, Tab, TabId};
 use crate::webkit::{
     self, Buffer, Display, Download, FilterStore, MainLoop, NetworkSession, PermissionRequest,
-    PolicyDecision, UserContentManager, View, WebView,
+    PolicyDecision, UserContentManager, View, WebContext, WebView,
 };
 
 /// How the engine starts.
@@ -123,8 +126,13 @@ pub(crate) struct Engine {
     /// Tab changes the runtime missed while it was busy (`runtime::notify`).
     pub(crate) tab_changes: Vec<TabChange>,
     downloads: Downloads,
-    /// Each download's notification, shared with WebKit's download signals.
+    /// Each download's notification, shared with WebKit's download signals,
+    /// and each site's, shared with its tab's.
     notifier: Rc<RefCell<Notifier>>,
+    /// Pages' uploads waiting on the desktop's file chooser.
+    chooser: Rc<RefCell<FileChooser>>,
+    /// The history and bookmarks, shared with each tab's load signals.
+    library: Rc<RefCell<Library>>,
 }
 
 /// The downloads under way, by Danube's id for them.
@@ -310,6 +318,16 @@ pub fn run(commands: Receiver<Command>, events: Events, options: Options) {
         .extensions
         .map(|o| Runtime::new(o, &display, &session));
 
+    // The files a page is given to upload are the document portal's
+    // (portal.rs), which the web processes read from too; only the files
+    // the person chose are in there.
+    if let Some(doc) = std::env::var_os("XDG_RUNTIME_DIR").map(|d| PathBuf::from(d).join("doc")) {
+        if doc.is_dir() {
+            WebContext::default().add_path_to_sandbox(&doc, true);
+        }
+    }
+    let library = Rc::new(RefCell::new(Library::open(options.profile.as_ref().map(|(data, _)| data.as_path()))));
+
     let engine = Engine {
         commands,
         main_loop: MainLoop::new(),
@@ -343,7 +361,10 @@ pub fn run(commands: Receiver<Command>, events: Events, options: Options) {
             webkit_only: HashMap::new(),
         },
         notifier,
+        chooser: FileChooser::new(),
+        library,
     };
+    engine.library_changed();
     let main_loop = engine.main_loop.clone();
     ENGINE.with(|e| *e.borrow_mut() = Some(engine));
 
@@ -495,6 +516,39 @@ impl Engine {
                 runtime::with(self, |rt, e| rt.command(e, command));
             }
             Command::Download(command) => self.download(command),
+            Command::Load(id, uri) => self.page(id).map_or((), |page| page.load_uri(&uri)),
+            Command::Bookmark(id) => {
+                let Some(page) = self.page(id) else { return };
+                let changed = self.library.borrow_mut().toggle_bookmark(&page.uri(), &page.title());
+                if changed {
+                    self.library_changed();
+                }
+            }
+            Command::ClearHistory => {
+                self.library.borrow_mut().clear_history();
+                self.library_changed();
+            }
+            Command::ShowFind => emit(Event::ShowFind),
+            Command::Find(id, text) => {
+                if let Some(page) = self.page(id) {
+                    let finder = page.find_controller();
+                    if text.is_empty() {
+                        finder.finish();
+                    } else {
+                        finder.search(&text);
+                    }
+                }
+            }
+            Command::FindAgain(id, forward) => {
+                if let Some(page) = self.page(id) {
+                    let finder = page.find_controller();
+                    if forward {
+                        finder.next();
+                    } else {
+                        finder.previous();
+                    }
+                }
+            }
             Command::Quit => {
                 if let Some(rt) = &mut self.extensions {
                     rt.flush_storage();
@@ -502,6 +556,11 @@ impl Engine {
                 self.main_loop.quit()
             }
         }
+    }
+
+    /// Tells the window the history and bookmarks.
+    fn library_changed(&self) {
+        library_event(&self.library.borrow());
     }
 
     fn entry(&self, id: TabId) -> Option<&Entry> {
@@ -536,10 +595,20 @@ impl Engine {
                 emit(Event::Changed(refresh(page, id)))
             });
         }
+        let library = self.library.clone();
+        page.on_notify("title", move |page| {
+            if library.borrow_mut().retitle(&page.uri(), &page.title()) {
+                library_event(&library.borrow());
+            }
+        });
+        let library = self.library.clone();
         page.on_load_changed(move |page, event| {
             debug!(tab = id, event, "load changed");
             if event == WEBKIT_LOAD_STARTED {
                 emit(Event::LoadStarted(id));
+            }
+            if event == WEBKIT_LOAD_FINISHED && library.borrow_mut().visit(&page.uri(), &page.title()) {
+                library_event(&library.borrow());
             }
             emit(Event::Changed(refresh(page, id)));
             // The extensions hear of it now, or once the engine is free.
@@ -576,6 +645,19 @@ impl Engine {
         page.on_decide_policy(|_, decision, kind| decide(decision, kind));
         page.on_permission_request(move |page, request| ask(page, request, id));
         page.on_mouse_target_changed(|_, result| emit(Event::HoveredLink(result.link_uri())));
+        let chooser = self.chooser.clone();
+        page.on_run_file_chooser(move |_, request| {
+            chooser.try_borrow_mut().is_ok_and(|mut chooser| chooser.open(request))
+        });
+        let notes = self.notifier.clone();
+        page.on_show_notification(move |page, notification| {
+            let Ok(mut notes) = notes.try_borrow_mut() else { return false };
+            notes.show_site(notification, id, &config::host(&page.uri()));
+            true
+        });
+        let finder = page.find_controller();
+        finder.on_found(move |count| emit(Event::Found(id, Some(count))));
+        finder.on_not_found(move || emit(Event::Found(id, None)));
         page.set_muted(self.muted);
         let view = page.view();
         view.on_buffer_rendered(move |_, buffer| frame(buffer, id));
@@ -964,6 +1046,16 @@ fn watch_download(download: &Download, dir: &Path, notifier: &Rc<RefCell<Notifie
             }
         };
         notes.borrow_mut().show(id, ended(name, body));
+    });
+}
+
+/// How many of the newest pages the History menu lists.
+const RECENT: usize = 15;
+
+fn library_event(library: &Library) {
+    emit(Event::Library {
+        history: library.history.iter().take(RECENT).cloned().collect(),
+        bookmarks: library.bookmarks.clone(),
     });
 }
 

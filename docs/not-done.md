@@ -240,18 +240,15 @@
   started at all, since the arm64 runner has no KVM and the aarch64 VM under
   emulation times out waiting for its disk. And none of it has run on a PC
   instead of in QEMU.
-- **Danube is unfinished in places.** A page's file upload button opens
-  nothing, because [Danube](danube.md) does not answer WebKit's file chooser
-  request yet. A site's notifications are never shown, even when allowed.
-  Extensions cannot see requests through `webRequest`, talk to a native
-  program, or use cookies, context menus, history, bookmarks or the side
-  panel, as Danube's "Extensions" section lists. There are no bookmarks, no
-  history list, no find in page, and no way to resume a download. Its
-  sandboxes need unprivileged user namespaces, and a phone's own kernel may
-  refuse them. Danube then stops instead of running a page outside a
+- **Danube is unfinished in places.** [Danube](danube.md)'s extensions
+  cannot see requests through `webRequest`, talk to a native program, or use
+  cookies, context menus, history, bookmarks or the side panel, as its
+  "Extensions" section lists. A download that stopped cannot be resumed.
+  Its sandboxes need unprivileged user namespaces, and a phone's own kernel
+  may refuse them. Danube then stops instead of running a page outside a
   sandbox, so on such a phone it does not open at all. `--no-sandbox` skips
-  only the outer sandbox. Danube has run against WPE WebKit in a session,
-  but not yet on a desktop or phone with derisk.
+  only the outer sandbox. Danube has run with derisk on the desktop, in a
+  VM, but not yet on a phone.
 - **Ad blocking is DNS-wide only for names.** A filter list's URL and element
   rules apply in Danube alone. Other browsers and apps get only whole
   [blocked domains](adblock.md), and a program

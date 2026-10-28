@@ -88,6 +88,19 @@ pub enum Command {
     Extensions(ExtCommand),
     /// About a download handed to aria2 (downloads.rs, engine.rs).
     Download(DownloadCommand),
+    /// Load `uri` in the tab: a bookmark or a page from the history.
+    Load(TabId, String),
+    /// Bookmark the tab's page, or take its bookmark away.
+    Bookmark(TabId),
+    ClearHistory,
+    /// derisk's "Find in Page" item: WebKit hands it back to the window
+    /// as [`Event::ShowFind`], since the find bar is the window's.
+    ShowFind,
+    /// Highlight `text` in the tab's page and go to the first match; an
+    /// empty `text` takes the highlights away.
+    Find(TabId, String),
+    /// The next match (`true`) or the one before.
+    FindAgain(TabId, bool),
     Quit,
 }
 
@@ -190,6 +203,16 @@ pub enum Event {
     PopupOpened { ext: String, width: i32, height: i32 },
     PopupFrame(Arc<egui::ColorImage>),
     PopupClosed,
+    /// Open the find bar.
+    ShowFind,
+    /// How many matches the tab's search found, `None` for none.
+    Found(TabId, Option<u32>),
+    /// The history, newest first, and the bookmarks, whenever either
+    /// changes; the history only as far as the menu lists it.
+    Library {
+        history: Vec<crate::library::Page>,
+        bookmarks: Vec<crate::library::Page>,
+    },
     /// WebKit is gone; the window closes.
     Quit,
 }

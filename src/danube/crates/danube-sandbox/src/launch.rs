@@ -309,7 +309,11 @@ pub fn run(plan: Plan) -> Result<ExitCode, Error> {
     // SAFETY: prctl on this process.
     unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) };
 
-    let carried = open_fds(&plan.consumed_fds);
+    let carried = if plan.no_inherited_fds {
+        Vec::new()
+    } else {
+        open_fds(&plan.consumed_fds)
+    };
     if carried.len() > MAX_FDS {
         return Err(Error::Pass(std::io::Error::other(
             "too many open descriptors",
