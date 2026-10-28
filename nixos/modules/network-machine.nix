@@ -103,8 +103,15 @@ let
       nm
       pkgs.coreutils
       pkgs.gawk
+      config.systemd.package
     ];
     text = ''
+      # mDNS on the host's link to the machine, which reflects it to the
+      # networks it joins: NetworkManager tells resolved nothing here
+      # (main.dns is none), so this does, each time the link comes up.
+      if [ "''${1:-}" = ${up.bridge} ] && [ "''${2:-}" = up ]; then
+        resolvectl mdns ${up.bridge} yes || true
+      fi
       nmcli -t -f GENERAL.DEVICE,IP4.DNS,IP6.DNS device show |
         awk -F: '
           /^GENERAL.DEVICE:/ { skip = ($2 ~ /^losos-/ || $2 == "lo") }
@@ -137,6 +144,9 @@ let
         meta l4proto icmp accept
         # DHCP's answers on the networks this machine joins.
         udp dport 68 accept
+        # mDNS from the host and those networks, which losos-netd reflects
+        # between them; never from the gateway's links.
+        iifname != { "${wan.link}", "${tor.link}", "${torext.link}" } udp dport 5353 accept
         # The ad blocker's forwarder, the host's one DNS server.
         iifname "${up.link}" ip daddr ${up.machine} meta l4proto { tcp, udp } th dport 53 accept
       }
@@ -262,6 +272,8 @@ in
     losos.serviceMachines.${name} = {
       busybox = name;
       title = "The network machine";
+      # The host has no other way out.
+      whenStopped = "restart";
       memory = 256;
       # The saved networks: a few KiB, in a disk made the first time the
       # machine starts and laid out the first time it mounts it.

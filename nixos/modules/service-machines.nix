@@ -209,6 +209,41 @@ let
       virsh -q destroy ${name} || true
     '';
   };
+  # Follows the machine while its unit is started, and does what it says
+  # when the machine stops without the unit being stopped.
+  watch = name: machine: {
+    description = "Follow ${machine.title}";
+    bindsTo = [ "losos-service-machine-${name}.service" ];
+    after = [ "losos-service-machine-${name}.service" ];
+    wantedBy = [ "losos-service-machine-${name}.service" ];
+    path = [
+      libvirt
+      pkgs.systemd
+      pkgs.coreutils
+    ];
+    environment.LIBVIRT_DEFAULT_URI = "qemu:///system";
+    serviceConfig.Restart = "on-failure";
+    script = ''
+      while :; do
+        while [ "$(virsh -q domstate ${name} 2>/dev/null)" = running ]; do
+          sleep 2
+        done
+        ${
+          if machine.whenStopped == "restart" then
+            ''
+              echo "${name} stopped; starting it again"
+              sleep 1
+              virsh -q start ${name} || sleep 5
+            ''
+          else
+            ''
+              echo "${name} stopped"
+              exec systemctl stop --no-block losos-service-machine-${name}.service
+            ''
+        }
+      done
+    '';
+  };
 in
 {
   options.losos.serviceMachines = lib.mkOption {
@@ -283,6 +318,19 @@ in
               }
             );
           };
+          whenStopped = lib.mkOption {
+            type = lib.types.enum [
+              "restart"
+              "stop"
+            ];
+            default = "stop";
+            description = ''
+              What happens when the machine stops by itself (it powered off,
+              or it was destroyed): started again, for a machine the host
+              cannot do without, or its unit stopped too, for a lazy machine
+              that powers off when idle and is started again when needed.
+            '';
+          };
           cid = lib.mkOption {
             type = lib.types.nullOr lib.types.ints.unsigned;
             default = null;
@@ -299,9 +347,13 @@ in
   };
 
   config = {
-    systemd.services = lib.mapAttrs' (
-      name: machine: lib.nameValuePair "losos-service-machine-${name}" (unit name machine)
-    ) config.losos.serviceMachines;
+    systemd.services =
+      lib.mapAttrs' (
+        name: machine: lib.nameValuePair "losos-service-machine-${name}" (unit name machine)
+      ) config.losos.serviceMachines
+      // lib.mapAttrs' (
+        name: machine: lib.nameValuePair "losos-service-machine-${name}-watch" (watch name machine)
+      ) config.losos.serviceMachines;
 
     system.build.serviceMachines = lib.mapAttrs (
       name: machine:

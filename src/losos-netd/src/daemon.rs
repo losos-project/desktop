@@ -822,6 +822,25 @@ pub fn run_loop(shared: Arc<Shared>) {
     }
 }
 
+impl Shared {
+    /// The host's link and the cards with an address, for mDNS; neither in
+    /// schizo mode or before the mode is known.
+    pub fn mdns_links(&self) -> (Option<String>, Vec<String>) {
+        let state = self.state.lock().unwrap();
+        if state.schizo != Some(false) {
+            return (None, Vec::new());
+        }
+        let up = state.config.link("up").map(|l| l.name.clone());
+        let cards = state
+            .links
+            .iter()
+            .filter(|(_, l)| l.kind != Kind::Static && l.ipv4.is_some())
+            .map(|(name, _)| name.clone())
+            .collect();
+        (up, cards)
+    }
+}
+
 pub fn shared(config: Config) -> Arc<Shared> {
     Arc::new(Shared {
         state: Mutex::new(State::new(config)),

@@ -38,7 +38,7 @@ let
 
   filesdConfig = pkgs.writeText "losos-filesd.conf" ''
     sftp-server ${pkgs.openssh}/libexec/sftp-server
-    idle 300
+    idle ${toString config.losos.machines.files.idle}
     run losos-vm-call serve ${toString ports.list} losos-filesd list
     run losos-vm-call serve ${toString ports.sftp} losos-filesd sftp
     run losos-vm-call serve ${toString ports.eject} losos-filesd eject
@@ -85,6 +85,12 @@ let
   };
 in
 {
+  options.losos.machines.files.idle = lib.mkOption {
+    type = lib.types.ints.positive;
+    default = 300;
+    description = "Seconds the machine waits with nothing plugged in before it powers off.";
+  };
+
   options.losos.machines.files.enable = lib.mkOption {
     type = lib.types.bool;
     default = config.losos.machines.network.enable;
@@ -122,6 +128,8 @@ in
       inherit cid;
       # No network card: nothing it reads can reach anything but the host.
       interfaces = [ ];
+      # Off when idle, until the next drive (the machine's own choice).
+      whenStopped = "stop";
       passthrough.pciClasses = [ "0x0805" ];
     };
 
@@ -152,25 +160,6 @@ in
         Restart = "on-failure";
         RuntimeDirectory = "losos-files";
       };
-    };
-
-    # The machine powers itself off when idle; its unit then follows.
-    systemd.services.losos-files-follow = {
-      description = "Stop the files machine's unit when it has powered off";
-      bindsTo = [ "losos-service-machine-${name}.service" ];
-      after = [ "losos-service-machine-${name}.service" ];
-      wantedBy = [ "losos-service-machine-${name}.service" ];
-      environment.LIBVIRT_DEFAULT_URI = "qemu:///system";
-      path = [
-        libvirt
-        pkgs.systemd
-      ];
-      script = ''
-        while [ "$(virsh -q domstate ${name} 2>/dev/null)" = running ]; do
-          sleep 5
-        done
-        systemctl stop --no-block losos-service-machine-${name}.service
-      '';
     };
 
     losos.vmCalls = {

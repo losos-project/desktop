@@ -304,6 +304,12 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # The network and files machines under load: connections, downloads
+          # and DNS through the network machine, nmcli through losos-vm-call,
+          # schizo mode cutting the host off, the machine destroyed and
+          # started again; drives copied to and ejected from the files
+          # machine, which powers off when idle (service-machines.nix).
+          service-machines = pkgs.testers.runNixOSTest ./nixos/tests/service-machines.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;

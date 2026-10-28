@@ -8,6 +8,7 @@
 //!     losos-netd dhcp <event>        udhcpc's hook
 
 mod daemon;
+mod mdns;
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -172,6 +173,10 @@ fn run_daemon(config_path: &str) -> Result<()> {
     {
         let shared = shared.clone();
         std::thread::spawn(move || daemon::power_button(shared));
+    }
+    {
+        let shared = shared.clone();
+        std::thread::spawn(move || mdns::reflect(shared));
     }
     daemon::run_loop(shared);
     Ok(())
