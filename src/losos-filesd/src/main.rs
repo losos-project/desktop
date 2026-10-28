@@ -6,6 +6,9 @@
 //!     losos-filesd list                the volumes: name, type, size, device
 //!     losos-filesd sftp <name>         serves a volume over SFTP on stdio
 //!     losos-filesd eject <name>        unmounts it and lets the device go
+//!     losos-filesd add <name> <url>    keeps a network share, its user and
+//!                                      password on stdin, one per line
+//!     losos-filesd remove <name>       forgets a network share
 
 use std::collections::BTreeMap;
 use std::io::{self, IsTerminal};
@@ -19,8 +22,8 @@ use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use losos_filesd::{
-    device_of, mount_name, mount_options, names, parse_blkid, valid_name, volume_line, Config,
-    Volume, EJECTED, MEDIA, VOLUMES,
+    device_of, mount_name, mount_options, names, parse_blkid, parse_url, valid_name, volume_line,
+    Config, Share, Volume, EJECTED, MEDIA, VOLUMES,
 };
 
 /// Where the configuration is in the initrd.
@@ -52,10 +55,13 @@ fn main() -> ExitCode {
         (Some("list"), 1) => list(),
         (Some("sftp"), 2) => sftp(&args[1]),
         (Some("eject"), 2) => eject(&args[1]),
+        (Some("add"), 3) => add_share(&args[1], &args[2]),
+        (Some("remove"), 2) => remove_share(&args[1]),
         _ => Err(miette!(
             "usage: losos-filesd init|daemon [<config>]\n       \
              losos-filesd list\n       \
-             losos-filesd sftp|eject <name>"
+             losos-filesd sftp|eject|remove <name>\n       \
+             losos-filesd add <name> <url>"
         )),
     };
     match result {
@@ -231,6 +237,12 @@ fn daemon(config_path: &str) -> Result<()> {
     for dir in [MEDIA, EJECTED, "/run/losos-filesd"] {
         std::fs::create_dir_all(dir).into_diagnostic()?;
     }
+    if let Some((device, path)) = &config.state_disk {
+        mount_state(device, path)?;
+    }
+    if let Some((mac, address, router)) = &config.link {
+        link_up(mac, address, router, config.nameserver.as_deref())?;
+    }
     let mut mounted: BTreeMap<String, Mounted> = BTreeMap::new();
     let mut tried: BTreeMap<String, Instant> = BTreeMap::new();
     let mut running: Vec<(Vec<String>, Option<Child>, Instant)> = config
@@ -241,7 +253,14 @@ fn daemon(config_path: &str) -> Result<()> {
     let mut idle_since = Instant::now();
     write_volumes(&mounted);
     loop {
-        let present = candidates();
+        let mut present = candidates();
+        let shares = config
+            .shares
+            .as_deref()
+            .map(load_shares)
+            .unwrap_or_default();
+        // A share is "present" as a device of its own name.
+        present.extend(shares.iter().map(|s| format!("share:{}", s.name)));
 
         // Gone: unmounted at once, lazily, since there is nothing to
         // write back to a device that left. An ejected one is unmounted
@@ -261,7 +280,12 @@ fn daemon(config_path: &str) -> Result<()> {
                 changed = true;
             }
         }
-        tried.retain(|d, _| present.contains(d));
+        // A device that would not mount waits to be plugged in again; a
+        // share, whose server may come back, is tried again each minute.
+        tried.retain(|d, at| {
+            present.contains(d)
+                && !(d.starts_with("share:") && at.elapsed() > Duration::from_secs(60))
+        });
         for device in std::fs::read_dir(EJECTED).into_iter().flatten().flatten() {
             let name = device.file_name().to_string_lossy().into_owned();
             if !present.contains(&name) {
@@ -279,6 +303,24 @@ fn daemon(config_path: &str) -> Result<()> {
                 continue;
             }
             tried.insert(device.clone(), Instant::now());
+            if let Some(share) = device
+                .strip_prefix("share:")
+                .and_then(|n| shares.iter().find(|s| s.name == n))
+            {
+                if mount_share(share) {
+                    let volume = Volume {
+                        device: device.clone(),
+                        label: share.name.clone(),
+                        uuid: String::new(),
+                        fstype: share.fstype.clone(),
+                    };
+                    let name = share.name.clone();
+                    info!(name, source = share.source, "share mounted");
+                    mounted.insert(device.clone(), Mounted { name, volume });
+                    changed = true;
+                }
+                continue;
+            }
             let Some(volume) = probe(device) else {
                 continue;
             };
@@ -351,6 +393,188 @@ fn daemon(config_path: &str) -> Result<()> {
     }
 }
 
+/// Mounts the state disk, giving it a filesystem the first time, as
+/// losos-netd does.
+fn mount_state(device: &Path, path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path).into_diagnostic()?;
+    let (device, path) = (device.to_string_lossy(), path.to_string_lossy());
+    for _ in 0..50 {
+        if Path::new(&*device).exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let options = "noatime,nodev,nosuid,noexec";
+    if run("mount", &["-o", options, &device, &path]) {
+        return Ok(());
+    }
+    info!(device = %device, "making the state disk's filesystem");
+    if !run("mke2fs", &["-L", "losos-state", &device])
+        || !run("mount", &["-o", options, &device, &path])
+    {
+        bail!("cannot mount the state disk {device} on {path}");
+    }
+    Ok(())
+}
+
+/// Brings up the one network card, by its MAC, with its address and
+/// router, and names the DNS server.
+fn link_up(mac: &str, address: &str, router: &str, nameserver: Option<&str>) -> Result<()> {
+    let mut name = None;
+    for _ in 0..100 {
+        name = std::fs::read_dir("/sys/class/net")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .find(|e| {
+                std::fs::read_to_string(e.path().join("address"))
+                    .is_ok_and(|a| a.trim().eq_ignore_ascii_case(mac))
+            })
+            .map(|e| e.file_name().to_string_lossy().into_owned());
+        if name.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let name = name.ok_or_else(|| miette!("no network card {mac}"))?;
+    run("ip", &["link", "set", "dev", "lo", "up"]);
+    run("ip", &["link", "set", "dev", &name, "up"]);
+    run("ip", &["addr", "replace", address, "dev", &name]);
+    run(
+        "ip",
+        &["route", "replace", "default", "via", router, "dev", &name],
+    );
+    if let Some(server) = nameserver {
+        std::fs::write("/etc/resolv.conf", format!("nameserver {server}\n")).into_diagnostic()?;
+    }
+    Ok(())
+}
+
+fn load_shares(dir: &Path) -> Vec<Share> {
+    let mut all: Vec<Share> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "conf"))
+        .filter_map(|e| Share::from_text(&std::fs::read_to_string(e.path()).ok()?))
+        .collect();
+    all.sort_by(|a, b| a.name.cmp(&b.name));
+    all
+}
+
+fn mount_share(share: &Share) -> bool {
+    let path = Path::new(MEDIA).join(&share.name);
+    let _ = std::fs::create_dir_all(&path);
+    let target = path.to_string_lossy();
+    let ok = if share.fstype == "davfs" {
+        // davfs2 reads its credentials from its secrets file, never the
+        // command line.
+        let secrets = format!(
+            "\"{}\" \"{}\" \"{}\"\n",
+            share.source,
+            share.user.replace('"', "\\\""),
+            share.password.replace('"', "\\\"")
+        );
+        let _ = std::fs::create_dir_all("/etc/davfs2");
+        let written = std::fs::write("/etc/davfs2/secrets", secrets).is_ok()
+            && std::fs::write(
+                "/etc/davfs2/davfs2.conf",
+                "dav_user root\ndav_group root\nuse_locks 0\n",
+            )
+            .is_ok();
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            "/etc/davfs2/secrets",
+            std::fs::Permissions::from_mode(0o600),
+        );
+        written
+            && run(
+                "mount.davfs",
+                &[&share.source, &target, "-o", "nosuid,nodev,noexec"],
+            )
+    } else {
+        run(
+            "mount",
+            &[
+                "-t",
+                &share.fstype,
+                "-o",
+                &share.options(),
+                &share.source,
+                &target,
+            ],
+        )
+    };
+    if !ok {
+        warn!(
+            name = share.name,
+            source = share.source,
+            "cannot mount the share"
+        );
+        let _ = std::fs::remove_dir(&path);
+    }
+    ok
+}
+
+fn shares_dir() -> Result<PathBuf> {
+    read_config(CONFIG)?
+        .shares
+        .ok_or_else(|| miette!("this machine keeps no network shares"))
+}
+
+/// Keeps a share; the daemon mounts it at its next look.
+fn add_share(name: &str, url: &str) -> Result<()> {
+    if !valid_name(name) {
+        bail!("{name:?} cannot be a share's name");
+    }
+    let (fstype, source) = parse_url(url)
+        .ok_or_else(|| miette!("{url} is not an smb://, nfs:// or davs:// address"))?;
+    let mut input = String::new();
+    io::Read::read_to_string(&mut io::stdin(), &mut input).into_diagnostic()?;
+    let mut lines = input.lines();
+    let share = Share {
+        name: name.to_owned(),
+        fstype: fstype.to_owned(),
+        source,
+        user: lines.next().unwrap_or("").trim().to_owned(),
+        password: lines.next().unwrap_or("").to_owned(),
+    };
+    if share.user.contains([',', '\n']) {
+        bail!("a user name cannot hold a comma");
+    }
+    let dir = shares_dir()?;
+    std::fs::create_dir_all(&dir).into_diagnostic()?;
+    let path = dir.join(format!("{name}.conf"));
+    let partial = path.with_extension("partial");
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&partial)
+            .into_diagnostic()?;
+        file.write_all(share.to_text().as_bytes())
+            .into_diagnostic()?;
+        file.sync_all().into_diagnostic()?;
+    }
+    std::fs::rename(&partial, &path).into_diagnostic()?;
+    Ok(())
+}
+
+/// Forgets a share; the daemon unmounts it at its next look.
+fn remove_share(name: &str) -> Result<()> {
+    if !valid_name(name) {
+        bail!("no share {name}");
+    }
+    let path = shares_dir()?.join(format!("{name}.conf"));
+    std::fs::remove_file(&path)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("no share {name}"))
+}
+
 fn volumes() -> String {
     std::fs::read_to_string(VOLUMES).unwrap_or_default()
 }
@@ -416,6 +640,10 @@ fn eject(name: &str) -> Result<()> {
         bail!("{name} is in use");
     }
     let _ = std::fs::remove_dir(&path);
+    // A share is let go of until the machine next starts.
+    if device.starts_with("share:") {
+        return Ok(());
+    }
     // The whole disk a partition is on: its parent in sysfs.
     let sys = std::fs::canonicalize(format!("/sys/class/block/{device}")).into_diagnostic()?;
     let disk = if sys.join("partition").exists() {

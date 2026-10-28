@@ -65,9 +65,11 @@ let
       pkgs.systemd
       pkgs.util-linux
     ];
-    text = builtins.replaceStrings [ "@machine@" "@sftp@" ] [ name "${sftp}" ] (
-      builtins.readFile ./losos-files-host.sh
-    );
+    text =
+      builtins.replaceStrings
+        [ "@machine@" "@sftp@" "@list@" "@state@" ]
+        [ name "${sftp}" "files-list" "/run/losos-files" ]
+        (builtins.readFile ./losos-files-host.sh);
   };
 
   # `losos-files eject <name>`, for Files and a terminal.

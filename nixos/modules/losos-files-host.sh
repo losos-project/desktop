@@ -4,7 +4,7 @@
 # losos-vm-call, and lets go of each one that goes. Runs while the machine
 # does; its unit stops with it, and everything it mounted goes then.
 
-state=/run/losos-files
+state=@state@
 mkdir -p "$state/mounts"
 
 # The user of the session in front, if there is one.
@@ -61,7 +61,7 @@ while :; do
     cleanup
     user=$now
   fi
-  if [ -n "$user" ] && list=$(losos-vm-call call files-list 2>/dev/null); then
+  if [ -n "$user" ] && list=$(losos-vm-call call @list@ 2>/dev/null); then
     names=$(printf '%s\n' "$list" | cut -f1)
     for file in "$state"/mounts/*; do
       [ -e "$file" ] || continue

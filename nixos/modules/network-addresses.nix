@@ -41,6 +41,12 @@
     mac = "52:54:00:4c:1e:04";
     link = "torext0";
   };
+  # The network shares machine (shares-machine.nix), on the host's link
+  # with the network machine as its router, as the host is.
+  shares = {
+    mac = "52:54:00:4c:1e:05";
+    address = "10.139.0.3";
+  };
   # Its vsock address, and the calls it takes there (losos-vm-call).
   cid = 4100;
   ports = {
