@@ -28,9 +28,9 @@
     # which installs GRUB and rewrites its menu on every rebuild, stays off.
     loader.grub.enable = false;
 
+    # systemd in the initrd is the only stage 1 nixpkgs has, so there is
+    # no enable to set.
     initrd.systemd = {
-      enable = true;
-
       # Find the root filesystem by GPT partition type rather than by name.
       # systemd-gpt-auto-generator matches the type UUID, which is why there is
       # still no root= device on the command line and no fstab entry for /.
