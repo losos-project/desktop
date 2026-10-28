@@ -31,6 +31,58 @@ the request typed in, or hands it to the window already open. Nothing is
 sent until the person presses Send. The palette opens
 `derisk-agent:ask?prompt=…` links, which the Agent's desktop entry claims.
 
+## Its own machine
+
+The Agent runs in a machine of its own, one for each person, called
+`agent-<user>`. Claude Code runs whatever it decides to, and in the
+person's session that would be everything they have. In the machine it has
+only these:
+
+| What | How it gets there |
+| ---- | ----------------- |
+| Its window | waypipe over vsock to derisk's gate, like any [machine](hypervisor.md)'s window. derisk frames it in black. |
+| The person's Agent folder, `~/Agent` | Shared over virtiofs as the machine's home. Every file the machine writes there belongs to the person. No other folder of theirs is shared. |
+| The desktop's tools | The tools channel, which passes on only the requests `derisk mcp` offers. |
+| Web links | The tools channel, which opens `http` and `https` links in the person's browser on the desktop. Files are never opened there. |
+| The network | One card on libvirt's `default` network, behind the host's NAT, and so behind the network machine when there is one. |
+
+The machine is a service machine. The host boots it from its own store, so
+it is part of the image and an update brings a new one. The Machines app
+does not list it. Its projects, chats, routines and Claude Code's sign-in
+live in the Agent folder, inside the person's encrypted home, so the
+machine itself keeps nothing.
+
+**It starts when it is needed.** The Agent's desktop entry runs
+`losos-agent-machine open`. That asks a root service on the host, through
+`/run/losos-agent-machine/open.sock`, to start the machine of whoever the
+kernel says connected. The service then passes the link, such as the
+palette's "Ask the agent", to the machine's launch port. The machine
+accepts it only from the host's root. The first open makes the Agent
+folder.
+
+**It stops when it is not.** The machine powers itself off after ten
+minutes with no Agent window, no routine running and no routine
+scheduled. A routine's timer is the machine's own, so someone with
+routines keeps it running, and the balloon hands the memory it frees back
+to the host. The machine also stops when the person signs out, before
+homed locks their home again.
+
+**The tools channel.** In the machine, `losos-agent-machine relay` serves
+derisk's agent socket, `$XDG_RUNTIME_DIR/derisk/agent.sock`, where
+`derisk mcp` and the Agent look for it. Each connection goes to the host
+over vsock, to a port that is the machine's own address. There,
+`losos-agent-machine tools` runs in the person's session. It takes
+connections from their machine alone, by the address the kernel stamps on
+them. It passes `state`, `dispatch`, `ask`, `tree`, `find`, `act`,
+`screenshot` and `input` to derisk, which still has the person confirm
+anything destructive on screen. It refuses menus, widgets, palette data
+and `choose`, which would let the machine put things on the desktop that
+look like the system's own.
+
+`src/losos-agent-machine` is both ends of all three channels.
+`nixos/guest/agent.nix` is the machine and `nixos/modules/agent.nix` the
+host's half.
+
 ## Where it ships
 
 The Agent is on the PC image, which is the same image for desktops, laptops
@@ -40,7 +92,10 @@ a screen under 600 on its short side.
 
 Claude Code itself is not in the image, because nixpkgs marks it unfree. The
 Agent runs `claude` from `PATH`, or the program `DERISK_AGENT_CLAUDE` names.
-When there is neither, it says so in the chat. [What is not done](not-done.md)
+When there is neither, it says so in the chat. Anthropic's installer, run in
+the Agent's machine, puts it in `~/.local/bin`, which is on the machine's
+`PATH` and inside the Agent folder, so it stays when the machine stops. Its
+sign-in page opens in the person's browser on the desktop. [What is not done](not-done.md)
 lists this.
 
 ## How it is built

@@ -256,6 +256,7 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-agent-machine"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -300,6 +301,11 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # Opening the Agent starts the person's own machine, whose window
+          # reaches the host from its address, whose home is their Agent
+          # folder and whose tools channel their session answers
+          # (agent.nix).
+          agent-machine = pkgs.testers.runNixOSTest ./nixos/tests/agent-machine.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;
