@@ -300,6 +300,11 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # Schizo mode: the kill switch before the network, the host's,
+          # its names' and a machine's connections through the Tor gateway
+          # to a Tor network of the test's own, and nothing out with the
+          # gateway down (schizo.nix).
+          schizo = pkgs.testers.runNixOSTest ./nixos/tests/schizo.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;

@@ -28,6 +28,7 @@ module.exports = {
         'allocator',
         'security-report',
         'kernel-hardening',
+        'schizo-mode',
       ],
     },
     {

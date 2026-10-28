@@ -11,6 +11,10 @@
 # with wantedBy, partOf and the like on that unit. They are the OS's, not
 # a person's, so the Machines app does not show them: their pm metadata
 # says `service`, which derisk-machines skips.
+#
+# They are lazy: nothing starts one before it is needed, its state disk is
+# made the first time it starts, and its balloon reports the pages it
+# frees, which the host takes back, so an idle one holds little memory.
 {
   config,
   lib,
@@ -69,7 +73,17 @@ let
           <initrd>${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}</initrd>
           <cmdline>init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}</cmdline>
         </os>
-        @CPU@
+        @CPU@${
+          # A PC's kernel finds its devices' interrupts through ACPI, which a
+          # domain booted by its kernel has only when asked for; on Arm the
+          # `virt` board describes itself in a device tree instead.
+          lib.optionalString pkgs.stdenv.hostPlatform.isx86 ''
+
+            <features>
+              <acpi/>
+              <apic/>
+            </features>''
+        }
         <on_poweroff>destroy</on_poweroff>
         <on_reboot>restart</on_reboot>
         <on_crash>restart</on_crash>
@@ -103,8 +117,10 @@ let
           }
           <serial type='pty'>
             <target port='0'/>
+            <log file='/var/log/libvirt/qemu/${name}-console.log' append='off'/>
           </serial>
           <console type='pty'/>
+          <memballoon model='virtio' freePageReporting='on'/>
           <rng model='virtio'>
             <backend model='random'>/dev/urandom</backend>
           </rng>
