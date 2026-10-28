@@ -20,11 +20,6 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
-- **A default for text files.** Since Sonne left, nothing claims text and
-  source files as their default for `xdg-open`. Files opens them in whatever
-  app happens to list their type, if any. derisk's Text Editor cannot be
-  handed a file, because its desktop entry lives inside the derisk binary
-  with no file argument and no types.
 - **Searching what is in every file.** `derisk-index` reads plain text only.
   A file with a NUL byte in its first 8 KiB counts as binary and is found by
   its name alone, so the text in PDFs, office documents and pictures is not

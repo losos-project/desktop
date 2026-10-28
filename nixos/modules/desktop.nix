@@ -151,6 +151,24 @@ in
     pkgs.swayidle
   ];
 
+  # Text and source files open in derisk's Text Editor and folders in
+  # Files, the types each claims in its desktop entry (pkgs/derisk.nix
+  # installs both). Read from derisk's source, so a type added there is a
+  # default here without a second list to keep.
+  xdg.mime.defaultApplications =
+    let
+      claims =
+        app:
+        let
+          entry = builtins.readFile ../../components/derisk/crates/derisk-apps/data/org.derisk.${app}.desktop;
+          line = lib.findFirst (lib.hasPrefix "MimeType=") "MimeType=" (lib.splitString "\n" entry);
+        in
+        lib.genAttrs (lib.filter (t: t != "") (lib.splitString ";" (lib.removePrefix "MimeType=" line))) (
+          _: "org.derisk.${app}.desktop"
+        );
+    in
+    claims "editor" // claims "files";
+
   # derisk-terminal draws with the theme's monospace family through its Nerd
   # Font build, the same letters with the icons prompts and TUIs print. Hack
   # is the theme's default; the symbols-only Nerd Font gives the icons to a
