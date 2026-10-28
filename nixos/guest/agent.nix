@@ -4,10 +4,14 @@
 # one per person, `agent-<user>`, when they first open the Agent.
 #
 # A service machine (service.nix): booted from the host's store, part of
-# the image and updated with it, and hidden from Machines. Unlike the
-# others it has a screen's worth of userland, the Agent's window drawn in
-# software and carried to the desktop by waypipe as any machine's are
-# (common.nix, "The guest's display"), and a home of its own, on the
+# the image and updated with it, hidden from Machines, and Kicksecure, as
+# every machine too large for BusyBox is (kicksecure.nix): its hardening
+# holds here, so the Agent's programs cannot trace or read one another's
+# memory, and nothing is SUID but PAM's account check (below): Claude
+# Code's sandbox needs no SUID bubblewrap, making do with user namespaces.
+# Unlike the others it has a screen's worth of userland, the Agent's window
+# drawn in software and carried to the desktop by waypipe as any machine's
+# are (common.nix, "The guest's display"), and a home of its own, on the
 # encrypted disk agent.nix gives each person's machine. Nothing of the
 # host's is shared with it: the person's files, their drives' and their
 # network shares' come as they come to every machine, a copy of what they
@@ -53,6 +57,20 @@ in
   systemd.tmpfiles.rules = [ "d /home/${user} 0700 ${user} users -" ];
   # vsock, for the window, the launch port and the tools channel.
   boot.kernelModules = [ "vmw_vsock_virtio_transport" ];
+
+  # The one SUID program, which Kicksecure keeps too (security-misc's
+  # permission-hardener whitelists it): pam_unix, run by systemd as the
+  # account it starts the user manager for, checks that account through it,
+  # and without it the manager, and so everything below, never starts.
+  security.enableWrappers = true;
+  security.wrappers = lib.mkForce {
+    unix_chkpwd = {
+      setuid = true;
+      owner = "root";
+      group = "root";
+      source = "${config.security.pam.package}/bin/unix_chkpwd";
+    };
+  };
 
   # A system account to sysusers, which makes no others, with the uid and
   # group a person's first account has elsewhere.
@@ -117,9 +135,11 @@ in
   # What xdg.portal.enable would install, without the xdg-utils it adds:
   # its scripts are Perl, which service.nix's perlless profile refuses, and
   # xdg-open here is the one above.
+  # No FUSE, whose fusermount3 would be another SUID program: its document
+  # portal shares files with sandboxed apps, and the Agent and its tools
+  # are not one.
   services.dbus.packages = [ pkgs.xdg-desktop-portal ];
   systemd.packages = [ pkgs.xdg-desktop-portal ];
-  programs.fuse.enable = true;
   environment.pathsToLink = [ "/share/xdg-desktop-portal" ];
   environment.etc."xdg/xdg-desktop-portal/portals.conf".text = lib.generators.toINI { } {
     preferred = {
@@ -237,6 +257,11 @@ in
     # Without Perl, which the perlless profile refuses: no send-email or
     # git-svn, which an agent has no use for.
     pkgs.gitMinimal
+    # Claude Code's sandbox for the commands it runs: bubblewrap, here
+    # without SUID, in user namespaces, which kicksecure.nix leaves on, and
+    # socat, which carries its network through the sandbox's proxy.
+    pkgs.bubblewrap
+    pkgs.socat
     pkgs.adwaita-icon-theme
     (lib.hiPrio xdgOpen)
   ]
