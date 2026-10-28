@@ -183,6 +183,38 @@ starts things:
   machine meant for untrusted work therefore cannot cover a window to
   imitate it.
 
+## The clipboard
+
+The desktop has one clipboard, and every window uses it the way the window's
+own app always does: Ctrl+C in a machine's app, Ctrl+V in another machine's
+or on the host, with no extra step between them. Qubes OS asks for one, its
+Ctrl+Shift+C and Ctrl+Shift+V into a global clipboard, and LosOS Desktop
+does not.
+
+- **Every kind of window shares it.** A machine's apps reach it through
+  waypipe, Android apps through scrcpy, Windows apps through FreeRDP,
+  macOS apps through their window client ([macOS app windows](app-windows.md)),
+  and a machine's own screen through its viewer and the SPICE agent the
+  guest tools install. derisk's own apps and the command palette copy and
+  paste with the same keys, and with Ctrl+Insert, Shift+Delete and
+  Shift+Insert.
+- **What was copied stays.** The compositor keeps a copy of the text,
+  formatted text, file lists and one picture of each new selection, up to
+  64 MiB, and offers it itself once the window it came from closes or its
+  machine shuts down. Only an app clearing the clipboard, as a password
+  manager does after a while, empties it.
+- **Only the window with the keyboard reads it.** That is Wayland's own
+  rule. A machine's windows connect as sandboxed clients and get none of
+  the protocols that read the clipboard from outside a focused window
+  (`wl-paste` and clipboard managers use them on the host). So a machine
+  can read what was copied only while one of its windows has the keyboard,
+  not while it sits behind others.
+
+> [!WARNING]
+> A machine sees the clipboard whenever one of its windows has the keyboard,
+> an untrusted red one included. Copy a password or a secret into a machine
+> only when that machine may have it.
+
 ## The guest template
 
 The image ships three templates under `share/losos/machines` on
@@ -344,7 +376,8 @@ machine given the same bytes, and the machine's disk starts empty. The
 machine boots its disk first, and the first CD while the disk is still empty,
 so the installer runs once and the installed system starts after it. Such a
 machine has a screen over SPICE, attached through libvirt, never on a port,
-and with no clipboard channel. It also has a USB tablet, and its CDs are on
+and a channel for the SPICE agent, which shares [the
+clipboard](#the-clipboard) with the screen. It also has a USB tablet, and its CDs are on
 SATA, which every installer has a driver for. The desktop shows it in its own
 window, as "On the desktop" describes. Outside a session,
 `virt-viewer --attach -c qemu:///system win` shows it.

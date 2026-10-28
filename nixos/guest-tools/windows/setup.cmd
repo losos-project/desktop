@@ -7,6 +7,8 @@ rem This CD's own drive, whatever letter Windows gave it.
 set tools=%~d0
 
 rem virtio-win's guest tools: every virtio driver (the display, the balloon,
-rem the tablet, the random number generator) and the QEMU guest agent, which
-rem is how the host's desktop sees the machine's address and shuts it down.
+rem the tablet, the random number generator), the QEMU guest agent, which
+rem is how the host's desktop sees the machine's address and shuts it down,
+rem and the SPICE agent, which shares the desktop's clipboard with the
+rem machine's screen while its viewer has the keyboard.
 "%tools%\virtio-win-guest-tools.exe" /install /passive /norestart

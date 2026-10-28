@@ -15,7 +15,9 @@
 #   - installs waypipe and runs a waypipe server for `user` (the one who ran
 #     sudo, unless named), whose apps' windows then go to the host's desktop
 #     over vsock, framed in the machine's colour;
-#   - installs losos-guest-run, which the desktop runs through the agent.
+#   - installs losos-guest-run, which the desktop runs through the agent;
+#   - installs the SPICE agent, so the machine's own screen shares the
+#     desktop's clipboard while its viewer has the keyboard.
 #
 # Debian, Ubuntu and their derivatives (apt), Fedora and RHEL's family (dnf),
 # openSUSE (zypper) and Arch (pacman). Anything else gets the files and is
@@ -58,9 +60,10 @@ else
   echo "no dracut, initramfs-tools or mkinitcpio here; virtio's drivers are left as the distribution has them" >&2
 fi
 
-# The guest agent and waypipe. Every one of these distributions packages
-# both under these names.
-packages="qemu-guest-agent waypipe"
+# The guest agent, waypipe and the SPICE agent. Every one of these
+# distributions packages them under these names, and its spice-vdagent
+# starts with the graphical session.
+packages="qemu-guest-agent waypipe spice-vdagent"
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y $packages

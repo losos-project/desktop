@@ -415,6 +415,8 @@
         for expected in [
             "<tpm model='tpm-crb'>",
             "<graphics type='spice'>",
+            # The SPICE agent's channel, which carries the clipboard.
+            "name='com.redhat.spice.0'",
             "<clock offset='localtime'>",
             "pm-media-win11-",
             "pm-media-windows-tools-",
