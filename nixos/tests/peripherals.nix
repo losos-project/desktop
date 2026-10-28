@@ -111,7 +111,7 @@ in
       image = stick hostPkgs;
     in
     ''
-      import json, time
+      import json
 
       pt = "0000:00:1d.0"
       plugs = 0
