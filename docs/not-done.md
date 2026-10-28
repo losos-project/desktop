@@ -157,10 +157,14 @@
     arm64 runs on laptops this OS has no kernel configuration for.
 - **[Installer reports](installer.md#reporting-a-failed-install) cover a
   failed install only.** The backend writes them, so nothing is reported when
-  the backend itself stops, or when derisk crashes, or when the installed
-  system fails later. A report needs a GitHub account and a second device, or
-  a browser, to approve the sign-in. No report has reached GitHub yet: that
-  waits for the GitHub App and its client ID in `LOSOS_REPORT_CLIENT_ID`.
+  the backend itself stops, or when derisk crashes. A report needs a GitHub
+  account and a second device, or a browser, to approve the sign-in. The
+  GitHub App and `LOSOS_REPORT_CLIENT_ID` are set up, but no report has
+  reached the real GitHub yet: the tests sign in to a stand-in.
+- **[Desktop reports](reporting.md) have no button yet.** `losos-report` is
+  in the image and writes and sends them, but derisk does not run it yet:
+  the "isn't responding" card, the failed services' report rows and the
+  report page in the session come with derisk's side of the work.
 - **The two gnome-control-center patches** in `nixos/pkgs/patches/`. Nothing
   upstream has them, so they stay. They are written against
   gnome-control-center 51.0, and nixpkgs carries 50.4, which moved the System
