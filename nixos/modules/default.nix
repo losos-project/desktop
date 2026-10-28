@@ -17,6 +17,7 @@
     ./machines.nix
     ./service-machines.nix
     ./schizo.nix
+    ./busybox-guests.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix
