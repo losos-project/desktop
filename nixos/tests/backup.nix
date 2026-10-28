@@ -62,8 +62,6 @@ in
         hostName = "nextcloud.internal";
         config = {
           dbtype = "sqlite";
-          adminuser = "admin";
-          adminpassFile = "${pkgs.writeText "admin-pass" "Admin-test-password-1"}";
         };
         settings = {
           trusted_domains = [ boxName ];
