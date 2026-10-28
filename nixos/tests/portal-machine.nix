@@ -10,7 +10,9 @@
 # person's home, which the machine shares with the host. Everything else
 # is what a PC runs: the backend, the relay, the machine started on the
 # first request with the person's home over virtiofs, and the copy and
-# write-back for the app machine.
+# write-back for the app machine. The app then picks a folder and changes
+# it as a project is changed: a file edited, one added in a new folder,
+# one removed, each of which must happen to the host's folder.
 #
 # The machines run under TCG: the test VM's KVM modules are kept out, as
 # in machines.nix.
@@ -57,7 +59,8 @@
                 @dbus.service.method("org.freedesktop.impl.portal.FileChooser", in_signature="osssa{sv}", out_signature="ua{sv}")
                 def OpenFile(self, handle, app_id, parent, title, options):
                     seen(title)
-                    return (0, {"uris": dbus.Array(["file://" + home + "/Documents/report.txt"], signature="s")})
+                    picked = "/Documents/project" if options.get("directory", False) else "/Documents/report.txt"
+                    return (0, {"uris": dbus.Array(["file://" + home + picked], signature="s")})
 
                 @dbus.service.method("org.freedesktop.impl.portal.FileChooser", in_signature="osssa{sv}", out_signature="ua{sv}")
                 def SaveFile(self, handle, app_id, parent, title, options):
@@ -107,7 +110,7 @@
       };
 
       # An app's machine: it asks for a file to open, reads its copy, and
-      # saves it with a new line.
+      # saves it with a new line; then for a folder, which it changes.
       losos.serviceMachines.app = {
         title = "An app's machine";
         cid = 4190;
@@ -164,6 +167,18 @@
                 echo "saved in the machine" >> "$path"
                 sleep 10
                 echo "PORTAL-TEST done"
+
+                reply=$(busctl --user --timeout=1200 call org.freedesktop.impl.portal.desktop.losos \
+                  /org/freedesktop/portal/desktop org.freedesktop.impl.portal.FileChooser \
+                  OpenFile osssa{sv} /org/test/2 org.example.App "" "Open folder" 1 directory b true)
+                dir=$(echo "$reply" | grep -o '"file://[^"]*"' | head -n1 | tr -d '"' | sed 's|^file://||')
+                echo "PORTAL-TEST folder: $(cat "$dir/notes.txt")"
+                echo "edited in the machine" >> "$dir/notes.txt"
+                mkdir -p "$dir/new"
+                echo "made in the machine" > "$dir/new/file.txt"
+                rm "$dir/old.txt"
+                sleep 10
+                echo "PORTAL-TEST folder done"
               '';
             };
           };
@@ -208,6 +223,7 @@
     host.wait_for_unit("losos-portal-relay.service")
     host.wait_until_succeeds("loginctl show-seat seat0 -p ActiveSession --value | grep -q .")
     host.succeed("su alice -c 'mkdir -p ~/Documents && echo hello from the host > ~/Documents/report.txt'")
+    host.succeed("su alice -c 'mkdir -p ~/Documents/project && echo project notes > ~/Documents/project/notes.txt && echo stale > ~/Documents/project/old.txt'")
     as_alice = "su alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
 
     with step("nothing runs it until something asks"):
@@ -233,6 +249,16 @@
         # The dialog said which machine asked.
         host.succeed("grep -qx 'app: Open' /home/alice/.portal-test-titles")
         host.wait_until_succeeds("grep -q 'PORTAL-TEST done' /var/log/libvirt/qemu/app-console.log", timeout=120)
+
+    with step("a folder picked for an app in a machine changes on the host as it changes there"):
+        host.wait_until_succeeds("grep -q 'PORTAL-TEST folder: project notes' /var/log/libvirt/qemu/app-console.log", timeout=600)
+        project = "/home/alice/Documents/project"
+        host.wait_until_succeeds(f"grep -q 'edited in the machine' {project}/notes.txt", timeout=120)
+        host.wait_until_succeeds(f"grep -q 'made in the machine' {project}/new/file.txt", timeout=120)
+        host.wait_until_fails(f"test -e {project}/old.txt", timeout=120)
+        # Written as alice, by the relay's helper, not as root.
+        host.succeed(f"test $(stat -c %U {project}/new/file.txt) = alice")
+        host.wait_until_succeeds("grep -q 'PORTAL-TEST folder done' /var/log/libvirt/qemu/app-console.log", timeout=120)
 
     with step("the portal machine stops once nothing asks"):
         host.succeed("systemctl stop losos-service-machine-app.service")

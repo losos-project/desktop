@@ -60,7 +60,9 @@ fn bodies_cross_a_bus_unchanged() {
                 signature: body.signature.clone(),
                 bytes: body.bytes.clone(),
             };
-            server.reply(&message.header(), &sent.structure().unwrap()).unwrap();
+            server
+                .reply(&message.header(), &sent.structure().unwrap())
+                .unwrap();
             return body.signature;
         }
         String::new()
@@ -75,19 +77,23 @@ fn bodies_cross_a_bus_unchanged() {
     options.insert("current_name", Value::from("notes.txt"));
     options.insert(
         "filters",
-        Value::from(vec![(
-            "Text",
-            vec![(0u32, "*.txt")],
-        )]),
+        Value::from(vec![("Text", vec![(0u32, "*.txt")])]),
     );
-    let handle = zvariant::ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1_2/t").unwrap();
+    let handle =
+        zvariant::ObjectPath::try_from("/org/freedesktop/portal/desktop/request/1_2/t").unwrap();
     let reply = client
         .call_method(
             Some("org.example.Echo"),
             "/org/freedesktop/portal/desktop",
             Some("org.freedesktop.impl.portal.FileChooser"),
             "OpenFile",
-            &(handle.clone(), "org.example.App", "", "Open a file", options),
+            &(
+                handle.clone(),
+                "org.example.App",
+                "",
+                "Open a file",
+                options,
+            ),
         )
         .unwrap();
     let (got_handle, app, parent, title, got): (
@@ -98,8 +104,11 @@ fn bodies_cross_a_bus_unchanged() {
         HashMap<String, zvariant::OwnedValue>,
     ) = reply.body().deserialize().unwrap();
     assert_eq!(got_handle.as_str(), handle.as_str());
-    assert_eq!((app.as_str(), parent.as_str(), title.as_str()), ("org.example.App", "", "Open a file"));
-    assert_eq!(bool::try_from(&got["multiple"]).unwrap(), true);
+    assert_eq!(
+        (app.as_str(), parent.as_str(), title.as_str()),
+        ("org.example.App", "", "Open a file")
+    );
+    assert!(bool::try_from(&got["multiple"]).unwrap());
     assert!(got.contains_key("filters"));
     assert_eq!(echo.join().unwrap(), "osssa{sv}");
     let _ = daemon.kill();

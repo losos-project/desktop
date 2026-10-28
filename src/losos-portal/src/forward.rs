@@ -50,9 +50,9 @@ impl Relay {
     pub fn connect(place: Place) -> io::Result<Relay> {
         Ok(match place {
             Place::Host => Relay::Unix(UnixStream::connect(RELAY_SOCKET)?),
-            Place::Machine => {
-                Relay::Vsock(vsock::VsockStream::connect_with_cid_port(HOST_CID, RELAY_PORT)?)
-            }
+            Place::Machine => Relay::Vsock(vsock::VsockStream::connect_with_cid_port(
+                HOST_CID, RELAY_PORT,
+            )?),
         })
     }
 
@@ -131,7 +131,10 @@ pub fn run(place: Place) -> Result<()> {
         let (Some(path), Some(member)) = (header.path(), header.member()) else {
             continue;
         };
-        let interface = header.interface().map(|i| i.to_string()).unwrap_or_default();
+        let interface = header
+            .interface()
+            .map(|i| i.to_string())
+            .unwrap_or_default();
         let (path, member) = (path.to_string(), member.to_string());
         let answered = match (interface.as_str(), member.as_str()) {
             ("org.freedesktop.DBus.Properties", "GetAll") => {
@@ -219,7 +222,10 @@ fn request(
     running: &Running,
 ) {
     let header = message.header();
-    let interface = header.interface().map(|i| i.to_string()).unwrap_or_default();
+    let interface = header
+        .interface()
+        .map(|i| i.to_string())
+        .unwrap_or_default();
     let method = header.member().map(|m| m.to_string()).unwrap_or_default();
     let reply = (|| -> std::result::Result<Body, Box<Reply>> {
         let body = Body::of(message).map_err(fail)?;
@@ -327,8 +333,7 @@ fn outgoing(
         // (handle, app_id, parent_window, title, options)
         if let Some(Value::Dict(options)) = fields.get(4) {
             let options: HashMap<String, OwnedValue> =
-                HashMap::try_from(Value::Dict(options.try_clone().map_err(fail)?))
-                    .map_err(fail)?;
+                HashMap::try_from(Value::Dict(options.try_clone().map_err(fail)?)).map_err(fail)?;
             let kept: HashMap<String, Value> = options
                 .into_iter()
                 .filter(|(key, _)| !matches!(key.as_str(), "current_folder" | "current_file"))
@@ -392,7 +397,10 @@ fn incoming(
         let uris = OwnedValue::try_from(Value::from(local.clone())).map_err(fail)?;
         results.insert("uris".to_owned(), uris);
     } else if let Some(uri) = local.first() {
-        results.insert("uri".to_owned(), OwnedValue::from(zvariant::Str::from(uri.clone())));
+        results.insert(
+            "uri".to_owned(),
+            OwnedValue::from(zvariant::Str::from(uri.clone())),
+        );
     }
     response_body(0, results).map_err(fail)
 }

@@ -5,7 +5,8 @@
 //!                                        the host's relay, as root
 //!     losos-portal serve                 in the portal machine
 //!     losos-portal agent                 in the portal machine, for derisk's portal
-//!     losos-portal read|write PATH       the relay's helpers, as the person
+//!     losos-portal read|write|remove PATH
+//!                                        the relay's helpers, as the person
 //!     losos-portal screenshot
 
 use std::io::IsTerminal;
@@ -19,7 +20,10 @@ use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let helper = matches!(args.first().map(String::as_str), Some("read" | "write" | "screenshot"));
+    let helper = matches!(
+        args.first().map(String::as_str),
+        Some("read" | "write" | "remove" | "screenshot")
+    );
     if !helper {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -48,6 +52,7 @@ fn run(args: &[String]) -> Result<()> {
         ["agent"] => agent::run(),
         ["read", path] => files::read(Path::new(path)).into_diagnostic(),
         ["write", path] => files::write(Path::new(path)).into_diagnostic(),
+        ["remove", path] => files::remove(Path::new(path)).into_diagnostic(),
         ["screenshot"] => files::screenshot().into_diagnostic(),
         _ => Err(miette!(
             "usage: losos-portal forward [--machine] | relay [--machine NAME] [--idle SECONDS] [--boot SECONDS] | serve | agent"
