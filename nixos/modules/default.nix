@@ -15,6 +15,7 @@
     ./nvidia.nix
     ./libvirt.nix
     ./machines.nix
+    ./busybox-guests.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix
