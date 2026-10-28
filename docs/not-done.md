@@ -273,12 +273,8 @@
   other machines' connections to a box only on ports 80 and 443, by the name
   they ask for. An app's own port on a box is reached directly, and nothing
   stops a machine that knows a box's address from reaching it without the
-  [LosOS boxes](losos-boxes.md) machine. The machine's keyring has no sign-in
-  to unlock it, so the first `losos` command that stores a key or token asks
-  for a keyring password in a window of the machine. Nothing makes the
-  machine automatically either, and its owner makes it from the template.
-  Neither half has met a real box on a real LAN yet, only a box that the
-  machines test boots beside the host.
+  [LosOS boxes](losos-boxes.md) machine. Neither half has met a real box on a
+  real LAN yet, only a box that the machines test boots beside the host.
 - **Backups to a LosOS box keep one copy and need a password sign-in.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A

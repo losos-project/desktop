@@ -98,8 +98,32 @@ in
   };
 
   # losos keeps every box's key and token in the Secret Service through
-  # secret-tool, never in a file. The keyring starts on the user's bus when
-  # asked, and its first use asks for the keyring's password in a window
-  # of this machine, through waypipe like any other.
+  # secret-tool, never in a file.
   services.gnome.gnome-keyring.enable = true;
+
+  # Nobody signs in here, so no sign-in password unlocks the keyring: the
+  # host keeps one for this machine instead (`losos-boxes keyring-password`,
+  # which asks the host's relay on vsock port 7353), and this starts the
+  # keyring with it at every boot, making the login keyring with it the
+  # first time. --replace takes over from a keyring D-Bus started first.
+  # A keyring made before this, with a password its owner chose, does not
+  # open with the host's and keeps asking for the owner's in a window of
+  # this machine; so does every keyring if the host cannot be asked, as
+  # D-Bus then starts one locked.
+  systemd.user.services.losos-boxes-keyring = {
+    description = "Unlock the keyring with the password the host keeps for this machine";
+    wantedBy = [ "default.target" ];
+    before = [ "losos-boxes.service" ];
+    script = ''
+      password=$(${pkgs.losos-boxes}/bin/losos-boxes keyring-password)
+      # Every byte read is the password, so no newline goes with it.
+      exec /run/wrappers/bin/gnome-keyring-daemon --replace --foreground \
+        --components=secrets --unlock < <(printf '%s' "$password")
+    '';
+    serviceConfig = {
+      # Until the host's relay answers, which it does from its boot.
+      Restart = "on-failure";
+      RestartSec = "5s";
+    };
+  };
 }
