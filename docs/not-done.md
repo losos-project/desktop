@@ -20,6 +20,22 @@
     receiving machine nested in QEMU, and controller passthrough through
     QEMU's emulated IOMMU (`nixos/tests/peripherals.nix`). None of it has
     met a PC's own USB controllers or a real Bluetooth radio.
+- **The network and files machines.** [The network machine](network-machine.md)
+  and [the files machine](files-machine.md) have gaps:
+  - Handing a network card over by VFIO has only run in QEMU. The VM test
+    runs the fallback for a PC without an IOMMU.
+  - sys-net forwards IPv4 only. The host has no IPv6 while it routes
+    through it.
+  - The keyboard's Wi-Fi and airplane keys reach the host's rfkill, not
+    the machine's. Settings' Wi-Fi switch works.
+  - The edge proxies are not in sys-net yet.
+  - Without an IOMMU, NetworkManager on the host keeps the networks the
+    host has saved, and sys-net keeps none of its own.
+  - Network shares have a command, `losos-shares`, and no page in
+    Settings or Files. WebDAV shares have not been tried against a
+    server.
+  - OpenSSH's `sftp-server` in sys-files is not chrooted to the volume it
+    serves. The host is the only one that can ask for one.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A

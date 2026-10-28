@@ -1,0 +1,27 @@
+[package]
+name = "losos-filesd"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_filesd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "losos-filesd"
+path = "src/main.rs"
+
+[dependencies]
+# Logs go through tracing to the machine's console, `RUST_LOG` choosing the
+# level, and failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# PID 1's reaping, mount(2) and power-off.
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

@@ -15,6 +15,8 @@ module.exports = {
         'systemd',
         'hypervisor',
         'peripherals',
+        'network-machine',
+        'files-machine',
         'layout',
         'hibernation',
         'drivers',

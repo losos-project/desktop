@@ -15,7 +15,15 @@
     ./nvidia.nix
     ./libvirt.nix
     ./machines.nix
+    ./service-machines.nix
+    ./schizo.nix
     ./busybox-guests.nix
+    ./busybox-host-kernel.nix
+    ./passthrough.nix
+    ./vm-call.nix
+    ./network-machine.nix
+    ./files-machine.nix
+    ./shares-machine.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix
