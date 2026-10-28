@@ -131,10 +131,12 @@
   account and a second device, or a browser, to approve the sign-in. The
   GitHub App and `LOSOS_REPORT_CLIENT_ID` are set up, but no report has
   reached the real GitHub yet: the tests sign in to a stand-in.
-- **[Desktop reports](reporting.md) have no button yet.** `losos-report` is
-  in the image and writes and sends them, but derisk does not run it yet:
-  the "isn't responding" card, the failed services' report rows and the
-  report page in the session come with derisk's side of the work.
+- **[Desktop reports](reporting.md) see only some problems.** A window is
+  noticed only when its app misses the ping that a click or a key into it
+  sends, so a hung window nobody touches is not. Settings is the only app
+  that reports an action that never finished, and only for Bluetooth
+  pairing, a backup and asking for a factory reset. Nothing is reported when
+  derisk itself crashes.
 - **The two gnome-control-center patches** in `nixos/pkgs/patches/`. Nothing
   upstream has them, so they stay. They are written against
   gnome-control-center 51.0, and nixpkgs carries 50.4, which moved the System
