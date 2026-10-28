@@ -22,6 +22,20 @@
 let
   cfg = config.losos;
   inherit (cfg) arch;
+
+  # The swap partition on the disk root was mounted from.
+  swapLink = "/dev/disk/by-loader/swap";
+
+  # Succeeds when the disk named $1, without /dev/, holds the mounted root.
+  # udev runs it from the main system's coldplug, when / is the root
+  # partition the initrd chose; the swap is set up after that, so it never
+  # asks before root is known.
+  besideRoot = pkgs.writeScript "losos-beside-root" ''
+    #!/bin/sh
+    PATH=${lib.makeBinPath [ pkgs.util-linux ]}
+    root=$(findmnt --noheadings --output SOURCE --nofsroot /) || exit 1
+    [ "$(lsblk --noheadings --nodeps --output PKNAME "$root")" = "$1" ]
+  '';
 in
 {
   boot.initrd.systemd.repart = {
@@ -142,11 +156,22 @@ in
   };
 
   # The swap partition losos-swap describes is encrypted with a fresh random
-  # key every boot rather than exposing raw swap blocks on disk. The label is
-  # fixed by losos-swap. nofail, so a boot that finds no swap partition does
-  # not wait for one.
+  # key every boot rather than exposing raw swap blocks on disk. nofail, so a
+  # boot that finds no swap partition does not wait for one.
+  #
+  # It was /dev/disk/by-partlabel/losos-swap, but every LosOS disk has a
+  # partition by that label, and with two in a machine udev links whichever
+  # it saw last: swap could come from the disk that did not boot, and the
+  # other system's swap was overwritten. root and /home come from the disk
+  # the boot loader started from (gpt-auto, or bios.nix's rule), so swap
+  # does too: the rule below links only the losos-swap partition that sits
+  # beside the mounted root.
   environment.etc.crypttab.text = ''
-    swap /dev/disk/by-partlabel/losos-swap /dev/urandom swap,nofail
+    swap ${swapLink} /dev/urandom swap,nofail
+  '';
+
+  services.udev.extraRules = ''
+    SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_PART_ENTRY_NAME}=="losos-swap", PROGRAM="${besideRoot} $parent", SYMLINK+="${lib.removePrefix "/dev/" swapLink}"
   '';
 
   # udev probes /dev/mapper/swap when the mapping appears, before

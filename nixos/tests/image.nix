@@ -29,6 +29,9 @@ rec {
         useEFIBoot = lib.mkDefault true;
         fileSystems = lib.mkVMOverride { };
         memorySize = lib.mkDefault 3072;
+        # A second disk, which boot.nix gives a losos-swap partition of its
+        # own to check swap stays on the disk that booted.
+        emptyDiskImages = [ 64 ];
       };
 
       # The VM's first-boot disk is /dev/vda. Repart cannot infer it from

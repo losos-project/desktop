@@ -129,8 +129,9 @@
   failed install only.** The backend writes them, so nothing is reported when
   the backend itself stops, or when derisk crashes, or when the installed
   system fails later. A report needs a GitHub account and a second device, or
-  a browser, to approve the sign-in. No report has reached GitHub yet: that
-  waits for the GitHub App and its client ID in `LOSOS_REPORT_CLIENT_ID`.
+  a browser, to approve the sign-in. The GitHub App and its client ID in
+  `LOSOS_REPORT_CLIENT_ID` are set, but no report from a real failed install
+  has reached GitHub yet.
 - **The two gnome-control-center patches** in `nixos/pkgs/patches/`. Nothing
   upstream has them, so they stay. They are written against
   gnome-control-center 51.0, and nixpkgs carries 50.4, which moved the System
@@ -211,11 +212,6 @@
   driver on a private bus, which offers no Performance profile. The Halium
   GSI has no Bluetooth, because the phone's controller sits behind its vendor
   HAL and nothing here bridges that to BlueZ.
-- **Two LosOS disks in one PC.** Root comes from the disk the [boot
-  loader](boot-loaders.md) started from, under UEFI and a BIOS alike. Swap,
-  though, is found by its partition label, `losos-swap`, in `disk.nix` and
-  `hibernate.nix`. With two LosOS disks in one machine, swap may come from the
-  other disk.
 - **A recovery shell on an aarch64 PC.** The boot menu's root shell for a
   machine nobody can administer, described in [When something goes
   wrong](troubleshooting.md#no-one-can-administer-the-machine), starts the

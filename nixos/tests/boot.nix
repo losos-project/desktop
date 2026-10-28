@@ -35,6 +35,21 @@ in
           machine.succeed("sfdisk --json /dev/vda | grep -c '\"name\": \"_empty\"' | grep -qx 2")
           machine.succeed("swapon --show=NAME --noheadings | grep -q dm-")
 
+      with subtest("swap comes from the disk that booted, beside a second LosOS disk"):
+          # vdb stands in for another LosOS disk in the same PC: a partition
+          # labelled losos-swap, as first boot would have made there.
+          # by-partlabel would now name either disk; disk.nix's link names
+          # only the one root was mounted from.
+          machine.succeed(
+              "printf 'label: gpt\\nsize=32M, type=0657FD6D-A4AB-43C4-84E5-0933C84B4F4F, name=losos-swap\\n'"
+              " | sfdisk --quiet /dev/vdb"
+          )
+          machine.succeed("udevadm settle")
+          machine.succeed("test -e /dev/vdb1")
+          machine.succeed('test "$(lsblk --noheadings --nodeps --output PKNAME "$(readlink -f /dev/disk/by-loader/swap)")" = vda')
+          # The boot that matters is the next one, with both disks there from
+          # the start; the last subtest checks it.
+
       with subtest("GRUB chainloaded the UKI and named the disk it came from"):
           # bli's LoaderInfo, and the LoaderDevicePartUUID gpt-auto found root
           # and the ESP by (grub.nix).
@@ -268,5 +283,11 @@ in
           machine.succeed(f"test -f {esp}/EFI/Linux/losos-desktop_1.efi")
           machine.fail(f"ls {esp}/EFI/Linux/ | grep -q '+'")
           machine.fail(f"grep -q '^losos_' {esp}/EFI/losos/grubenv")
+
+      with subtest("a boot with a second LosOS disk takes swap from its own"):
+          # vdb's losos-swap partition was there for the whole of the boot
+          # above, so by-partlabel could have named it.
+          machine.succeed("swapon --show=NAME --noheadings | grep -q dm-")
+          machine.succeed("dmsetup deps -o devname swap | grep -q '(vda[0-9]*)'")
     '';
 }
