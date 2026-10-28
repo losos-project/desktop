@@ -301,6 +301,10 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # USB devices plugged into sys-usb's controller wake it and reach
+          # their machines, over and over, and it sleeps again once they are
+          # gone (peripherals.nix).
+          peripherals = pkgs.testers.runNixOSTest ./nixos/tests/peripherals.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;

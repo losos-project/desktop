@@ -16,8 +16,10 @@
     proxy, which passes only key and pointer events, is not done.
   - A Bluetooth radio that is not on USB, on a UART or SDIO as on some
     Arm laptops, stays the host's, and Settings does not see it.
-  - Controller passthrough has only run under QEMU, never on a PC's own
-    USB controllers.
+  - Every part has run only in virtual machines: the router, sys-usb and a
+    receiving machine nested in QEMU, and controller passthrough through
+    QEMU's emulated IOMMU (`nixos/tests/peripherals.nix`). None of it has
+    met a PC's own USB controllers or a real Bluetooth radio.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
