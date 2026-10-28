@@ -49,7 +49,7 @@ packages are public, so it needs no token. Any machine can do the same:
 
 ```
 cd proxy && sh build.sh
-GHCR_REPOSITORY=losos-project/losos-desktop node --experimental-strip-types serve.ts 127.0.0.1:8484
+GHCR_REPOSITORY=losos-project/desktop node --experimental-strip-types serve.ts 127.0.0.1:8484
 ```
 
 To use it for a build:

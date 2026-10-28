@@ -32,10 +32,12 @@ read derisk's theme, web pages among them, use it too. A theme can name any
 installed font instead.
 
 The web browser is [Danube](danube.md), WPE WebKit inside an mcsapi window.
-[Ad blocking](adblock.md) works from filter lists and covers every app. The
-terminal is [derisk's own](terminal.md), `derisk-terminal`. It draws the
-theme's monospace font from its Nerd Font build, so the icons that prompts
-and TUIs print show up. It renders on the GPU, or in software where there is
+[Ad blocking](adblock.md) works from filter lists and covers every app.
+[Schizo mode](schizo-mode.md) sends every connection through Tor by way of a
+gateway machine like Whonix's, and lets nothing out while that gateway is
+down. The terminal is [derisk's own](terminal.md), `derisk-terminal`. It
+draws the theme's monospace font from its Nerd Font build, so the icons that
+prompts and TUIs print show up. It renders on the GPU, or in software where there is
 no GPU. [The Agent](agent.md), on the PC image, runs Claude Code in its own
 window with live previews of the apps it builds, and derisk's palette can
 hand it a request.

@@ -79,8 +79,8 @@ in
 
     release.repository = mkOption {
       type = types.nullOr types.str;
-      default = "losos-project/losos-desktop";
-      example = "someone/losos-desktop";
+      default = "losos-project/desktop";
+      example = "someone/desktop";
       description = ''
         The GitHub repository, `owner/name`, whose release of this version
         the installer ISO installs (docs/releases.md). The flake sets it from
@@ -117,11 +117,27 @@ in
 
     docs.url = mkOption {
       type = types.nullOr types.str;
-      default = "https://losos-project.github.io/losos-desktop";
+      # GitHub Pages serves a repository's site at /<name>/, so the site
+      # moves when the repository is renamed and the old path answers 404;
+      # it does not redirect. The address was written out here once, and
+      # when losos-desktop became desktop every image went on asking the
+      # old path for its update index: none of them could update, and no
+      # ISO could install over the network. Taken from the repository the
+      # releases come from, it follows a rename or a fork's CI by itself.
+      default =
+        let
+          repository = config.losos.release.repository;
+          owner = lib.toLower (builtins.head (lib.splitString "/" repository));
+          name = lib.last (lib.splitString "/" repository);
+        in
+        if repository == null then null else "https://${owner}.github.io/${name}";
+      defaultText = lib.literalExpression ''"https://<owner>.github.io/<name>", from config.losos.release.repository'';
       description = ''
         The published documentation site, where derisk's error alerts open a
-        section the image's own copy lacks (docs.nix). `null` keeps them to
-        the copy on the machine.
+        section the image's own copy lacks (docs.nix), and whose
+        `updates/` holds each channel's release index (update-source.nix).
+        `null` keeps the alerts to the copy on the machine and serves no
+        updates from GitHub Releases.
       '';
     };
 
