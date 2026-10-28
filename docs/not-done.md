@@ -125,6 +125,12 @@
     is one pick away in the firmware's boot menu.
   - **arm64.** The installer is built for x86_64 only, because Windows on
     arm64 runs on laptops this OS has no kernel configuration for.
+- **[Installer reports](installer.md#reporting-a-failed-install) cover a
+  failed install only.** The backend writes them, so nothing is reported when
+  the backend itself stops, or when derisk crashes, or when the installed
+  system fails later. A report needs a GitHub account and a second device, or
+  a browser, to approve the sign-in. No report has reached GitHub yet: that
+  waits for the GitHub App and its client ID in `LOSOS_REPORT_CLIENT_ID`.
 - **The two gnome-control-center patches** in `nixos/pkgs/patches/`. Nothing
   upstream has them, so they stay. They are written against
   gnome-control-center 51.0, and nixpkgs carries 50.4, which moved the System

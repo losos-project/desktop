@@ -135,3 +135,46 @@ network that re-signs TLS with its own authority, where the channel's
 certificate never verifies. With the disk attached, the installer does not
 need the network at all. The backend's `hello` names the disk as `release`,
 and derisk then skips its Network page.
+
+## Reporting a failed install
+
+When an install fails, the button on the failed page is "Report the
+problem". The report opens as an issue in the project's own repository on
+GitHub, `losos.report.repository`, which is the repository the releases come
+from unless it is set. The backend writes the report from what it saw:
+
+- the step the install stopped at and the error it stopped with;
+- the tools' output during the install, the last 300 lines without the
+  download's progress lines;
+- the warnings and errors in this boot's journal;
+- the ISO's version and architecture, the firmware type, the machine's make
+  and model, its CPU, memory and kernel, and the disk it was installing onto.
+
+The page shows the whole text before anything is sent, and the person can
+add a note of their own above it. The report is public, so MAC and IP
+addresses are replaced before it is shown. Only loopback addresses stay,
+because the installer's own mirror runs on 127.0.0.1.
+
+GitHub lets only a signed-in account open an issue. A token baked into the
+ISO would belong to everyone who downloads it, so the person signs in with
+GitHub's device flow instead. "Send" asks GitHub for an eight-letter code,
+and the page shows it beside a QR code for `github.com/login/device`. The
+person approves it on a phone or another computer, and the backend files the
+issue as soon as GitHub hands it a token. The token belongs to a GitHub App
+whose only permission is issues. It stays in the backend's memory for that
+one report and is never written to disk. The page then shows the issue's
+address and its QR code.
+
+The same failure on many machines should be one issue. A report's title ends
+with a fingerprint of its step and error message, with numbers and device
+names taken out, so `/dev/nvme0n1p2` and `/dev/sda2` match. When an open
+issue already carries that fingerprint, the report is added to it as a
+comment instead.
+
+The ISO offers a report only when it knows the App's client ID, which is
+`losos.report.clientId`. The flake sets it from the `LOSOS_REPORT_CLIENT_ID`
+repository variable in CI, and a build without it offers no report. The
+client ID is not a secret, because GitHub shows it on the sign-in page. To
+set it up, register a GitHub App with "Enable Device Flow" checked, no
+webhook, and only the "Issues: Read and write" repository permission. Install
+the App on the repository, then put its client ID in the variable.

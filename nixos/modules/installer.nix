@@ -147,6 +147,10 @@ let
       # channel's newest complete release, regardless of the ISO's build tag.
       releaseRepo = null;
       docsUrl = cfg.docs.url;
+      # Where a failed install is reported, and the GitHub App it signs in
+      # with; no report is offered without both.
+      reportRepo = cfg.report.repository;
+      reportClientId = cfg.report.clientId;
       inherit esp repartDefinitions sysupdateTemplates;
       # Run on the disk once it is installed, so a legacy BIOS PC starts it
       # too; null where there is no BIOS (aarch64).
