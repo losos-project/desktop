@@ -1,5 +1,5 @@
 # Service machines with no operating system of their own
-# (docs/service-machines.md): BusyBox, the one program a machine is there
+# (docs/peripherals.md, "BusyBox machines"): BusyBox, the one program a machine is there
 # to run, and the host's own kernel. The network, files, USB and Bluetooth
 # machines, and the disposable machines devices are given, are each
 # nothing but that, so there is no distribution in them to update, no
@@ -51,8 +51,8 @@ let
           type = lib.types.listOf lib.types.str;
           default = [ ];
           description = ''
-            Host kernel modules /init loads, with what they need; vsock's
-            and 9p's are always there. A device the machine is given later
+            Host kernel modules /init loads, with what they need; virtio's,
+            vsock's and 9p's are always there. A device the machine is given later
             loads its own driver through mdev, if the driver is among
             these or a share brings the host's modules.
           '';
@@ -63,7 +63,15 @@ let
               options = {
                 source = lib.mkOption {
                   type = lib.types.str;
-                  description = "The host directory, shared read-only.";
+                  description = "The host directory.";
+                };
+                writable = lib.mkOption {
+                  type = lib.types.bool;
+                  default = false;
+                  description = ''
+                    Whether the machine may write to it, for state it keeps
+                    across starts, such as the Bluetooth machine's pairings.
+                  '';
                 };
                 target = lib.mkOption {
                   type = lib.types.str;
@@ -78,9 +86,20 @@ let
           );
           default = [ ];
           description = ''
-            Host directories the machine mounts read-only over 9p, such as
-            the host's firmware, which no initrd could hold all of.
+            Host directories the machine mounts over 9p, read-only unless
+            they say otherwise: the host's firmware, which no initrd could
+            hold all of, or a directory for state.
             service-machines.nix adds the matching <filesystem>s.
+          '';
+        };
+        moduleDir = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            Where modprobe looks once the shares are mounted, such as a
+            share of the host's modules, for a machine given devices whose
+            drivers nobody can name at build time. The initrd's own modules
+            load first either way, 9p's among them.
           '';
         };
         firmwarePath = lib.mkOption {
@@ -110,6 +129,8 @@ let
             kernel = config'.system.modulesTree;
             firmware = config'.hardware.firmware;
             rootModules = [
+              # The bus every one of QEMU's virtio devices is on.
+              "virtio_pci"
               "vmw_vsock_virtio_transport"
               "9p"
               "9pnet_virtio"
@@ -145,14 +166,19 @@ let
             mkdir -p /dev/pts /dev/shm
             mount -t devpts devpts /dev/pts
             hostname ${name}
-            for m in vmw_vsock_virtio_transport 9pnet_virtio 9p ${lib.escapeShellArgs config.modules}; do
+            for m in virtio_pci vmw_vsock_virtio_transport 9pnet_virtio 9p ${lib.escapeShellArgs config.modules}; do
               modprobe -q "$m" || echo "losos-guest: cannot load $m" >&2
             done
             ${lib.concatMapStrings (s: ''
               mkdir -p ${lib.escapeShellArg s.target}
-              mount -t 9p -o trans=virtio,version=9p2000.L,ro ${lib.escapeShellArg s.tag} ${lib.escapeShellArg s.target} \
+              mount -t 9p -o trans=virtio,version=9p2000.L,${
+                if s.writable then "rw" else "ro"
+              } ${lib.escapeShellArg s.tag} ${lib.escapeShellArg s.target} \
                 || echo "losos-guest: cannot mount ${s.target}" >&2
             '') config.shares}
+            ${lib.optionalString (config.moduleDir != null) ''
+              export MODULE_DIR=${lib.escapeShellArg config.moduleDir}
+            ''}
             # The kernel has no uevent helper, so mdev reads its events
             # itself, in the background, after making what is there now.
             mdev -s
