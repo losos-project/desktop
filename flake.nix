@@ -260,6 +260,7 @@
           "losos-vm-call"
           "losos-netd"
           "losos-filesd"
+          "losos-portal"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
