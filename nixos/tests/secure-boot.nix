@@ -74,5 +74,8 @@ in
           report = json.loads(machine.succeed(f"{security} --json"))
           check = next(a for a in report if a["appstream_id"] == "io.losos.SecurityAttr.SecureBoot")
           assert check["success"], check
+          # What the page's Secure Boot section reads: nothing left to do.
+          status = json.loads(machine.succeed("losos-secure-boot"))
+          assert status == {"secure_boot": True, "key": "enrolled", "code": None}, status
     '';
 }

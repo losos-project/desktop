@@ -238,6 +238,25 @@ in
           machine.succeed(f"cmp {grub} {esp}/EFI/systemd/grubx64.efi")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
 
+      with subtest("Settings can ask shim to enroll LosOS's key at the next start"):
+          # What derisk's System page reads and starts (secure-boot.nix).
+          # Taken back at the end, or MokManager would wait at the
+          # reboots below for someone to type the code.
+          import json
+          status = json.loads(machine.succeed("losos-secure-boot"))
+          assert status == {"secure_boot": False, "key": "missing", "code": None}, status
+          machine.succeed("systemctl start losos-secure-boot-enroll.service")
+          status = json.loads(machine.succeed("losos-secure-boot"))
+          assert status["key"] == "requested", status
+          assert len(status["code"]) == 8 and status["code"].isdigit(), status
+          shim_guid = "605dab50-e046-4300-abb6-3dd810dd8b23"
+          machine.succeed(f"test -f /sys/firmware/efi/efivars/MokNew-{shim_guid}")
+          machine.succeed(f"test -f /sys/firmware/efi/efivars/MokAuth-{shim_guid}")
+          machine.succeed("systemctl start losos-secure-boot-cancel.service")
+          status = json.loads(machine.succeed("losos-secure-boot"))
+          assert status == {"secure_boot": False, "key": "missing", "code": None}, status
+          machine.fail(f"test -f /sys/firmware/efi/efivars/MokNew-{shim_guid}")
+
       with subtest("LosOS's firmware entry goes back to the front of the boot order"):
           # The entry the Windows installer adds, and Windows putting its
           # own back in front of it (grub.nix, losos-boot-order).

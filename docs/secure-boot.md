@@ -18,11 +18,33 @@ once the firmware says it is on. A BIOS boot has no Secure Boot, and the
 [boot loader](boot-loaders.md) page describes everything that is the same
 with or without it.
 
+## Turning it on from Settings
+
+On an installed LosOS that started with Secure Boot off, Settings, System,
+Secure Boot sets it up:
+
+1. Choose **Set up Secure Boot** and authenticate as an administrator.
+   Settings asks shim to enroll LosOS's key at the next start, and shows an
+   eight-digit code.
+2. Restart. MokManager shows "Press any key to perform MOK management" and
+   waits. Press a key.
+3. Choose **Enroll MOK**, then **Continue**, then **Yes**.
+4. Type the code from Settings and press Enter, then choose **Reboot**.
+5. Turn Secure Boot on in the firmware's settings. Settings offers to
+   restart into them.
+
+This never shows shim's "Security Violation" screen, because the key is
+enrolled before Secure Boot is on. `losos-secure-boot` prints where it
+stands, and `losos-secure-boot-cancel.service` takes a request back. Behind
+both is `mokutil`, run by `losos-secure-boot-enroll.service` so that polkit
+asks an administrator first. The code only shows that someone at the
+keyboard agreed, so any user on the machine may read it.
+
 ## Enrolling LosOS's key
 
-The first time a PC with Secure Boot on starts LosOS, from an installed disk
-or from the [installer ISO](installer.md), shim cannot check GRUB yet and
-says so:
+The first time a PC with Secure Boot on starts LosOS without the key
+enrolled, from an installed disk or from the [installer
+ISO](installer.md), shim cannot check GRUB yet and says so:
 
 1. "Verification failed: (0x1A) Security Violation" shows. Press Enter.
 2. "Shim UEFI key management" shows for ten seconds. Press any key before it
