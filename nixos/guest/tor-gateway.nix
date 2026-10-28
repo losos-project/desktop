@@ -252,7 +252,7 @@ in
         if nft list chain ip gateway-nat edge | grep -q redirect; then have=on; else have=off; fi
         [ "$want" = "$have" ] && return
         if [ "$want" = on ]; then
-          nft add rule ip gateway-nat edge redirect to :${toString ports.edge}
+          nft add rule ip gateway-nat edge meta l4proto tcp redirect to :${toString ports.edge}
         else
           nft flush chain ip gateway-nat edge
         fi
