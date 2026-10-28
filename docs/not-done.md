@@ -278,7 +278,10 @@
   for a keyring password in a window of the machine. Nothing makes the
   machine automatically either, and its owner makes it from the template.
   Neither half has met a real box on a real LAN yet, only a box that the
-  machines test boots beside the host.
+  machines test boots beside the host. Away from home only `losos`, the
+  palette's search and LosOS Cloud's link reach a box, through its edge;
+  backups and the other machines' connections still need the box's own
+  network.
 - **Backups to a LosOS box keep one copy and need a password sign-in.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A

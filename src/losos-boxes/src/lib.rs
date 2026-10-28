@@ -343,6 +343,55 @@ impl LososBox {
     }
 }
 
+impl LososBox {
+    /// The box at `url`, the address `losos hosts` lists for it, when its
+    /// host is a host name.
+    pub fn at(url: &str) -> Option<LososBox> {
+        let rest = url
+            .strip_prefix("http://")
+            .or_else(|| url.strip_prefix("https://"))?;
+        let authority = rest.split('/').next()?;
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((host, port)) => (host, port.parse().ok()?),
+            None => (authority, 80),
+        };
+        LososBox::new(host, port, None)
+    }
+
+    /// The entry for a box `losos` remembers while it is not on this
+    /// network: it opens the box in `losos`, which goes through the box's
+    /// edge at `edge` when the box's own address leads nowhere, and its
+    /// action opens LosOS Cloud there, which the edge serves to anyone
+    /// signed in to LosOS Login. The admin pages stay on the box's own
+    /// network, so there is no action for them. The file is the same as
+    /// the box's entry on the network, which replaces it once the box is
+    /// found there.
+    pub fn away_entry(&self, url: &str, edge: &str) -> String {
+        let name = escape(self.name());
+        format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name={name}\n\
+             GenericName=LosOS box\n\
+             Comment={comment}\n\
+             Keywords=LosOS;box;server;home;away;{host};\n\
+             Icon=network-server\n\
+             Exec=derisk-terminal --app-id=org.losos.Boxes --title={name} losos-boxes terminal {url}\n\
+             Actions=cloud;\n\
+             \n\
+             [Desktop Action cloud]\n\
+             Name=Open LosOS Cloud\n\
+             Exec=xdg-open {edge}/cloud/\n",
+            comment = escape(&format!(
+                "LosOS box {}, away from home, through {}",
+                self.host,
+                edge.trim_start_matches("https://")
+            )),
+            host = escape(&self.host),
+        )
+    }
+}
+
 /// What opening a box's entry does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Opens {
@@ -590,6 +639,36 @@ pub fn logged_in_boxes(output: &str) -> impl Iterator<Item = &str> {
         })
         .filter(|(url, kind)| url.contains("://") && *kind == "box")
         .map(|(url, _)| url)
+}
+
+/// The boxes `losos` remembers an edge address for, from
+/// `losos --lang en hosts`: each box's URL with the address under it on its
+/// `away from home:` line (losos.access.throughEdge on the box, remembered
+/// at `losos login`).
+pub fn remembered_boxes(output: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut current: Option<&str> = None;
+    for line in output.lines() {
+        if !line.starts_with(char::is_whitespace) {
+            current = logged_in_boxes(line).next();
+        } else if let (Some(url), Some(edge)) =
+            (current, line.trim_start().strip_prefix("away from home:"))
+        {
+            // Both end up on an entry's Exec lines.
+            let edge = edge.trim();
+            if edge.starts_with("https://") && plain_url(edge) && plain_url(url) {
+                found.push((url.to_owned(), edge.to_owned()));
+            }
+        }
+    }
+    found
+}
+
+/// Whether `url` holds only what a host name, a port and a scheme need, so
+/// that it can go on an `Exec` line as it is.
+fn plain_url(url: &str) -> bool {
+    url.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b".-_:/".contains(&b))
 }
 
 /// What a box is asked for at most per search and app: the palette shows
@@ -1118,5 +1197,49 @@ mod tests {
         let off = json!({"available": false, "reason": "noGit"});
         assert!(text_hits("http://mattbox.local", "git", &off).is_empty());
         assert!(text_hits("http://mattbox.local", "cloud", &json!("not json")).is_empty());
+    }
+
+    #[test]
+    fn remembers_the_boxes_with_an_edge() {
+        let output = "http://mattbox.local  box\n  host key: AAAA\n  your key: BBBB\n  \
+                      away from home: https://mattbox.losos.cfd\n\
+                      http://otherbox.local  box\n  host key: CCCC\n\
+                      https://edge.example  edge\n  away from home: https://nope.example\n\
+                      http://evil.local  box\n  away from home: http://plain.example\n\
+                      http://worse.local  box\n  away from home: https://x.example/;rm\n";
+        assert_eq!(
+            remembered_boxes(output),
+            [(
+                "http://mattbox.local".to_owned(),
+                "https://mattbox.losos.cfd".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_box_away_opens_in_losos_and_its_cloud_through_the_edge() {
+        let found = LososBox::at("http://mattbox.local").unwrap();
+        assert_eq!(found, mattbox(None));
+        assert_eq!(
+            LososBox::at("http://mattbox.local:8080").unwrap().port,
+            8080
+        );
+        assert!(LososBox::at("http://bad host").is_none());
+        let entry = found.away_entry("http://mattbox.local", "https://mattbox.losos.cfd");
+        assert!(entry.contains("Name=mattbox\n"), "{entry}");
+        assert!(
+            entry.contains("Exec=derisk-terminal --app-id=org.losos.Boxes --title=mattbox losos-boxes terminal http://mattbox.local\n"),
+            "{entry}"
+        );
+        assert!(
+            entry.contains(
+                "Comment=LosOS box mattbox.local, away from home, through mattbox.losos.cfd\n"
+            ),
+            "{entry}"
+        );
+        assert!(
+            entry.contains("Exec=xdg-open https://mattbox.losos.cfd/cloud/\n"),
+            "{entry}"
+        );
     }
 }

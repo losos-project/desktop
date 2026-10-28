@@ -34,7 +34,7 @@ use std::net::{IpAddr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6, TcpListener
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::sync::RwLock;
+use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use miette::{bail, miette, IntoDiagnostic, Result, WrapErr};
@@ -327,28 +327,125 @@ fn run(until: Option<Instant>, mut apply: impl FnMut(&Change) -> Result<()>) -> 
 /// Keeps one entry per box present, until resolved stops browsing, which
 /// the service restarts after. Entries from an earlier run go first: their
 /// boxes may have left while nothing watched.
+///
+/// A box `losos` remembers an edge address for gets an entry too while it
+/// is not on this network (`remembered`), so it can be reached away from
+/// home. Its entry is the same file, and the box's own replaces it as soon
+/// as the box is found here.
 fn watch(dir: &Path, opens: Opens) -> Result<()> {
     clear(dir)?;
     std::fs::create_dir_all(dir)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot create {}", dir.display()))?;
     info!(dir = %dir.display(), "watching for LosOS boxes");
-    run(None, |change| match change {
-        Change::Write(found) => {
-            info!(host = %found.host, version = ?found.version, "box present");
-            let path = dir.join(found.file_name());
-            let partial = dir.join(format!(".{}.partial", found.file_name()));
-            std::fs::write(&partial, found.desktop_entry(opens))
-                .and_then(|()| std::fs::rename(&partial, &path))
-                .into_diagnostic()
-                .wrap_err_with(|| format!("cannot write {}", path.display()))
-        }
-        Change::Remove(file) => {
-            info!(%file, "box gone");
-            remove(&dir.join(file))
-        }
+    // The hosts found on this network, which a remembered box's entry must
+    // not replace; held while either side writes, so neither overwrites
+    // the other's newer entry.
+    let present = Mutex::new(BTreeSet::<String>::new());
+    let (stop_tx, stop) = crossbeam_channel::bounded::<()>(0);
+    std::thread::scope(|scope| {
+        scope.spawn(|| remembered(dir, &present, &stop));
+        let watched = run(None, |change| {
+            let mut present = present.lock().unwrap_or_else(PoisonError::into_inner);
+            match change {
+                Change::Write(found) => {
+                    info!(host = %found.host, version = ?found.version, "box present");
+                    present.insert(found.host.clone());
+                    write_entry(dir, &found.file_name(), &found.desktop_entry(opens))
+                }
+                Change::Remove(file) => {
+                    info!(%file, "box gone");
+                    if let Some(host) = file
+                        .strip_prefix(ENTRY_PREFIX)
+                        .and_then(|f| f.strip_suffix(".desktop"))
+                    {
+                        present.remove(host);
+                    }
+                    remove(&dir.join(file))
+                }
+            }
+        });
+        drop(stop_tx);
+        watched
     })?;
     Ok(())
+}
+
+/// How often `watch` reads which boxes `losos` remembers: a sign-in or a
+/// sign-out shows within a minute.
+const REMEMBER_EVERY: Duration = Duration::from_secs(60);
+
+/// Writes an entry for each box `losos` remembers an edge address for
+/// while it is not on this network, and removes it once `losos` forgets
+/// the box, every [`REMEMBER_EVERY`] until `stop` closes. It reads nothing
+/// while the keyring is locked, so it never brings up the keyring's
+/// password window, and leaves the entries it wrote as they were.
+fn remembered(
+    dir: &Path,
+    present: &Mutex<BTreeSet<String>>,
+    stop: &crossbeam_channel::Receiver<()>,
+) {
+    let mut away = BTreeSet::<String>::new();
+    loop {
+        if keyring_unlocked() {
+            match Command::new("losos")
+                .args(["--lang", "en", "hosts"])
+                .output()
+            {
+                Ok(out) => {
+                    let listed = String::from_utf8_lossy(&out.stdout);
+                    let remembered: Vec<(LososBox, String, String)> =
+                        losos_boxes::remembered_boxes(&listed)
+                            .into_iter()
+                            .filter_map(|(url, edge)| Some((LososBox::at(&url)?, url, edge)))
+                            .collect();
+                    let present = present.lock().unwrap_or_else(PoisonError::into_inner);
+                    for (found, url, edge) in &remembered {
+                        if present.contains(&found.host) {
+                            away.remove(&found.host);
+                            continue;
+                        }
+                        if let Err(e) =
+                            write_entry(dir, &found.file_name(), &found.away_entry(url, edge))
+                        {
+                            warn!(host = %found.host, "{e:?}");
+                        } else if away.insert(found.host.clone()) {
+                            info!(host = %found.host, %edge, "box away from home");
+                        }
+                    }
+                    let forgotten: Vec<String> = away
+                        .iter()
+                        .filter(|host| !remembered.iter().any(|(b, _, _)| &b.host == *host))
+                        .cloned()
+                        .collect();
+                    for host in forgotten {
+                        away.remove(&host);
+                        if !present.contains(&host) {
+                            info!(%host, "box no longer remembered");
+                            let _ = remove(&dir.join(format!("{ENTRY_PREFIX}{host}.desktop")));
+                        }
+                    }
+                }
+                Err(e) => debug!(error = %e, "cannot run losos"),
+            }
+        }
+        if !matches!(
+            stop.recv_timeout(REMEMBER_EVERY),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout)
+        ) {
+            return;
+        }
+    }
+}
+
+/// Writes `text` as the entry `file` in `dir`, whole or not at all.
+fn write_entry(dir: &Path, file: &str, text: &str) -> Result<()> {
+    let path = dir.join(file);
+    let partial = dir.join(format!(".{file}.partial"));
+    std::fs::write(&partial, text)
+        .and_then(|()| std::fs::rename(&partial, &path))
+        .into_diagnostic()
+        .wrap_err_with(|| format!("cannot write {}", path.display()))
 }
 
 /// Prints the boxes found within a few seconds, one per line.
