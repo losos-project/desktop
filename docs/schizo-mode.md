@@ -119,7 +119,9 @@ verified image:
 - Its disabled kernel modules: rare network protocols and file systems,
   network file systems, FireWire, Thunderbolt and GPS. A machine that needs
   one back lists it in `losos.service.kicksecure.allowModules`.
-- No SUID programs and no sudo, and root is locked.
+- No SUID programs but `unix_chkpwd`, which PAM needs to start a person's
+  session, no sudo, and root is locked. A machine that needs another SUID
+  program lists it in `losos.service.kicksecure.wrappers`.
 
 The gateway is therefore what Whonix's Gateway is: Kicksecure with Tor.
 The settings are kept as data in `nixos/guest/kicksecure-settings.nix`, so
