@@ -74,7 +74,10 @@ the key.
 
 Without a key, as in a build from a fork or on a machine that has none, the
 ESP holds GRUB alone at `EFI/BOOT/BOOTX64.EFI`, unsigned. Such an image
-starts only with Secure Boot off.
+starts only with Secure Boot off. With it on, the firmware refuses GRUB and
+finds nothing else to start:
+
+![OVMF's boot screen: "failed to load Boot0002 ... Access Denied -- rejected probably by Secure Boot", then "No bootable option or device was found"](images/secure-boot-refused.png)
 
 ## Where shim comes from
 
