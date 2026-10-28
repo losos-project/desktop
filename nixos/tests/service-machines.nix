@@ -120,11 +120,30 @@
 
     virsh = "virsh -c qemu:///system"
 
+    # What the machines and the host were doing, for a failure's log.
+    def diagnose():
+        for name in ("sys-net", "sys-files"):
+            print(host.execute(f"tail -n 200 /var/log/libvirt/qemu/{name}-console.log")[1])
+            print(host.execute(f"journalctl -b --no-pager -n 60 -u losos-service-machine-{name} -u losos-service-machine-{name}-watch")[1])
+        print(host.execute(f"{virsh} list --all; ip -br addr; ip route; ip rule; bridge link")[1])
+        print(host.execute("journalctl -b --no-pager -n 80 -u losos-network-links -u losos-passthrough-sys-net -u libvirtd")[1])
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def step(name):
+        with subtest(name):
+            try:
+                yield
+            except Exception:
+                diagnose()
+                raise
+
     start_all()
     lan.wait_for_unit("web.service")
     host.wait_for_unit("libvirt-defaults.service")
 
-    with subtest("the network machine starts and the host goes out through it"):
+    with step("the network machine starts and the host goes out through it"):
         host.wait_for_unit("losos-service-machine-sys-net.service", timeout=600)
         # Its link to the host is up once losos-netd has named and
         # addressed it; under emulation the machine takes a while to boot.
@@ -136,7 +155,7 @@
         host.succeed("losos-adblock update || true")
         host.wait_until_succeeds("test \"$(dig +short @10.139.0.1 ads.example)\" = 0.0.0.0", timeout=120)
 
-    with subtest("many connections and downloads at once"):
+    with step("many connections and downloads at once"):
         want = lan.succeed("cat /srv/big.sha256").strip()
         host.succeed(
             "seq 1 400 | xargs -P 32 -I{} curl -fsS --max-time 60 -o /dev/null http://web.lan/?{}"
@@ -146,21 +165,21 @@
         ).split()
         assert sums == [want] * 6, sums
 
-    with subtest("a DNS flood through the ad blocker"):
+    with step("a DNS flood through the ad blocker"):
         failed = host.succeed(
             "seq 1 2000 | xargs -P 32 -I{} sh -c 'dig +short +tries=1 +time=5 @10.139.0.1 q{}.web.lan >/dev/null || echo x' | wc -l"
         ).strip()
         assert int(failed) <= 20, f"{failed} of 2000 queries failed"
         host.succeed("dig +short @10.139.0.1 web.lan | grep -q 192.168.1")
 
-    with subtest("nmcli through losos-vm-call, many at once"):
+    with step("nmcli through losos-vm-call, many at once"):
         out = host.succeed("losos-vm-call call nmcli -t -f STATE general")
         assert out.strip() in ("connected", "disconnected", "connecting"), out
         host.succeed("seq 1 200 | xargs -P 8 -I{} losos-vm-call call nmcli -t -f DEVICE,TYPE,STATE device >/dev/null")
         # Someone who is not allowed is refused by the relay.
         host.fail("su -s /bin/sh nobody -c 'losos-vm-call call nmcli general'")
 
-    with subtest("schizo mode with no Tor gateway cuts the host off, and comes back"):
+    with step("schizo mode with no Tor gateway cuts the host off, and comes back"):
         for _ in range(5):
             host.succeed("touch /run/losos-net/schizo")
             # Not applied: the gateway's link is not here, and says so.
@@ -170,7 +189,7 @@
             host.succeed("losos-vm-call call net-apply")
             host.wait_until_succeeds("curl -fsS --max-time 5 http://web.lan/", timeout=60)
 
-    with subtest("the network machine destroyed mid-download comes back by itself"):
+    with step("the network machine destroyed mid-download comes back by itself"):
         host.succeed("curl -s --max-time 600 -o /tmp/cut http://web.lan/big >/dev/null 2>&1 &")
         time.sleep(2)
         host.succeed(f"{virsh} destroy sys-net")
@@ -179,7 +198,7 @@
         got = host.succeed("curl -fsS --max-time 600 http://web.lan/big | sha256sum | cut -d' ' -f1").strip()
         assert got == want, got
 
-    with subtest("drives in the files machine, mounted for the person at the screen"):
+    with step("drives in the files machine, mounted for the person at the screen"):
         host.wait_for_unit("getty@tty1.service")
         host.wait_until_succeeds("loginctl show-seat seat0 -p ActiveSession --value | grep -q .")
         for n in (1, 2):
@@ -207,7 +226,7 @@
                 host.succeed(f"rm -rf /tmp/check{n} && mkdir /tmp/check{n} && mcopy -s -n -i /tmp/stick{n}.img '::*' /tmp/check{n}/")
             host.succeed("sed -e 's|STICK1/|/tmp/check1/|' -e 's|STICK2/|/tmp/check2/|' /tmp/sums-alice | sha256sum -c")
 
-    with subtest("the files machine powers off once nothing is plugged in"):
+    with step("the files machine powers off once nothing is plugged in"):
         host.wait_until_fails("systemctl is-active losos-service-machine-sys-files.service", timeout=300)
         host.succeed(f"{virsh} domstate sys-files | grep -q 'shut off'")
   '';
