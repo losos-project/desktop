@@ -2,10 +2,11 @@
 # machine"): a person opens the Agent, the host's root end starts their
 # machine, `agent-<user>`, hidden from Machines and at the address their
 # uid gives it, and the Agent's window reaches the host from that address,
-# which is how the desktop frames it as the machine's. The machine's home
-# is the person's Agent folder, and what it writes there is theirs. Its
-# tools channel answers it in the person's session. Root and the system's
-# accounts have no machine, and the machine stops with its unit.
+# which is how the desktop frames it as the machine's. Nothing of the
+# host's is shared with it: its home is a disk of its own, encrypted with
+# a key the person holds, and the key leaves libvirt once the machine has
+# it. Its tools channel answers it in the person's session. Root and the
+# system's accounts have no machine, and the machine stops with its unit.
 #
 # The desktop's half, derisk's gate and the compositor, is derisk's and is
 # tested there; here a listener on the gate's port stands in for it and
@@ -20,7 +21,7 @@
   node.pkgsReadOnly = false;
 
   nodes.machine =
-    { pkgs, ... }:
+    { config, pkgs, ... }:
     {
       imports = [
         ../modules/libvirt.nix
@@ -56,7 +57,11 @@
             peer.write(str(cid))
       '';
 
-      environment.systemPackages = [ pkgs.python3 ];
+      environment.systemPackages = [
+        pkgs.python3
+        pkgs.jq
+        config.virtualisation.libvirtd.qemu.package
+      ];
     };
 
   testScript = ''
@@ -99,6 +104,7 @@
             f"{virsh} metadata agent-alex https://losos-project.github.io/xmlns/pm-machine/1"
         )
         assert re.search(r"<\w*:?service>true</", metadata), metadata
+        assert re.search(r"<\w*:?person>alex</", metadata), metadata
         machine.wait_until_succeeds("test -s /tmp/peer", timeout=1500)
         peer = machine.succeed("cat /tmp/peer").strip()
         assert peer == str(cid), f"the window came from {peer}, the machine is {cid}"
@@ -112,15 +118,30 @@
             " | grep -q \"read the desktop's theme\""
         )
 
-    with subtest("the machine's home is the person's Agent folder, and its files are theirs"):
-        machine.succeed("test \"$(stat -c %U /home/alex/Agent)\" = alex")
-        machine.wait_until_succeeds("test -d /home/alex/Agent/.local/share/derisk-agent/chats", timeout=600)
-        owners = machine.succeed("find /home/alex/Agent -printf '%u\\n' | sort -u").split()
-        assert owners == ["alex"], f"the Agent folder holds files of {owners}"
+    with subtest("the machine has nothing of the host's but the store, and its own disk is the person's to open"):
+        shares = re.findall(r"<source dir='([^']*)'", xml)
+        assert shares == ["/nix/store"], f"the machine is handed {shares}"
+        key = "/home/alex/.local/share/losos/agent-machine.key"
+        machine.succeed(f"test \"$(stat -c %U:%a {key})\" = alex:600")
+        disk = "/var/lib/losos-agent-machine/1000/home.qcow2"
+        info = machine.succeed(f"qemu-img info --force-share {disk}")
+        assert re.search(r"encrypted:\s*yes", info), info
+        # Its home was made there: a new disk is 2 MiB of LUKS header.
+        machine.wait_until_succeeds(
+            f"test $(qemu-img info --force-share --output=json {disk} | jq '.[\"actual-size\"]') -gt 4000000",
+            timeout=600,
+        )
+        out = machine.succeed(f"{virsh} secret-list")
+        assert "1b0e3f5a" not in out, out
+        machine.fail("test -e /run/losos-agent-machine/1000/key")
 
-    with subtest("the machine stops with its unit and lets the folder go"):
+    with subtest("the machine stops with its unit, and starts again on the same disk"):
         machine.succeed("systemctl stop losos-agent-machine@1000.service")
         machine.succeed(f"{virsh} domstate agent-alex | grep -q 'shut off'")
-        machine.fail("mountpoint -q /run/losos-agent-machine/1000/home")
+        before = machine.succeed(f"stat -c %i {disk}")
+        machine.succeed("systemctl start losos-agent-machine@1000.service")
+        machine.succeed(f"{virsh} domstate agent-alex | grep -q running")
+        assert machine.succeed(f"stat -c %i {disk}") == before, "the disk was made again"
+        machine.succeed("systemctl stop losos-agent-machine@1000.service")
   '';
 }

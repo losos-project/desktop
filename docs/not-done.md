@@ -61,9 +61,10 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
-- **The Agent's machine.** The [Agent](agent.md) has only its Agent folder,
-  so a project elsewhere in the person's home has to be moved or copied in
-  first. The machine has no Nix and no pm, so the Agent's `nix_build` and
+- **The Agent's machine.** The [Agent](agent.md) works on a copy of the
+  folder the person picks, so a file changed on the host while the copy is
+  open is not seen in the machine until the folder is picked again. The
+  machine has no Nix and no pm, so the Agent's `nix_build` and
   `pm_build` tools fail there. Files the Agent asks to open, such as an
   artifact, stay in the machine, because only web links open on the
   desktop. The machine draws in software, with no GPU. Nothing on the
