@@ -133,6 +133,8 @@ let
   # The machine's side of what the host shares: the ad blocker's compiled
   # list and the host's word on the mode and its servers.
   hostShare = "/var/lib/losos-host";
+  inherit (config.environment) etc;
+  encryptedDns = etc ? "losos-adblock/encrypted-dns";
 
   # The firewall, loaded whole at boot (losos-netd's nft-base). Until
   # losos-netd has applied the mode, nothing from the host is forwarded, so
@@ -287,6 +289,18 @@ in
       files."/etc/resolv.conf" = pkgs.writeText "resolv.conf" ''
         nameserver ${up.machine}
       '';
+      # The forwarder's encrypted DNS (adblock.nix, docs/adblock.md): the
+      # image's servers and default mode, which the person's choice in the
+      # adblock share replaces, and the CA bundle its verifier reads to
+      # check them. Only with an ad blocker that has them.
+      files."/etc/losos-adblock/encrypted-dns" =
+        lib.mkIf encryptedDns
+          etc."losos-adblock/encrypted-dns".source;
+      files."/etc/losos-adblock/encrypted-dns-default" =
+        lib.mkIf encryptedDns
+          etc."losos-adblock/encrypted-dns-default".source;
+      files."/etc/ssl/certs/ca-certificates.crt" =
+        lib.mkIf encryptedDns "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
       kicksecure.sysctl = {
         # The host checks the machine is up by pinging it, as the stress
         # test does; nothing past the host can reach it to ping.
