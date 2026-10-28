@@ -97,6 +97,11 @@ in
   losos = callWithMold ./losos.nix { };
   # Finds those boxes over mDNS and offers each one as an application.
   losos-boxes = callWithMold ./losos-boxes.nix { };
+  # The host's way into its service machines: `nmcli` on the host runs in
+  # the network machine (docs/network-machine.md).
+  losos-vm-call = callWithMold ./losos-vm-call.nix { };
+  # The network machine's init and daemon, in place of NetworkManager there.
+  losos-netd = callWithMold ./losos-netd.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.

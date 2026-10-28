@@ -256,6 +256,8 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-vm-call"
+          "losos-netd"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
