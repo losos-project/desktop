@@ -23,6 +23,9 @@
 //!     --wait SECONDS       how long `show` waits for the guest to answer (120)
 //!     --software           decode on the processor even where the GPU could
 
+// Used by the Wayland windows; tested on any system.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod cursor;
 mod decode;
 #[cfg(unix)]
 mod derisk;

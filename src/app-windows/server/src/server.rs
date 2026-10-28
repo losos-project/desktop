@@ -21,7 +21,7 @@ use app_windows_protocol::{
 };
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 
-use crate::{apps, ax, capture, files, input};
+use crate::{apps, ax, capture, cursor, files, input};
 
 /// Room for messages waiting to be written to one connection: a few
 /// seconds of pictures for a handful of windows.
@@ -44,6 +44,8 @@ pub struct Session {
     id: u64,
     tx: Sender<Vec<u8>>,
     watching: AtomicBool,
+    /// Whether it asked for the pointer's look (`protocol::Watch::cursor`).
+    cursor: AtomicBool,
     /// Whether a picture for this connection was dropped since its last
     /// keyframe, so the next one it gets must be a keyframe.
     behind: AtomicBool,
@@ -60,6 +62,9 @@ pub struct Hub {
     /// The clipboard's text as last sent or received, so a change is sent
     /// once and a host's own text is not echoed back to it.
     clipboard: Mutex<Option<String>>,
+    /// The pointer's look as last sent, for a connection that starts
+    /// watching.
+    cursor: Mutex<Option<protocol::Cursor>>,
     next_session: AtomicU64,
 }
 
@@ -71,6 +76,7 @@ impl Hub {
             windows: Mutex::new(BTreeMap::new()),
             focused: Mutex::new(None),
             clipboard: Mutex::new(None),
+            cursor: Mutex::new(None),
             next_session: AtomicU64::new(1),
         }
     }
@@ -85,13 +91,33 @@ impl Hub {
             .any(|s| s.watching.load(Ordering::Relaxed))
     }
 
+    /// Whether any connection wants the pointer's look.
+    pub fn cursor_watched(&self) -> bool {
+        self.sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.watching.load(Ordering::Relaxed) && s.cursor.load(Ordering::Relaxed))
+    }
+
     /// Sends a control message to every connection that watches windows.
     pub fn broadcast(&self, message: &Message) {
+        self.send_where(message, |_| true);
+    }
+
+    /// Sends the pointer's new look to every connection that asked for it.
+    pub fn cursor(&self, cursor: protocol::Cursor) {
+        let message = Message::Cursor(cursor.clone());
+        *self.cursor.lock().unwrap() = Some(cursor);
+        self.send_where(&message, |s| s.cursor.load(Ordering::Relaxed));
+    }
+
+    fn send_where(&self, message: &Message, wanted: impl Fn(&Session) -> bool) {
         let bytes = message.encode();
         let sessions: Vec<_> = self.sessions.lock().unwrap().clone();
         for session in sessions
             .iter()
-            .filter(|s| s.watching.load(Ordering::Relaxed))
+            .filter(|s| s.watching.load(Ordering::Relaxed) && wanted(s))
         {
             if session.tx.send_timeout(bytes.clone(), STALL).is_err() {
                 eprintln!("connection {} stopped reading; letting it go", session.id);
@@ -230,6 +256,11 @@ pub fn main() -> ExitCode {
         .name("clipboard".into())
         .spawn(move || watch_clipboard(&watcher))
         .expect("spawning the clipboard thread");
+    let pointer = hub.clone();
+    thread::Builder::new()
+        .name("cursor".into())
+        .spawn(move || cursor::watch(&pointer))
+        .expect("spawning the cursor thread");
     let accepter = hub.clone();
     thread::Builder::new()
         .name("accept".into())
@@ -266,6 +297,7 @@ fn connection(hub: &Arc<Hub>, stream: TcpStream) {
         id: hub.next_session.fetch_add(1, Ordering::Relaxed),
         tx,
         watching: AtomicBool::new(false),
+        cursor: AtomicBool::new(false),
         behind: AtomicBool::new(false),
     });
     let writer = thread::spawn(move || write_loop(write_half, rx));
@@ -350,15 +382,21 @@ fn handle(hub: &Arc<Hub>, session: &Arc<Session>, state: &mut Connection, messag
                 reply(Message::Error(ErrorMessage { message: e }));
             }
         }
-        Message::Watch => {
+        Message::Watch(watch) => {
             // Everything already open, as if it had just opened, each with
             // a keyframe coming so this connection can start decoding.
             let windows: Vec<Tracked> = hub.windows.lock().unwrap().values().cloned().collect();
             session.behind.store(true, Ordering::Relaxed);
+            session.cursor.store(watch.cursor, Ordering::Relaxed);
             session.watching.store(true, Ordering::Relaxed);
             for w in windows {
                 reply(Message::WindowOpened(w.info.clone()));
                 w.keyframe.store(true, Ordering::Relaxed);
+            }
+            // Once the cursor thread has seen one; it sends the first itself.
+            let current = hub.cursor.lock().unwrap().clone();
+            if let Some(current) = current.filter(|_| watch.cursor) {
+                reply(Message::Cursor(current));
             }
         }
         Message::Keyframe(WindowRef { window }) => {

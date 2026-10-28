@@ -149,7 +149,7 @@ class Machine:
             self.combo(name.split("+"))
             time.sleep(every)
 
-    def click(self, x, y):
+    def move(self, x, y):
         self.qmp({
             "execute": "input-send-event",
             "arguments": {"events": [
@@ -157,6 +157,9 @@ class Machine:
                 {"type": "abs", "data": {"axis": "y", "value": int(y * 32767)}},
             ]},
         })
+
+    def click(self, x, y):
+        self.move(x, y)
         time.sleep(0.3)
         for down in (True, False):
             self.qmp({
@@ -481,6 +484,13 @@ def scenes(machine, run):
     time.sleep(40)
     run.picture("06-textedit-typed")
     ok &= run.step("typed into TextEdit from LosOS", found)
+    # The pointer over the window's text, where macOS shows the I-beam and
+    # LosOS should too. A picture only: where the window sits differs.
+    machine.move(0.5, 0.5)
+    time.sleep(2)
+    machine.move(0.52, 0.52)
+    time.sleep(20)
+    run.picture("06b-textedit-pointer")
 
     client(machine, "open", "com.apple.calculator", unit="aw-calculator")
     found = window(run, "com.apple.calculator")

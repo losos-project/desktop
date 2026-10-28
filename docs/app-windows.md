@@ -147,7 +147,11 @@ keyframe.
 
 A file goes as a start message with its name, size and whether to open it,
 its bytes in pieces, and an end message, and the guest answers with where it
-saved it. Nothing in the protocol is particular to macOS. Keys are Linux key codes,
+saved it. A client that asks for the pointer when it starts watching is told
+how it looks whenever that changes: by its CSS name ("text", "pointer",
+"ew-resize"), which this desktop draws from its own cursor theme, or as a
+PNG with its hot spot when the guest's pointer is a picture of its own.
+Nothing in the protocol is particular to macOS. Keys are Linux key codes,
 which a guest maps to its own, and menus already have derisk's shape.
 
 ## How it is tested
@@ -160,13 +164,14 @@ build runs the same tests.
 runners, which are Apple hardware, on Apple silicon and on Intel. There
 `macos-app-server` runs inside macOS, and `app-windows record` drives it
 from the same machine with the scripts in `src/app-windows/tests`. Those
-scripts open TextEdit and Calculator. They type, pick menu items, copy and
-paste, open a context menu, resize, hold a key and time how long a key
+scripts open TextEdit and Calculator. They type, check that the pointer turns into
+the I-beam over text and back into the arrow over the title bar, pick menu
+items, copy and paste, open a context menu, resize, hold a key and time how long a key
 takes to show. Another downloads Rectangle's newest disk image into a
 folder `app-windows watch` looks at, and sends an installer package built
 with `pkgbuild`, then waits for the Finder and Installer windows they
-open. A step fails when its picture, size, title, menus or
-clipboard never comes. Each run keeps every picture, a report with frame
+open. A step fails when its picture, size, title, menus,
+clipboard or pointer never comes. Each run keeps every picture, a report with frame
 rates and key latency, and a recording, which `app-windows replay` shows on
 a desktop.
 
@@ -185,8 +190,11 @@ server see the same network connection either way.
 
 - Pictures reach the compositor through shared memory, copied once from
   the decoder. Handing over the GPU's own buffers would skip that copy.
-- The pointer is always the arrow here, whatever macOS shows over a link
-  or a text field.
+- The pointer's look is read from macOS a few times a second, so it can
+  trail a fast move by a frame or two. An animated pointer, such as the
+  spinning wait cursor, shows as one still picture. Apple has said the call
+  that reads it will stop answering in a future macOS; then the pointer is
+  the arrow here again.
 - Only text crosses the clipboard, not pictures or files.
 - Drag and drop between the guest and this desktop does not work.
 - A package downloaded inside another machine stays in that machine; only

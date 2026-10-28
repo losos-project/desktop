@@ -1,9 +1,14 @@
 # TextEdit, through everything a person does with a window: typing by key
-# and as text, menus, the clipboard, a context menu, resizing, key repeat,
-# and how long a key takes to show.
+# and as text, the pointer's look, menus, the clipboard, a context menu,
+# resizing, key repeat, and how long a key takes to show.
 launch com.apple.TextEdit
 window com.apple.TextEdit 60
 shot 01-opened
+# The I-beam over the text, the arrow over the title bar.
+move 200 200
+expect-cursor text 5
+move 200 10
+expect-cursor default 5
 keys Hello from LosOS!
 expect-change 5
 shot 02-typed

@@ -233,6 +233,44 @@ pub struct ActivateMenu {
     pub item: String,
 }
 
+/// Host: what a [`Message::Watch`] asks for beyond windows. A server from
+/// before a field was added reads past it, and one sent by a client from
+/// before reads as `false`, so neither end sends the other a message it
+/// cannot read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Watch {
+    /// Send [`Message::Cursor`] whenever the guest's pointer changes look.
+    #[serde(default)]
+    pub cursor: bool,
+}
+
+/// Guest: how its pointer looks now, sent when that changes and once to a
+/// connection that starts watching. The host shows it over every window of
+/// the guest's while its own pointer is there.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Cursor {
+    /// The look by its CSS name ("default", "text", "pointer", "ew-resize"
+    /// and the rest), which the host draws from its own cursor theme, the
+    /// way Wayland's cursor-shape protocol names them. Empty when the
+    /// guest's pointer is none of those, and `image` is its picture.
+    #[serde(default)]
+    pub shape: String,
+    #[serde(default)]
+    pub image: Option<CursorImage>,
+}
+
+/// A pointer picture of the guest's own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CursorImage {
+    /// A PNG, in base64.
+    pub png: String,
+    /// Its pixels per logical unit: 2 for a Retina pointer.
+    pub scale: u32,
+    /// The point that clicks, in the PNG's own pixels from its top left.
+    pub hotspot_x: u32,
+    pub hotspot_y: u32,
+}
+
 /// The clipboard's text, sent by either end when its own changes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clipboard {
@@ -292,13 +330,14 @@ pub enum Message {
 
     /// Host: send me windows. Until then a connection gets none, so one
     /// that only lists or launches apps costs the guest no capture.
-    Watch,
+    Watch(Watch),
     WindowOpened(WindowInfo),
     WindowChanged(WindowInfo),
     WindowClosed(WindowRef),
     Video(Video),
 
     Pointer(Pointer),
+    Cursor(Cursor),
     Button(Button),
     Scroll(Scroll),
     Key(Key),
@@ -350,6 +389,7 @@ mod kind {
     pub const FOCUS: u8 = 0x36;
     pub const KEYFRAME: u8 = 0x37;
     pub const TEXT: u8 = 0x38;
+    pub const CURSOR: u8 = 0x39;
     pub const MENUS: u8 = 0x40;
     pub const ACTIVATE_MENU: u8 = 0x41;
     pub const CLIPBOARD: u8 = 0x50;
@@ -383,7 +423,7 @@ impl Message {
             Message::ListApps => frame(kind::LIST_APPS, b"{}"),
             Message::Apps(m) => json(kind::APPS, m),
             Message::Launch(m) => json(kind::LAUNCH, m),
-            Message::Watch => frame(kind::WATCH, b"{}"),
+            Message::Watch(m) => json(kind::WATCH, m),
             Message::WindowOpened(m) => json(kind::WINDOW_OPENED, m),
             Message::WindowChanged(m) => json(kind::WINDOW_CHANGED, m),
             Message::WindowClosed(m) => json(kind::WINDOW_CLOSED, m),
@@ -398,6 +438,7 @@ impl Message {
                 frame(kind::VIDEO, &body)
             }
             Message::Pointer(m) => json(kind::POINTER, m),
+            Message::Cursor(m) => json(kind::CURSOR, m),
             Message::Button(m) => json(kind::BUTTON, m),
             Message::Scroll(m) => json(kind::SCROLL, m),
             Message::Key(m) => json(kind::KEY, m),
@@ -433,7 +474,7 @@ impl Message {
             kind::LIST_APPS => Message::ListApps,
             kind::APPS => Message::Apps(json(body)?),
             kind::LAUNCH => Message::Launch(json(body)?),
-            kind::WATCH => Message::Watch,
+            kind::WATCH => Message::Watch(json(body)?),
             kind::WINDOW_OPENED => Message::WindowOpened(json(body)?),
             kind::WINDOW_CHANGED => Message::WindowChanged(json(body)?),
             kind::WINDOW_CLOSED => Message::WindowClosed(json(body)?),
@@ -455,6 +496,7 @@ impl Message {
                 })
             }
             kind::POINTER => Message::Pointer(json(body)?),
+            kind::CURSOR => Message::Cursor(json(body)?),
             kind::BUTTON => Message::Button(json(body)?),
             kind::SCROLL => Message::Scroll(json(body)?),
             kind::KEY => Message::Key(json(body)?),
@@ -555,7 +597,20 @@ mod tests {
             encoder: "hardware".into(),
         }));
         round_trip(Message::ListApps);
-        round_trip(Message::Watch);
+        round_trip(Message::Watch(Watch { cursor: true }));
+        round_trip(Message::Cursor(Cursor {
+            shape: "text".into(),
+            image: None,
+        }));
+        round_trip(Message::Cursor(Cursor {
+            shape: String::new(),
+            image: Some(CursorImage {
+                png: "iVBORw0KGgo=".into(),
+                scale: 2,
+                hotspot_x: 8,
+                hotspot_y: 16,
+            }),
+        }));
         round_trip(Message::Apps(vec![AppInfo {
             id: "com.apple.TextEdit".into(),
             name: "TextEdit".into(),
@@ -626,6 +681,17 @@ mod tests {
         round_trip(Message::Clipboard(Clipboard {
             text: "héllo".into(),
         }));
+    }
+
+    #[test]
+    fn a_watch_from_before_the_cursor_asks_for_none() {
+        // What clients before `Watch::cursor` sent.
+        let mut old = vec![3, 0, 0, 0, kind::WATCH];
+        old.extend_from_slice(b"{}");
+        assert_eq!(
+            read(&mut &old[..]).unwrap(),
+            Message::Watch(Watch { cursor: false })
+        );
     }
 
     #[test]

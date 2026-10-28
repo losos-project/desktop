@@ -19,7 +19,9 @@
 //!
 //! Input goes back in the guest window's own points. Keys go by their Linux
 //! code with the text this desktop's layout types with them; held keys
-//! repeat at this desktop's rate. The clipboard's text goes both ways.
+//! repeat at this desktop's rate. The clipboard's text goes both ways. Over
+//! the guest's windows the pointer looks as the guest's does: a named look
+//! from this desktop's cursor theme, or the guest's own picture.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -27,8 +29,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use app_windows_protocol::{
-    modifiers, AppInfo, Button, Clipboard, Key, Message, Pointer, Resize, Scroll, WindowInfo,
-    WindowKind, WindowRef,
+    modifiers, AppInfo, Button, Clipboard, Cursor, Key, Message, Pointer, Resize, Scroll, Watch,
+    WindowInfo, WindowKind, WindowRef,
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
@@ -235,6 +237,13 @@ struct App {
     seat: Option<WlSeat>,
     keyboard: Option<WlKeyboard>,
     pointer: Option<ThemedPointer>,
+    /// The serial of the pointer's last entry into one of the windows,
+    /// which a pointer picture is set with.
+    entered: Option<u32>,
+    /// How the guest's pointer looks, and its picture made ready when it is
+    /// one of the guest's own.
+    cursor: Cursor,
+    cursor_picture: Option<CursorPicture>,
     device: Option<DataDevice>,
     /// Which window has the keyboard, and the serial it came with.
     focus: Option<(u32, u32)>,
@@ -255,6 +264,16 @@ struct App {
     source: Option<CopyPasteSource>,
 
     lost: Option<String>,
+    conn: Connection,
+}
+
+/// A guest's own pointer picture in shared memory.
+struct CursorPicture {
+    buffer: Buffer,
+    width: i32,
+    height: i32,
+    scale: i32,
+    hotspot: (i32, i32),
 }
 
 /// Shows the guest's windows until it goes away.
@@ -318,6 +337,9 @@ pub fn show(
         seat: None,
         keyboard: None,
         pointer: None,
+        entered: None,
+        cursor: Cursor::default(),
+        cursor_picture: None,
         device: None,
         focus: None,
         under_pointer: None,
@@ -329,8 +351,9 @@ pub fn show(
         offer_pending: false,
         source: None,
         lost: None,
+        conn: conn.clone(),
     };
-    app.link.send(Message::Watch);
+    app.link.send(Message::Watch(Watch { cursor: true }));
     app.handle
         .insert_source(Timer::immediate(), |_, _, app: &mut App| {
             app.link.send(Message::ListApps);
@@ -372,6 +395,7 @@ impl App {
                 self.offer_pending = true;
                 self.offer_clipboard();
             }
+            Event::Message(Message::Cursor(cursor)) => self.cursor_changed(cursor),
             Event::Message(Message::Apps(apps)) => (self.options.on_apps)(&apps),
             Event::Message(Message::Error(e)) => {
                 eprintln!("app-windows: the guest says: {}", e.message)
@@ -678,6 +702,63 @@ impl App {
         surface.commit();
         shown.drawing = true;
         shown.last = Some(picture);
+    }
+
+    /// The guest's pointer changed look.
+    fn cursor_changed(&mut self, cursor: Cursor) {
+        self.cursor_picture = cursor.image.as_ref().and_then(|image| {
+            let pixels = crate::cursor::pixels(&image.png)
+                .map_err(|e| eprintln!("app-windows: the guest's pointer: {e}"))
+                .ok()?;
+            let (width, height) = (pixels.width as i32, pixels.height as i32);
+            let (buffer, canvas) = self
+                .pool
+                .create_buffer(width, height, width * 4, wl_shm::Format::Argb8888)
+                .map_err(|e| eprintln!("app-windows: no memory for the guest's pointer: {e}"))
+                .ok()?;
+            canvas[..pixels.argb.len()].copy_from_slice(&pixels.argb);
+            let scale = image.scale.clamp(1, 4) as i32;
+            Some(CursorPicture {
+                buffer,
+                width,
+                height,
+                scale,
+                hotspot: (
+                    image.hotspot_x as i32 / scale,
+                    image.hotspot_y as i32 / scale,
+                ),
+            })
+        });
+        self.cursor = cursor;
+        self.show_cursor();
+    }
+
+    /// Shows the guest's pointer, while this desktop's is over one of its
+    /// windows. A look this desktop's theme has no name for, or a picture
+    /// that would not decode, shows as the arrow.
+    fn show_cursor(&self) {
+        let (Some(pointer), Some(_)) = (&self.pointer, self.under_pointer) else {
+            return;
+        };
+        if let (Some(picture), Some(serial)) = (&self.cursor_picture, self.entered) {
+            let surface = pointer.surface();
+            // A picture already on the surface, from the last time the
+            // pointer was here, is still busy there and shows as it is.
+            if picture.buffer.attach_to(surface).is_ok() {
+                surface.set_buffer_scale(picture.scale);
+                surface.damage_buffer(0, 0, picture.width, picture.height);
+                surface.commit();
+            }
+            pointer.pointer().set_cursor(
+                serial,
+                Some(surface),
+                picture.hotspot.0,
+                picture.hotspot.1,
+            );
+            return;
+        }
+        let icon = self.cursor.shape.parse().unwrap_or(CursorIcon::Default);
+        let _ = pointer.set_cursor(&self.conn, icon);
     }
 
     fn send_pointer(&self, window: u32, x: f64, y: f64) {
@@ -1066,7 +1147,7 @@ impl KeyboardHandler for App {
 impl PointerHandler for App {
     fn pointer_frame(
         &mut self,
-        conn: &Connection,
+        _: &Connection,
         _: &QueueHandle<Self>,
         _: &WlPointer,
         events: &[PointerEvent],
@@ -1077,11 +1158,10 @@ impl PointerHandler for App {
             };
             let (x, y) = event.position;
             match event.kind {
-                PointerEventKind::Enter { .. } => {
+                PointerEventKind::Enter { serial } => {
                     self.under_pointer = Some(window);
-                    if let Some(pointer) = &self.pointer {
-                        let _ = pointer.set_cursor(conn, CursorIcon::Default);
-                    }
+                    self.entered = Some(serial);
+                    self.show_cursor();
                     self.send_pointer(window, x, y);
                 }
                 PointerEventKind::Leave { .. } => self.under_pointer = None,

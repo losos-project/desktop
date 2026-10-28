@@ -12,6 +12,9 @@
 //!     text héllo                       type text as it is
 //!     key cmd+a                        a key with modifiers
 //!     hold right 1500                  hold a key, repeating, for so many ms
+//!     move 120 80                      move the pointer to a point in the window
+//!     expect-cursor text [s]           wait for the guest's pointer to look so;
+//!                                      `picture` for a picture of its own
 //!     click 120 80 [right]            press and release at a point in the window
 //!     drag 10 10 200 10                press, move and release
 //!     scroll 0 200                     scroll by so many points
@@ -43,8 +46,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use app_windows_protocol::{
-    modifiers, ActivateMenu, Button, Clipboard, Key, Launch, Menu, MenuEntry, Message, Pointer,
-    Resize, Scroll, Text, Welcome, WindowInfo, WindowKind, WindowRef,
+    modifiers, ActivateMenu, Button, Clipboard, Cursor, Key, Launch, Menu, MenuEntry, Message,
+    Pointer, Resize, Scroll, Text, Watch, Welcome, WindowInfo, WindowKind, WindowRef,
 };
 use crossbeam_channel::{unbounded, Receiver};
 use serde::Serialize;
@@ -69,6 +72,8 @@ struct World {
     pictures: HashMap<u32, Seen>,
     menus: HashMap<u32, Vec<Menu>>,
     clipboard: Option<String>,
+    /// How the guest's pointer looks, as it last said.
+    cursor: Option<Cursor>,
     /// Files the guest has saved, by the number `send` gave them.
     saved: HashMap<u32, String>,
     errors: Vec<String>,
@@ -165,7 +170,7 @@ pub fn main(target: &Target, script: &Path, out: &Path, hardware: bool) -> Resul
     // The app list first, so the recording carries it and `replay` puts
     // the apps in the app grid as `show` would.
     link.send(Message::ListApps);
-    link.send(Message::Watch);
+    link.send(Message::Watch(Watch { cursor: true }));
     let mut run = Run {
         link,
         events,
@@ -298,6 +303,7 @@ impl Run {
                 world.menus.insert(m.window, m.menus);
             }
             Event::Message(Message::Clipboard(c)) => world.clipboard = Some(c.text),
+            Event::Message(Message::Cursor(c)) => world.cursor = Some(c),
             Event::Message(Message::FileSaved(f)) => {
                 world.saved.insert(f.file, f.path);
             }
@@ -473,6 +479,34 @@ impl Run {
                     return Err(format!("{rate:.1} pictures a second, wanted {wanted}"));
                 }
                 Ok(())
+            }
+            "move" => {
+                let window = self.current()?.window;
+                let (x, y) = (
+                    number(args.first().copied())?,
+                    number(args.get(1).copied())?,
+                );
+                self.link.send(Message::Pointer(Pointer { window, x, y }));
+                Ok(())
+            }
+            "expect-cursor" => {
+                let wanted = args.first().ok_or("which look?")?.to_string();
+                let looks = |c: &Cursor| match wanted.as_str() {
+                    "picture" => c.image.is_some(),
+                    name => c.shape == name,
+                };
+                if self.pump(seconds(args.get(1).copied())?, |w| {
+                    w.cursor.as_ref().is_some_and(looks)
+                }) {
+                    return Ok(());
+                }
+                Err(match &self.world.cursor {
+                    None => "the guest never said how its pointer looks".to_owned(),
+                    Some(c) if c.image.is_some() => {
+                        "the pointer is a picture of its own".to_owned()
+                    }
+                    Some(c) => format!("the pointer looks {:?}", c.shape),
+                })
             }
             "click" | "drag" | "scroll" => {
                 let window = self.current()?.window;

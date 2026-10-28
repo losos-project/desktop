@@ -68,10 +68,9 @@
 - **App windows.** [App windows](app-windows.md) has run on GitHub's Macs,
   driven by scripts and from LosOS booted in a VM on them. Pictures go
   to the compositor through shared memory rather than the GPU's own
-  buffers. The pointer is always the arrow, only text crosses the
-  clipboard, and drag and drop and sound stay in the guest. A Mac package
-  downloaded in another machine stays there; only this desktop's own hand
-  packages to macOS.
+  buffers. Only text crosses the clipboard, and drag and drop and sound
+  stay in the guest. A Mac package downloaded in another machine stays
+  there; only this desktop's own hand packages to macOS.
 - **macOS app support.** [macOS app support](macos-apps.md) has not set
   up macOS yet. That needs a Mac running LosOS, because Apple's licence
   lets macOS run only on Apple hardware, and CI's Macs run macOS rather
