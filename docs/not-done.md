@@ -26,7 +26,11 @@
     through it.
   - The keyboard's Wi-Fi and airplane keys reach the host's rfkill, not
     the machine's. Settings' Wi-Fi switch works.
-  - The edge proxies are not in sys-net yet.
+  - The edge as a way out has a command, `losos-edge`, and no row in
+    Settings yet. sys-net checks no gateway's passport, so an edge on
+    the network counts as a gateway by its own word; it is only ever the
+    way to the official edges it lists, never the exit.
+  - The edge's tunnel carries IPv4 only, like the rest of sys-net.
   - Without an IOMMU, NetworkManager on the host keeps the networks the
     host has saved, and sys-net keeps none of its own.
   - Network shares have a command, `losos-shares`, and no page in

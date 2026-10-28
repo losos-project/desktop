@@ -217,6 +217,8 @@ let
     state-disk /dev/vda /var/lib/losos-network
     run losos-vm-call serve ${toString addresses.ports.nmcli} losos-netd nmcli
     run losos-vm-call serve ${toString addresses.ports.apply} losos-netd apply
+    run losos-vm-call serve ${toString addresses.ports.edgeStatus} losos-netd edge status
+    run losos-vm-call serve ${toString addresses.ports.edgeChain} losos-netd edge chain
     run losos-adblock --state /var/lib/losos-adblock serve --listen ${up.machine}:53
   '';
 in
@@ -241,8 +243,11 @@ in
         pkgs.losos-adblock
         pkgs.wpa_supplicant
         pkgs.nftables
-        # BusyBox's ip has no policy routing, which schizo mode uses.
+        # BusyBox's ip has no policy routing, which schizo mode and the
+        # edge's tunnel use.
         pkgs.iproute2
+        # The edge's tunnel (edge-exit.nix): its key and its peer.
+        pkgs.wireguard-tools
       ];
       # The rest load from the host's tree as they are needed.
       modules = [
@@ -267,6 +272,12 @@ in
         }
       ];
       files."/etc/losos-netd.conf" = netdConfig;
+      # This machine's own lookups, the edge's names among them, go to its
+      # forwarder like the host's: through Tor in schizo mode, through the
+      # edge's tunnel once it is up.
+      files."/etc/resolv.conf" = pkgs.writeText "resolv.conf" ''
+        nameserver ${up.machine}
+      '';
       kicksecure.sysctl = {
         # The host checks the machine is up by pinging it, as the stress
         # test does; nothing past the host can reach it to ping.

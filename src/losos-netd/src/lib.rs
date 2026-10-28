@@ -6,8 +6,11 @@
 //!
 //! The pieces that are pure text, and tested as such, are here: nmcli's
 //! language ([`nmcli`]), the saved networks ([`saved`]), wpa_supplicant's
-//! answers ([`wpa`]) and the machine's configuration ([`Config`]).
+//! answers ([`wpa`]), the machine's configuration ([`Config`]), and the
+//! edge its traffic leaves through ([`edge`], [`dnssd`]).
 
+pub mod dnssd;
+pub mod edge;
 pub mod nmcli;
 pub mod saved;
 pub mod wpa;

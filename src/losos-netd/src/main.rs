@@ -5,9 +5,12 @@
 //!     losos-netd nmcli <arg>...      nmcli's subset that derisk and Danube use
 //!     losos-netd apply               looks at the host's flags now, and says
 //!                                    whether schizo mode is as the host asks
+//!     losos-netd edge status         the edge traffic leaves through, as JSON
+//!     losos-netd edge chain          the Tor gateway's file for that edge
 //!     losos-netd dhcp <event>        udhcpc's hook
 
 mod daemon;
+mod edge_run;
 mod mdns;
 
 use std::io::{self, IsTerminal, Read, Write};
@@ -28,6 +31,8 @@ const CONFIG: &str = "/etc/losos-netd.conf";
 /// The request `losos-netd apply` sends on the control socket, which no
 /// nmcli command line starts with.
 pub const APPLY: &str = "\u{1}apply";
+/// And `losos-netd edge`'s.
+pub const EDGE: &str = "\u{1}edge";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -53,11 +58,13 @@ fn main() -> ExitCode {
         Some("daemon") => run_daemon(config_path()),
         Some("nmcli") => return client(&args[1..]),
         Some("apply") => return client(&[APPLY.to_owned()]),
+        Some("edge") if args.len() == 2 => return client(&[EDGE.to_owned(), args[1].clone()]),
         Some("dhcp") if args.len() == 2 => daemon::dhcp_hook(&args[1]).into_diagnostic(),
         _ => Err(miette!(
             "usage: losos-netd init|daemon [<config>]\n       \
              losos-netd nmcli <arg>...\n       \
              losos-netd apply\n       \
+             losos-netd edge status|chain\n       \
              losos-netd dhcp <event>"
         )),
     };
@@ -177,6 +184,11 @@ fn run_daemon(config_path: &str) -> Result<()> {
     {
         let shared = shared.clone();
         std::thread::spawn(move || mdns::reflect(shared));
+    }
+    {
+        let shared = shared.clone();
+        let edge = shared.edge.clone();
+        std::thread::spawn(move || edge_run::run(shared, edge));
     }
     daemon::run_loop(shared);
     Ok(())

@@ -32,6 +32,10 @@ const SCAN_EVERY: Duration = Duration::from_secs(30);
 const DHCP_DIR: &str = "/run/losos-netd/dhcp";
 /// The forwarder's servers (losos-adblock serve's override).
 const UPSTREAMS: &str = "/run/losos-adblock/upstreams";
+/// There while those servers must be the only ones asked: the gateway in
+/// schizo mode, or the resolvers through the edge's tunnel. The forwarder's
+/// encrypted servers stand aside meanwhile.
+const FORCED: &str = "/run/losos-adblock/upstreams-forced";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -94,6 +98,8 @@ pub struct State {
     failed: BTreeMap<String, Instant>,
     radio: bool,
     schizo: Option<bool>,
+    /// The edge's tunnel is up (edge_run.rs): names go through it too.
+    edge_dns: bool,
     upstreams: String,
     running: Vec<(Vec<String>, Option<Child>, Instant)>,
     /// Bumped on every change `nmcli monitor` would print.
@@ -104,6 +110,8 @@ pub struct State {
 pub struct Shared {
     state: Mutex<State>,
     changed: Condvar,
+    /// The edge thread's answers (edge_run.rs).
+    pub edge: Arc<crate::edge_run::Edge>,
 }
 
 /// Runs a program to its end, and says whether it succeeded; why not is
@@ -191,6 +199,7 @@ impl State {
             failed: BTreeMap::new(),
             radio: true,
             schizo: None,
+            edge_dns: false,
             upstreams: String::new(),
             generation: 0,
             changes: Vec::new(),
@@ -502,6 +511,11 @@ impl State {
             .unwrap_or_default();
         let servers: Vec<String> = if schizo {
             self.config.gateway.iter().cloned().collect()
+        } else if self.edge_dns {
+            losos_netd::edge::DNS
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect()
         } else if !host_upstreams.is_empty() {
             host_upstreams
         } else {
@@ -535,6 +549,14 @@ impl State {
                 info!(?servers, "DNS servers");
             }
         }
+        let forced = schizo || self.edge_dns;
+        if forced != Path::new(FORCED).exists() {
+            let _ = if forced {
+                std::fs::write(FORCED, "")
+            } else {
+                std::fs::remove_file(FORCED)
+            };
+        }
     }
 
     /// The firewall and routing for schizo mode on or off. False when it
@@ -557,6 +579,10 @@ impl State {
         let tor = self.config.link("tor").map(|l| l.name.clone());
         ip(&["-4", "rule", "del", "pref", &table]);
         if on {
+            // The edge's rules come ahead of these and would send the
+            // host's traffic around Tor; its thread sees the mode next and
+            // keeps them off (the firewall drops that path meanwhile too).
+            crate::edge_run::teardown(&up);
             let (Some(gateway), Some(up), Some(tor)) = (self.config.gateway.clone(), up, tor)
             else {
                 return false;
@@ -841,10 +867,48 @@ impl Shared {
     }
 }
 
+impl Shared {
+    /// What the edge thread works from (edge_run.rs).
+    pub fn edge_view(&self) -> crate::edge_run::View {
+        let state = self.state.lock().unwrap();
+        let state_dir = state
+            .config
+            .state_disk
+            .as_ref()
+            .map(|(_, path)| path.clone())
+            .unwrap_or_else(|| PathBuf::from("/run/losos-netd"));
+        crate::edge_run::View {
+            known: state.schizo.is_some(),
+            host: state.config.host.clone(),
+            schizo: state.schizo_on(),
+            gateway: state.config.gateway.clone(),
+            up: state.config.link("up").map(|l| l.name.clone()),
+            cards: state
+                .links
+                .iter()
+                .filter(|(_, l)| l.kind != Kind::Static)
+                .filter_map(|(name, l)| Some((name.clone(), l.ipv4.as_deref()?.parse().ok()?)))
+                .collect(),
+            nets: crate::edge_run::own_networks(),
+            state: state_dir,
+        }
+    }
+
+    /// Whether the forwarder sends names through the edge's tunnel.
+    pub fn set_edge_dns(&self, on: bool) {
+        let mut state = self.state.lock().unwrap();
+        if state.edge_dns != on {
+            state.edge_dns = on;
+            state.follow_host();
+        }
+    }
+}
+
 pub fn shared(config: Config) -> Arc<Shared> {
     Arc::new(Shared {
         state: Mutex::new(State::new(config)),
         changed: Condvar::new(),
+        edge: Arc::default(),
     })
 }
 
@@ -888,6 +952,18 @@ fn answer(shared: &Shared, mut stream: UnixStream) -> io::Result<()> {
     if args.first().map(String::as_str) == Some(crate::APPLY) {
         let (code, text) = apply(shared);
         return reply(&mut stream, code, &text);
+    }
+    if args.first().map(String::as_str) == Some(crate::EDGE) {
+        return match args.get(1).map(String::as_str) {
+            Some("status") => reply(&mut stream, 0, &format!("{}\n", shared.edge.status_json())),
+            // Nothing while there is no file for the gateway: the host
+            // then takes its copy away.
+            Some("chain") => match shared.edge.chain_json() {
+                Some(json) => reply(&mut stream, 0, &format!("{json}\n")),
+                None => reply(&mut stream, 3, "no edge to leave Tor through"),
+            },
+            _ => reply(&mut stream, 2, "usage: losos-netd edge status|chain"),
+        };
     }
     let command = match nmcli::parse(&args) {
         Ok(c) => c,
