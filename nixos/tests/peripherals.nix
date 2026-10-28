@@ -17,11 +17,11 @@
 # The machines run under TCG: the test VM's KVM modules are kept out, as in
 # machines.nix, rather than rely on nested virtualisation. The controller
 # reaches sys-usb through the test VM's emulated IOMMU.
-{ lib, ... }:
+{ lib, hostPkgs, ... }:
 
 let
-  # A FAT stick with one file, made once at build time. QEMU opens it
-  # read-only, so every plug can share it.
+  # A FAT stick with one file, made once at build time. The test VM's QEMU
+  # opens it read-only, so every plug can share it.
   stick =
     pkgs:
     pkgs.runCommand "stick.img"
@@ -47,14 +47,36 @@ in
     { pkgs, ... }:
     {
       imports = [
+        ../modules/network.nix
+        ../modules/adblock.nix
         ../modules/libvirt.nix
         ../modules/service-machines.nix
-        ../modules/passthrough.nix
         ../modules/busybox-guests.nix
-        ../modules/network-machines.nix
+        ../modules/busybox-host-kernel.nix
+        ../modules/passthrough.nix
+        ../modules/vm-call.nix
+        ../modules/network-machine.nix
+        ../modules/files-machine.nix
         ../modules/peripherals.nix
       ];
-      nixpkgs.overlays = [ (import ../pkgs) ];
+      # The OS's overlay without its patched GTK and Qt, which nothing here
+      # draws with (service-machines.nix does the same).
+      nixpkgs.overlays = [
+        (
+          final: prev:
+          removeAttrs (import ../pkgs final prev) [
+            "gtk3"
+            "gtk4"
+            "qt5"
+            "qt6"
+          ]
+        )
+      ];
+      # The host keeps its network card: the network machine is
+      # service-machines.nix's to test. The files machine is the one the
+      # sticks go to.
+      losos.machines.network.enable = false;
+      losos.machines.files.enable = true;
 
       boot.blacklistedKernelModules = [
         "kvm_intel"
@@ -77,7 +99,6 @@ in
         ];
       };
 
-      environment.etc."losos-test/stick.img".source = stick pkgs;
       users.users.alice = {
         isNormalUser = true;
         uid = 1000;
@@ -87,7 +108,7 @@ in
   testScript =
     { nodes, ... }:
     let
-      image = stick nodes.machine.nixpkgs.pkgs;
+      image = stick hostPkgs;
     in
     ''
       import json, time
@@ -95,12 +116,24 @@ in
       pt = "0000:00:1d.0"
       plugs = 0
 
+      virsh = "virsh -c qemu:///system"
+
+      def diagnose():
+          for name in ("sys-usb", "sys-files"):
+              print(machine.execute(f"tail -n 100 /var/log/libvirt/qemu/{name}-console.log")[1])
+          print(machine.execute(f"{virsh} list --all; cat /run/losos-peripherals/devices.json")[1])
+          print(machine.execute("journalctl -b --no-pager -n 150 -u losos-peripherals -u losos-peripherals-keep -u losos-passthrough-sys-usb -u losos-service-machine-sys-usb")[1])
+
       def devices():
           return json.loads(machine.succeed("cat /run/losos-peripherals/devices.json"))
 
       def wait(pred, what, timeout=900):
           with machine.nested(f"waiting for {what}"):
-              retry(lambda _: pred(devices()), timeout)
+              try:
+                  retry(lambda _: pred(devices()), timeout)
+              except Exception:
+                  diagnose()
+                  raise
 
       def plug(driver, **props):
           global plugs
