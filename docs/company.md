@@ -144,6 +144,10 @@ list. Every five minutes, while the computer is on the office network,
 anyone the box no longer has or has disabled, and takes `wheel` from anyone
 no longer in an administrator group. It never unlocks anyone or grants
 anything: that waits for the person's own login, which LosOS Login answers.
+While the box is out of reach, a locked account stays out at the login
+screen too. homed would let its password through and leave the lock to
+a later PAM step that not every program runs, so the bridge refuses it
+first.
 A box without the list (an older LosOS) joins as before, and the lock then
 waits for the next login that reaches it.
 
