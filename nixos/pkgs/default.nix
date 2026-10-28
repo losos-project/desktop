@@ -105,6 +105,9 @@ in
   losos-vm-call = callWithMold ./losos-vm-call.nix { };
   # The network machine's init and daemon, in place of NetworkManager there.
   losos-netd = callWithMold ./losos-netd.nix { };
+  # The files machine's init and daemon: the storage it is given, mounted
+  # there and served to the host (docs/files-machine.md).
+  losos-filesd = callWithMold ./losos-filesd.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.

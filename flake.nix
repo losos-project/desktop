@@ -259,6 +259,7 @@
           "losos-boxes"
           "losos-vm-call"
           "losos-netd"
+          "losos-filesd"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {

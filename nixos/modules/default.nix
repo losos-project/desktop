@@ -22,6 +22,7 @@
     ./passthrough.nix
     ./vm-call.nix
     ./network-machine.nix
+    ./files-machine.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix
