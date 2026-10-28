@@ -98,6 +98,14 @@
       # outside Actions, where the ISO offers no report.
       reportClientId = builtins.getEnv "LOSOS_REPORT_CLIENT_ID";
 
+      # Where the private half of nixos/keys/secure-boot.crt is on this
+      # builder, which signs GRUB and the UKIs for Secure Boot
+      # (docs/secure-boot.md). CI writes the repository secret
+      # SECURE_BOOT_KEY there, readable by the build users, and only the
+      # signing steps read it. Unset, the images are unsigned and start with
+      # Secure Boot off, as they always have.
+      secureBootKey = builtins.getEnv "LOSOS_SECURE_BOOT_KEY";
+
       # requireProxy refused to build an image without LOSOS_PROXY_URL, back
       # when the proxy was the only place an image could update from. It
       # went when GitHub Releases became the default source, and is not
@@ -117,6 +125,9 @@
         }
         // lib.optionalAttrs (reportClientId != "") {
           losos.report.clientId = lib.mkDefault reportClientId;
+        }
+        // lib.optionalAttrs (secureBootKey != "") {
+          losos.secureBoot.privateKey = lib.mkDefault secureBootKey;
         };
 
       mkSystem =
@@ -289,6 +300,10 @@
           hardware = pkgs.testers.runNixOSTest ./nixos/tests/hardware.nix;
           # The same image on a legacy BIOS, started by GRUB (bios.nix).
           boot-bios = pkgs.testers.runNixOSTest (import ./nixos/tests/boot-bios.nix { inherit self; });
+          # The same image with Secure Boot on: shim, the signed GRUB and
+          # the signed UKI, and the Security page's check passing
+          # (secure-boot.nix).
+          secure-boot = pkgs.testers.runNixOSTest (import ./nixos/tests/secure-boot.nix { inherit self; });
           # hibernate is gone with hibernate.nix: the locked-down kernel
           # refuses to hibernate (kernel-hardening.nix).
           # The start-up sound reaches a sound card, and plays backwards at

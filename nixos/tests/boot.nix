@@ -215,20 +215,27 @@ in
           # losos-grub-update runs once the bless has, and records what it
           # installed. A GRUB that is not this version's, and the
           # systemd-boot older installs started with, are both replaced,
-          # and the reboot below starts the result.
+          # each by shim with the signed GRUB beside it (image.nix gives the
+          # node a Secure Boot key), and the reboot below starts the result.
           machine.wait_for_unit("losos-grub-update.service")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
           grub = "${nodes.machine.system.build.grub.efi}/grub.efi"
-          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/BOOTX64.EFI")
-          machine.succeed(f"printf older >> {esp}/EFI/BOOT/BOOTX64.EFI")
+          shim = "${nodes.machine.system.build.secureBoot.shimFile}"
+          machine.succeed(f"cmp {shim} {esp}/EFI/BOOT/BOOTX64.EFI")
+          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/grubx64.efi")
+          machine.succeed(f"test -f {esp}/EFI/BOOT/mmx64.efi")
+          machine.succeed(f"test -f {esp}/ENROLL_THIS_KEY_IN_MOKMANAGER.cer")
+          machine.succeed(f"printf older >> {esp}/EFI/BOOT/grubx64.efi")
           machine.succeed(f"mkdir -p {esp}/EFI/systemd")
           machine.succeed(
               f"cp ${nodes.machine.systemd.package}/lib/systemd/boot/efi/systemd-bootx64.efi {esp}/EFI/systemd/"
           )
           machine.succeed(f"rm {esp}/EFI/losos/installed")
           machine.succeed("systemctl restart losos-grub-update.service")
-          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/BOOTX64.EFI")
-          machine.succeed(f"cmp {grub} {esp}/EFI/systemd/systemd-bootx64.efi")
+          machine.succeed(f"cmp {shim} {esp}/EFI/BOOT/BOOTX64.EFI")
+          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/grubx64.efi")
+          machine.succeed(f"cmp {shim} {esp}/EFI/systemd/systemd-bootx64.efi")
+          machine.succeed(f"cmp {grub} {esp}/EFI/systemd/grubx64.efi")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
 
       with subtest("LosOS's firmware entry goes back to the front of the boot order"):

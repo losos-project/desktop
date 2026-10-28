@@ -106,14 +106,23 @@
   and nothing in mainline Linux authenticates a hibernation image well
   enough to let it. [Hibernation](hibernation.md) has the details.
 - **Signing.** There is no key rotation. A new key needs an update signed by
-  the old one that carries both. Secure Boot signing of the UKI is not done
-  either. As in the pm tree, a key belongs to whoever owns the machine.
+  the old one that carries both. As in the pm tree, a key belongs to whoever
+  owns the machine.
+- **A shim of LosOS's own.** [Secure Boot](secure-boot.md) uses Fedora's
+  Microsoft-signed shim, because LosOS's has not been through shim-review.
+  So each PC enrolls LosOS's key in MokManager once, instead of the
+  firmware trusting LosOS's shim as it comes. The arm64 shim is signed only
+  by Microsoft's 2023 CA, which arm64 firmware from before it may not
+  trust. Releases are signed only once the repository's `SECURE_BOOT_KEY`
+  secret and `nixos/keys/secure-boot.crt` are both in place.
 - **[The Windows installer](windows-installer.md) has not run on Windows.**
   Its install was checked against a disk image laid out like Windows', which
   then booted. The half that talks to Windows has only been compiled. That
   half shrinks C:, issues the partition table IOCTLs, mounts the ESP, and
   handles firmware variables and BitLocker. Beyond that:
-  - **Secure Boot must be off**, for the reason above.
+  - **Secure Boot must be off.** The installer registers GRUB itself with
+    the firmware, not shim, and has not been taught to put shim, MokManager
+    and the certificate beside it ([Secure Boot](secure-boot.md)).
   - **SmartScreen.** The `.exe` has no Authenticode signature, so Windows
     warns before running it.
   - **Windows' recovery partition.** Updates that grow it, as KB5034441 did,

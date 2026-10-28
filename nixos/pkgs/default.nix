@@ -119,6 +119,9 @@ in
   android-headers = callWithMold ./android-headers.nix { };
   libhybris = callWithMold ./libhybris.nix { };
   halium-gsi = final.callPackage ./halium-gsi.nix { };
+  # Fedora's Microsoft-signed shim, which starts LosOS's signed GRUB with
+  # Secure Boot on (secure-boot.nix). Unpacked, not built.
+  shim-signed = final.callPackage ./shim-signed.nix { };
   # Android app support (android-apps.nix): a virtual Pixel of each
   # person's own and its apps as windows. scrcpy and the emulator's sandbox
   # come from nixpkgs' own set: SDL's window decorations would link the

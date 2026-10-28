@@ -106,9 +106,11 @@ Linux privilege escalation bugs have gone through it.
 
 ## Not done
 
-- **Secure Boot.** The UKIs are unsigned, so root can still write a kernel of
-  its choosing to the ESP and reboot into it. Lockdown protects the kernel
-  that is running, not the next one. [Not done](not-done.md) tracks this.
+- **Secure Boot off.** Lockdown protects the kernel that is running, not the
+  next one. With Secure Boot off, or on an image built without LosOS's key,
+  root can still write a kernel of its choosing to the ESP and reboot into
+  it. With [Secure Boot](secure-boot.md) on and LosOS's key enrolled, the
+  firmware and shim refuse a kernel that key did not sign.
 - **The pre-boot DMA window.** `efi=disable_early_pci_dma` would clear bus
   mastering on PCI bridges before the kernel's IOMMU takes over. It is left
   off because the kernel's own help for it warns that it breaks some

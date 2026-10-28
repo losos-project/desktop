@@ -149,6 +149,10 @@ jobs:
             echo "system-features = $features"
             echo "max-jobs = auto"
             echo "extra-sandbox-paths = /var/cache/losos-ccache=/var/lib/losos-ccache"
+            # The Secure Boot signing steps read their key outside the
+            # sandbox (nixos/modules/shim.nix, __noChroot); every other
+            # build is sandboxed as before.
+            echo "sandbox = relaxed"
             if [ -n "$NIX_CACHE_URL" ] && [ -n "$NIX_CACHE_PUBLIC_KEY" ]; then
               echo "substituters = https://cache.nixos.org/ $NIX_CACHE_URL"
               echo "trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= $NIX_CACHE_PUBLIC_KEY"
@@ -165,6 +169,38 @@ jobs:
       - &checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false, submodules: true }
+
+      # The key that signs GRUB and the UKIs for Secure Boot
+      # (docs/secure-boot.md), from the repository secret, where the Nix
+      # build users can read it. Only the signing steps do: they run outside
+      # the sandbox, and every other build keeps its own, so no package's
+      # build or fetch ever sees the key. Without the secret the images are
+      # unsigned and start with Secure Boot off. Once the certificate is
+      # committed, a run outside a pull request without the secret fails
+      # instead of publishing a release Secure Boot would refuse.
+      - &secure-boot-key
+        name: Give the build the Secure Boot key
+        env:
+          SECURE_BOOT_KEY: ${{ secrets.SECURE_BOOT_KEY }}
+        run: |
+          if [ -z "$SECURE_BOOT_KEY" ]; then
+            if [ -f nixos/keys/secure-boot.crt ] && [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+              echo "::error::nixos/keys/secure-boot.crt is committed, but the SECURE_BOOT_KEY secret is not set, so nothing could be signed for Secure Boot."
+              exit 1
+            fi
+            echo "::notice::No SECURE_BOOT_KEY secret, so the images start only with Secure Boot off."
+            exit 0
+          fi
+          # The secret can be set before its certificate is committed, and
+          # the build would refuse a key with no certificate (secure-boot.nix).
+          if [ ! -f nixos/keys/secure-boot.crt ]; then
+            echo "::notice::SECURE_BOOT_KEY is set, but nixos/keys/secure-boot.crt is not committed yet, so nothing is signed."
+            exit 0
+          fi
+          sudo install -d -m 0750 -g nixbld /var/lib/losos-secure-boot
+          printf '%s\n' "$SECURE_BOOT_KEY" \
+            | sudo install -m 0640 -g nixbld /dev/stdin /var/lib/losos-secure-boot/key.pem
+          echo "LOSOS_SECURE_BOOT_KEY=/var/lib/losos-secure-boot/key.pem" >> "$GITHUB_ENV"
 
       # The proxy's handler, run by node on this runner at NIX_CACHE_URL,
       # before anything asks Nix to substitute. The GHCR packages are public,
@@ -386,6 +422,7 @@ jobs:
       - *free-disk
       - *install-nix
       - *checkout
+      - *secure-boot-key
       - *serve-cache
       - *serve-cache-start
 
