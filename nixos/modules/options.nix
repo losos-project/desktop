@@ -95,12 +95,13 @@ in
         default = null;
         example = "Iv23liAbCdEfGhIjKlMn";
         description = ''
-          The client ID of the GitHub App the installer signs in with to
-          report a failed install as an issue (docs/installer.md, "Reporting
-          a failed install"). It is not a secret: GitHub shows it on the
+          The client ID of the GitHub App that the installer and the
+          desktop sign in with to report a problem as an issue: a failed
+          install (docs/installer.md, "Reporting a failed install"), or a
+          window, service or action that stopped responding
+          (docs/reporting.md). It is not a secret: GitHub shows it on the
           sign-in page. The flake sets it from LOSOS_REPORT_CLIENT_ID, a
-          repository variable in CI; with none, the installer offers no
-          report.
+          repository variable in CI; with none, nothing offers a report.
         '';
       };
       repository = mkOption {
@@ -108,8 +109,8 @@ in
         default = config.losos.release.repository;
         defaultText = lib.literalExpression "config.losos.release.repository";
         description = ''
-          The repository, `owner/name`, that failed installs are reported to,
-          the one the releases come from unless set.
+          The repository, `owner/name`, that problems are reported to, the
+          one the releases come from unless set.
         '';
       };
     };

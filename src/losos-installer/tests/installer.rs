@@ -892,7 +892,7 @@ fn a_report_signs_in_then_files_an_issue() {
     report::send(
         &target,
         &report,
-        "It stopped at 3%",
+        &report::with_note(&report, report::NOTE_HEADING, "It stopped at 3%"),
         &scratch.0,
         &cancel,
         |p| said.lock().unwrap().push(p),
@@ -964,7 +964,7 @@ fn the_same_failure_again_is_a_comment() {
     let scratch = Scratch::new("report-again");
     let said = std::sync::Mutex::new(Vec::new());
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    report::send(&target, &report, "", &scratch.0, &cancel, |p| {
+    report::send(&target, &report, &report.body, &scratch.0, &cancel, |p| {
         said.lock().unwrap().push(p)
     })
     .unwrap();
@@ -997,6 +997,8 @@ fn a_declined_sign_in_says_so() {
     };
     let scratch = Scratch::new("report-declined");
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    let error = report::send(&target, &a_report(), "", &scratch.0, &cancel, |_| {}).unwrap_err();
+    let report = a_report();
+    let error =
+        report::send(&target, &report, &report.body, &scratch.0, &cancel, |_| {}).unwrap_err();
     assert!(error.contains("declined"), "{error}");
 }
