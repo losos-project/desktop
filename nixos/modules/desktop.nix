@@ -157,10 +157,11 @@ in
     pkgs.swayidle
   ];
 
-  # Text and source files open in derisk's Text Editor and folders in
-  # Files, the types each claims in its desktop entry (pkgs/derisk.nix
-  # installs both). Read from derisk's source, so a type added there is a
-  # default here without a second list to keep.
+  # Text and source files open in derisk's Text Editor, folders in Files,
+  # and a .flatpakref or .flatpakrepo in the Store, the types each claims in
+  # its desktop entry (pkgs/derisk.nix installs all three). Read from
+  # derisk's source, so a type added there is a default here without a
+  # second list to keep.
   xdg.mime.defaultApplications =
     let
       claims =
@@ -173,7 +174,7 @@ in
           _: "org.derisk.${app}.desktop"
         );
     in
-    claims "editor" // claims "files";
+    claims "editor" // claims "files" // claims "store";
 
   # derisk-terminal draws with the theme's monospace family through its Nerd
   # Font build, the same letters with the icons prompts and TUIs print. Hack

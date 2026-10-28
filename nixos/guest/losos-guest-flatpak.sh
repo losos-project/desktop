@@ -18,9 +18,13 @@
 #   losos-guest-flatpak store run <list|remote-ls> ...
 #       that `flatpak` command, as the user, printing what it printed once
 #       it has ended
-#   losos-guest-flatpak store start <install|uninstall|update> ...
+#   losos-guest-flatpak store start <install|uninstall|update|remote-add> ...
 #       starts that `flatpak` command as the user, in a unit of the user's
 #       manager, and returns at once; one at a time
+#   losos-guest-flatpak store put <name>
+#       standard input becomes a file of the user's named <name>, and its
+#       path is printed: a .flatpakref or .flatpakrepo opened on the host,
+#       for `start install --from` or `start remote-add --from`
 #   losos-guest-flatpak store progress
 #       `running`, or `done <exit status>` once it has ended, then all the
 #       last job has printed, its carriage returns made line ends
@@ -32,7 +36,7 @@ userdir=$home/.local/share/flatpak
 sysdir=/var/lib/flatpak
 
 usage() {
-  echo "usage: losos-guest-flatpak apps | overrides <app> | flatpak permission-show|permission-set|permission-remove ... | store run|start|progress ..." >&2
+  echo "usage: losos-guest-flatpak apps | overrides <app> | flatpak permission-show|permission-set|permission-remove ... | store run|start|put|progress ..." >&2
   exit 2
 }
 
@@ -108,6 +112,7 @@ store)
   # which the user's manager (lingering, common.nix) has from boot.
   log=/run/user/$uid/losos-store.log
   status=/run/user/$uid/losos-store.status
+  files=/run/user/$uid/losos-store-files
   # Installs, removals and updates run as the user, whom flatpak.nix's
   # polkit rule lets install for the whole machine, in the user's session
   # like the permission commands above, so `flatpak list` shows the user's
@@ -122,10 +127,20 @@ store)
     exec systemd-run --quiet --user --machine="$user@.host" --pipe --wait --collect \
       --setenv=DBUS_SESSION_BUS_ADDRESS="$bus" -- "$flatpak" "$@"
     ;;
+  put)
+    if [ $# -ne 2 ] || ! valid "$2"; then
+      usage
+    fi
+    # As the user, as `overrides` writes: in the user's runtime directory,
+    # where flatpak reads it as the user. A flatpakref is a few kilobytes.
+    runuser -u "$user" -- mkdir -p "$files"
+    head -c 1048576 | runuser -u "$user" -- tee "$files/$2" >/dev/null
+    echo "$files/$2"
+    ;;
   start)
     shift
     case "${1-}" in
-    install | uninstall | update) ;;
+    install | uninstall | update | remote-add) ;;
     *) usage ;;
     esac
     # The agent hands a program's output over only once it has exited, so
@@ -145,7 +160,7 @@ store)
     # written whole so `progress` never reads half of it.
     shift
     case "${1-}" in
-    install | uninstall | update) ;;
+    install | uninstall | update | remote-add) ;;
     *) usage ;;
     esac
     if "$flatpak" "$@" >"$log" 2>&1; then code=0; else code=$?; fi

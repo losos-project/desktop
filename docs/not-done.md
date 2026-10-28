@@ -36,10 +36,8 @@
   nothing makes an existing machine's disk larger. Portal dialogs in a
   machine, such as a Flatpak's file chooser, are GTK's, drawn through the
   same waypipe, and nobody has tried them.
-- **The Flatpak machine's loose ends.** A `.flatpakref` or `.flatpakrepo`
-  file opened on the host has nothing to open it, because Flatpak is in
-  [the machine](hypervisor.md#the-flatpak-machine), so it has to be copied
-  there first. Flatpak's files move off the host only for administrators,
+- **The Flatpak machine's loose ends.** Flatpak's files move off the host
+  only for administrators,
   because anyone else would get a password dialog they did not ask for.
   Other users copy their `~/.var/app` into the machine by hand. The host's
   copy of `~/.var/app` stays after the copy, until its owner deletes it.
