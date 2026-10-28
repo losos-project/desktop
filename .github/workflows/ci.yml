@@ -743,6 +743,27 @@ jobs:
             echo "::error::Run \`nix fmt\` and commit the result."
             exit 1
           fi
+      # push signs with the key UPDATE_SIGNING_FPR names, and the images
+      # trust nixos/keys/update-signing.asc. push checks out no code, so the
+      # two are compared here, where a pull request that changes one without
+      # the other fails before a release is signed with a key nothing
+      # trusts. While a replacement is under way (docs/binary-cache.md), the
+      # next key is in update-signing-next.asc and the current one still
+      # signs.
+      - name: Check the update signing key
+        run: |
+          fpr=$(sed -n 's/^ *UPDATE_SIGNING_FPR: "\([0-9A-F]*\)".*/\1/p' .github/workflows/ci.yml)
+          trusted=$(gpg --batch --show-keys --with-colons nixos/keys/update-signing.asc \
+            | awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }')
+          if [ -z "$fpr" ] || ! printf '%s\n' "$trusted" | grep -qx "$fpr"; then
+            echo "::error::UPDATE_SIGNING_FPR is ${fpr:-unset}, but nixos/keys/update-signing.asc holds ${trusted:-no key}."
+            exit 1
+          fi
+          if [ -f nixos/keys/update-signing-next.asc ]; then
+            next=$(gpg --batch --show-keys --with-colons nixos/keys/update-signing-next.asc \
+              | awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }')
+            echo "::notice::Replacing the update key: releases carry $next beside $fpr, which still signs them."
+          fi
 
   # The GHCR proxy: its decisions in Rust, then the handler against a fake
   # registry. Nothing is deployed from here.

@@ -105,9 +105,10 @@
 - **Hibernation.** No machine hibernates. The locked-down kernel refuses to,
   and nothing in mainline Linux authenticates a hibernation image well
   enough to let it. [Hibernation](hibernation.md) has the details.
-- **Signing.** There is no key rotation. A new key needs an update signed by
-  the old one that carries both. Secure Boot signing of the UKI is not done
-  either. As in the pm tree, a key belongs to whoever owns the machine.
+- **Signing.** Secure Boot signing of the UKI is not done. The update key
+  can be [replaced](binary-cache.md#replacing-the-update-key), but a
+  machine that installed no release carrying both keys must be reinstalled.
+  As in the pm tree, a key belongs to whoever owns the machine.
 - **[The Windows installer](windows-installer.md) has not run on Windows.**
   Its install was checked against a disk image laid out like Windows', which
   then booted. The half that talks to Windows has only been compiled. That
