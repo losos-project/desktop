@@ -7,7 +7,8 @@
 //!     losos-backup sign-in cloud|git NAME # the password on stdin
 //!     losos-backup sign-out cloud|git
 //!     losos-backup on|off
-//!     losos-backup run [--if-due]         # back up now, or when a day has passed
+//!     losos-backup every HOURS            # how long between backups, 1 to 168
+//!     losos-backup run [--if-due]         # back up now, or when one is due
 //!
 //! `run --if-due` is what the user timer starts every hour.
 
@@ -18,7 +19,7 @@ use std::{
 
 use losos_backup::{
     boxes, cloud,
-    config::{Account, Paths, Secrets},
+    config::{Account, Paths, Secrets, MAX_HOURS},
     forge, host_name,
     run::{self, Outcome},
     Error,
@@ -26,7 +27,7 @@ use losos_backup::{
 use miette::{miette, IntoDiagnostic, Result};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage: losos-backup status | choose BOX | sign-in cloud|git NAME | sign-out cloud|git | on | off | run [--if-due]";
+const USAGE: &str = "usage: losos-backup status | choose BOX | sign-in cloud|git NAME | sign-out cloud|git | on | off | every HOURS | run [--if-due]";
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -67,6 +68,16 @@ fn main_inner() -> Result<ExitCode> {
         [on @ ("on" | "off")] => {
             let mut config = paths.load_config().into_diagnostic()?;
             config.enabled = *on == "on";
+            paths.save_config(&config).into_diagnostic()?;
+        }
+        ["every", hours] => {
+            let hours = hours
+                .parse::<u32>()
+                .ok()
+                .filter(|h| (1..=MAX_HOURS).contains(h))
+                .ok_or_else(|| miette!("HOURS is a whole number from 1 to {MAX_HOURS}"))?;
+            let mut config = paths.load_config().into_diagnostic()?;
+            config.every_hours = hours;
             paths.save_config(&config).into_diagnostic()?;
         }
         ["run", rest @ ..] if rest.iter().all(|a| *a == "--if-due") => {

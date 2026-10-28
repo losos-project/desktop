@@ -18,6 +18,7 @@
 //! rather than its command line, which other accounts can read: the token,
 //! the box's certificate as the only CA, and the box's name pinned to the
 //! address the run goes through. The repository's own hooks do not run.
+//! Git LFS objects go up through LFS's batch API after the push.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -333,8 +334,124 @@ impl<'a> Forge<'a> {
         let mut args = vec!["push", "--porcelain", "--quiet", url.as_str()];
         args.extend(refspecs.iter().map(String::as_str));
         git(&repo.path, &args, &env)?;
+        self.push_lfs(repo, &url)?;
         Ok(true)
     }
+
+    /// Uploads the Git LFS objects `repo` holds that the box lacks, through
+    /// LFS's batch API on `url`, so a repository using LFS is whole on the
+    /// box rather than pointers to files only this computer has. With the
+    /// pinned agent rather than git-lfs, which would resolve the box's name
+    /// itself and trust the system's CAs instead of the box's certificate.
+    /// Every object in the local store goes up, those of other branches
+    /// too; the box answers for those it has without an upload.
+    fn push_lfs(&self, repo: &Repo, url: &str) -> Result<(), Error> {
+        let git_dir = if repo.bare {
+            repo.path.clone()
+        } else {
+            repo.path.join(".git")
+        };
+        let objects = lfs_objects(&git_dir.join("lfs/objects"));
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let auth = basic(&self.user, &self.token);
+        let batch = format!("{url}/info/lfs/objects/batch");
+        for chunk in objects.chunks(LFS_BATCH) {
+            let request: Vec<Value> = chunk
+                .iter()
+                .map(|(oid, size, _)| json!({ "oid": oid, "size": size }))
+                .collect();
+            let answer: Value = match self
+                .agent
+                .post(&batch)
+                .set("Authorization", &auth)
+                .set("Accept", LFS_TYPE)
+                .set("Content-Type", LFS_TYPE)
+                .send_json(json!({
+                    "operation": "upload",
+                    "transfers": ["basic"],
+                    "objects": request,
+                })) {
+                Ok(answer) => answer.into_json()?,
+                // Forgejo without LFS_START_SERVER has no such endpoint.
+                Err(ureq::Error::Status(404 | 501, _)) => {
+                    return Err(Error::new(
+                        "its Git LFS files were not pushed: LosOS Git has LFS turned off",
+                    ))
+                }
+                Err(e) => return Err(e.into()),
+            };
+            for (object, (oid, size, path)) in answer["objects"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .zip(chunk)
+            {
+                if let Some(error) = object["error"]["message"].as_str() {
+                    return Err(Error::new(format!("Git LFS object {oid}: {error}")));
+                }
+                let Some(upload) = object["actions"].get("upload") else {
+                    continue;
+                };
+                let mut put = self.agent.put(upload["href"].as_str().unwrap_or_default());
+                for (name, value) in upload["header"].as_object().into_iter().flatten() {
+                    put = put.set(name, value.as_str().unwrap_or_default());
+                }
+                put.set("Content-Type", "application/octet-stream")
+                    .set("Content-Length", &size.to_string())
+                    .send(fs::File::open(path)?)?;
+                if let Some(verify) = object["actions"].get("verify") {
+                    let mut post = self.agent.post(verify["href"].as_str().unwrap_or_default());
+                    for (name, value) in verify["header"].as_object().into_iter().flatten() {
+                        post = post.set(name, value.as_str().unwrap_or_default());
+                    }
+                    post.set("Accept", LFS_TYPE)
+                        .set("Content-Type", LFS_TYPE)
+                        .send_json(json!({ "oid": oid, "size": size }))?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The media type of Git LFS's API.
+const LFS_TYPE: &str = "application/vnd.git-lfs+json";
+
+/// Objects asked about in one batch request.
+const LFS_BATCH: usize = 100;
+
+/// The objects in a Git LFS store, `lfs/objects/<2>/<2>/<oid>`: each
+/// object's ID, size and file. A file whose name is not a SHA-256 is a
+/// download git-lfs left unfinished, and is skipped.
+fn lfs_objects(store: &Path) -> Vec<(String, u64, std::path::PathBuf)> {
+    let mut objects = Vec::new();
+    let Ok(firsts) = fs::read_dir(store) else {
+        return objects;
+    };
+    for first in firsts.flatten() {
+        let Ok(seconds) = fs::read_dir(first.path()) else {
+            continue;
+        };
+        for second in seconds.flatten() {
+            let Ok(files) = fs::read_dir(second.path()) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let name = file.file_name().to_string_lossy().into_owned();
+                let is_oid = name.len() == 64
+                    && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+                if let (true, Ok(meta)) = (is_oid, file.metadata()) {
+                    if meta.is_file() {
+                        objects.push((name, meta.len(), file.path()));
+                    }
+                }
+            }
+        }
+    }
+    objects.sort();
+    objects
 }
 
 impl Forge<'_> {

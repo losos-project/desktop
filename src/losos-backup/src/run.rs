@@ -9,6 +9,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    os::unix::fs::MetadataExt,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -26,8 +27,13 @@ use crate::{
     Error,
 };
 
-/// How old the last finished backup may get before the timer backs up.
-pub const INTERVAL: u64 = 24 * 60 * 60;
+/// An hour, the unit the time between backups is set in.
+pub const HOUR: u64 = 60 * 60;
+
+/// Where LosOS cloud keeps the list of the home's symbolic links
+/// ([`Tree::links_list`]), relative to the home's copy there. Not a name a
+/// home file has, since the walk never lists the backups' own files.
+pub const LINKS: &str = ".losos-backup-links.tsv";
 
 /// How many files go up at once.
 pub const UPLOADERS: usize = 4;
@@ -122,10 +128,14 @@ pub struct Index {
     pub dirs: BTreeSet<String>,
 }
 
-/// Whether the timer's run should back up now.
+/// Whether the timer's run should back up now: when the last backup that
+/// went through is `every_hours` old. A value out of range, from a file
+/// edited by hand, counts as the nearest one allowed.
 pub fn due(config: &Config, history: &History, now: u64) -> bool {
-    // Ten minutes early, so a daily run does not slip an hour a day.
-    config.enabled && config.ready() && now + 600 >= history.last_done + INTERVAL
+    let every = u64::from(config.every_hours.clamp(1, config::MAX_HOURS)) * HOUR;
+    // Ten minutes early, so a run does not slip by the timer's own hour
+    // each time.
+    config.enabled && config.ready() && now + 600 >= history.last_done + every
 }
 
 /// Where the relay's hosts files are; `LOSOS_BACKUP_HOSTS_DIR` moves it
@@ -253,10 +263,12 @@ fn back_up(
                 ..Names::default()
             };
         }
+        // Links among them go as links, which git keeps as they are.
         let configs: Vec<&str> = tree
             .files
             .iter()
             .map(|f| f.rel.as_str())
+            .chain(tree.links.iter().map(|l| l.rel.as_str()))
             .filter(|rel| walk::is_config(rel))
             .collect();
         let name = names.config(&host);
@@ -268,7 +280,7 @@ fn back_up(
             &paths.state.join("config.git"),
         ) {
             Ok(changed) => {
-                report.configs = tree.take_configs().len() as u64;
+                report.configs = tree.take_configs() as u64;
                 report.configs_changed = changed;
             }
             Err(e) => {
@@ -435,9 +447,44 @@ fn upload(
         return Err(e);
     }
 
+    if !tree.links.is_empty() {
+        if let Err(e) = put_links(paths, &cloud, tree, &mut index) {
+            if e.unreachable {
+                config::save(&paths.index_file(), &index, false)?;
+                return Err(e);
+            }
+            report.fail_file(format!("the list of symbolic links: {e}"));
+        }
+    }
+
     let result = delete_gone(&cloud, tree, &mut index, report);
     config::save(&paths.index_file(), &index, false)?;
     result
+}
+
+/// Uploads the list of the home's links as [`LINKS`] when it changed.
+/// Its copy in the state folder is rewritten only then, so its size and
+/// time stand for its content in the index as a home file's do.
+fn put_links(
+    paths: &Paths,
+    cloud: &Cloud<'_>,
+    tree: &Tree,
+    index: &mut Index,
+) -> Result<(), Error> {
+    let list = tree.links_list();
+    let local = paths.state.join("links.tsv");
+    if fs::read_to_string(&local).ok().as_deref() != Some(list.as_str()) {
+        fs::create_dir_all(&paths.state)?;
+        fs::write(&local, &list)?;
+    }
+    let meta = fs::metadata(&local)?;
+    let stamp = (meta.len(), meta.mtime() * 1_000_000_000 + meta.mtime_nsec());
+    if index.files.get(LINKS) == Some(&stamp) {
+        return Ok(());
+    }
+    cloud.put(LINKS, &local, meta.len(), meta.mtime())?;
+    index.files.insert(LINKS.to_owned(), stamp);
+    Ok(())
 }
 
 /// Deletes from LosOS cloud what is no longer in the home: each folder
@@ -464,7 +511,11 @@ fn delete_gone(
             .any(|u| u.is_empty() || path == u || under(path, u))
     };
     let dirs: BTreeSet<&str> = tree.dirs.iter().map(String::as_str).collect();
-    let files: BTreeSet<&str> = tree.files.iter().map(|f| f.rel.as_str()).collect();
+    let mut files: BTreeSet<&str> = tree.files.iter().map(|f| f.rel.as_str()).collect();
+    // The list of links stays while there are any.
+    if !tree.links.is_empty() {
+        files.insert(LINKS);
+    }
     let gone_dirs: Vec<String> = index
         .dirs
         .iter()
@@ -517,6 +568,8 @@ pub struct Status {
     pub fingerprint: String,
     /// Whether the timer backs up.
     pub enabled: bool,
+    /// Hours between backups.
+    pub every_hours: u32,
     /// The LosOS cloud account signed in to, by login.
     pub cloud: Option<String>,
     /// The LosOS Git account signed in to, by login.
@@ -546,6 +599,7 @@ pub fn status(paths: &Paths) -> Status {
         box_name: config.box_name,
         fingerprint: config.fingerprint,
         enabled: config.enabled,
+        every_hours: config.every_hours,
         cloud: config.cloud.map(|a| a.login),
         git: config.git.map(|a| a.login),
         running,
@@ -566,7 +620,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_due_a_day_after_the_last_backup() {
+    fn is_due_a_day_after_the_last_backup_by_default() {
         let mut config = Config {
             box_name: "mattbox.local".into(),
             enabled: true,
@@ -577,9 +631,30 @@ mod tests {
         assert!(due(&config, &history, 1_000_000));
         history.last_done = 1_000_000;
         assert!(!due(&config, &history, 1_000_000 + 3600));
-        assert!(due(&config, &history, 1_000_000 + INTERVAL - 300));
-        assert!(due(&config, &history, 1_000_000 + 5 * INTERVAL));
+        assert!(due(&config, &history, 1_000_000 + 24 * HOUR - 300));
+        assert!(due(&config, &history, 1_000_000 + 5 * 24 * HOUR));
         config.enabled = false;
-        assert!(!due(&config, &history, 1_000_000 + 5 * INTERVAL));
+        assert!(!due(&config, &history, 1_000_000 + 5 * 24 * HOUR));
+    }
+
+    #[test]
+    fn is_due_as_often_as_set() {
+        let mut config = Config {
+            box_name: "mattbox.local".into(),
+            enabled: true,
+            git: Some(Account::default()),
+            every_hours: 6,
+            ..Config::default()
+        };
+        let history = History {
+            last_done: 1_000_000,
+            ..History::default()
+        };
+        assert!(!due(&config, &history, 1_000_000 + 5 * HOUR));
+        assert!(due(&config, &history, 1_000_000 + 6 * HOUR - 300));
+        // A file edited to 0 means hourly, not every run.
+        config.every_hours = 0;
+        assert!(!due(&config, &history, 1_000_000 + 600));
+        assert!(due(&config, &history, 1_000_000 + HOUR));
     }
 }
