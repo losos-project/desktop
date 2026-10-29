@@ -108,6 +108,12 @@ struct Placed {
     /// Waiting for its machine to be wanted: a radio while Bluetooth is
     /// off, a device on the USB machine's controller while it starts.
     parked: bool,
+    /// In its machine and working: passed through, or its stream relayed
+    /// and the machine's controller holding it.
+    attached: bool,
+    /// A relay is under way for it, so a retry must not start another.
+    #[serde(skip)]
+    relaying: bool,
 }
 
 /// What the router shares with the threads answering bluetoothctl.
@@ -124,10 +130,19 @@ enum Msg {
     UsbUp,
     UsbGone,
     SetBluetooth(bool),
+    /// A device from the USB machine is in its machine now.
+    Relayed(String),
+    /// A device's relay ended: pulled out, or its machine went away or
+    /// never listened, so it is tried again while it is still plugged in.
+    RelayEnded(String),
+    /// The kernel's events stopped, which ends the router.
+    KernelGone,
 }
 
 struct Router {
     config: Config,
+    /// For the threads the router starts, to say how they went.
+    events: Sender<Msg>,
     claims: HashMap<String, Claim>,
     disks: Vec<PathBuf>,
     placed: HashMap<(Source, String), Placed>,
@@ -137,7 +152,8 @@ struct Router {
     /// it has had nothing on it.
     usb_controllers: BTreeSet<String>,
     usb_up: bool,
-    usb_starting: bool,
+    /// Since when it has been asked to start, until it listens.
+    usb_starting: Option<Instant>,
     usb_idle: Option<Instant>,
     bluetooth: Arc<Mutex<Bluetooth>>,
 }
@@ -153,7 +169,9 @@ pub fn serve(config: Config) -> io::Result<()> {
     let mountinfo = fs::read_to_string("/proc/self/mountinfo")?;
     let (first, last) = config.disposable_cids;
     let on = fs::read_to_string(config.state.join("bluetooth")).is_ok_and(|s| s.trim() == "on");
+    let (events, received) = bounded::<Msg>(256);
     let mut router = Router {
+        events: events.clone(),
         disks: mounted_disks(Path::new("/sys"), &mountinfo),
         claims: HashMap::new(),
         placed: HashMap::new(),
@@ -165,7 +183,7 @@ pub fn serve(config: Config) -> io::Result<()> {
             .map(|u| controllers(&u.devices))
             .unwrap_or_default(),
         usb_up: false,
-        usb_starting: false,
+        usb_starting: None,
         usb_idle: None,
         bluetooth: Arc::new(Mutex::new(Bluetooth { on, radio: None })),
         config,
@@ -180,7 +198,11 @@ pub fn serve(config: Config) -> io::Result<()> {
 
     // The ports first, so nothing plugged in from now on is configured
     // behind the router's back; then what was there before.
-    let mut present: Vec<PathBuf> = fs::read_dir("/sys/bus/usb/devices")?
+    // A machine with no USB at all has no such directory, and still has
+    // Bluetooth's page to answer.
+    let mut present: Vec<PathBuf> = fs::read_dir("/sys/bus/usb/devices")
+        .into_iter()
+        .flatten()
         .flatten()
         .map(|e| e.path())
         .collect();
@@ -203,7 +225,6 @@ pub fn serve(config: Config) -> io::Result<()> {
         router.start(&router.config.bluetooth.unit.clone());
     }
 
-    let (events, received) = bounded::<Msg>(256);
     let k = events.clone();
     thread::spawn(move || loop {
         match kernel.next() {
@@ -214,6 +235,7 @@ pub fn serve(config: Config) -> io::Result<()> {
             }
             Err(e) => {
                 warn!(error = %e, "cannot read device events");
+                let _ = k.send(Msg::KernelGone);
                 return;
             }
         }
@@ -253,7 +275,9 @@ pub fn serve(config: Config) -> io::Result<()> {
                     Ok(Msg::UsbUp) => router.usb_up(),
                     Ok(Msg::UsbGone) => router.usb_gone(),
                     Ok(Msg::SetBluetooth(on)) => router.set_bluetooth(on),
-                    Err(_) => return Ok(()),
+                    Ok(Msg::Relayed(busid)) => router.relayed(&busid),
+                    Ok(Msg::RelayEnded(busid)) => router.relay_ended(&busid),
+                    Ok(Msg::KernelGone) | Err(_) => return Ok(()),
                 }
                 router.save();
             }
@@ -433,6 +457,8 @@ impl Router {
                     disposable: None,
                     pending: false,
                     parked: true,
+                    attached: false,
+                    relaying: false,
                 },
             );
             return;
@@ -451,6 +477,8 @@ impl Router {
                     disposable: None,
                     pending: false,
                     parked: false,
+                    attached: true,
+                    relaying: false,
                 },
             );
             return;
@@ -491,6 +519,7 @@ impl Router {
         }
         let route = self.route(&device);
         if route != Route::Hub {
+            info!(busid = %device.busid, name = %device.name, ?route, "a device in the USB machine");
             self.usb_idle = None;
             self.place(Source::UsbMachine, device, route);
         }
@@ -503,24 +532,24 @@ impl Router {
     }
 
     fn start_usb(&mut self) {
-        if self.usb_up || self.usb_starting {
+        if self.usb_up || self.usb_starting.is_some() {
             return;
         }
         if let Some(usb) = &self.config.usb {
-            self.usb_starting = true;
+            self.usb_starting = Some(Instant::now());
             self.start(&usb.machine.unit);
         }
     }
 
     fn usb_up(&mut self) {
         self.usb_up = true;
-        self.usb_starting = false;
+        self.usb_starting = None;
         self.usb_idle = Some(Instant::now());
     }
 
     fn usb_gone(&mut self) {
         self.usb_up = false;
-        self.usb_starting = false;
+        self.usb_starting = None;
         self.usb_idle = None;
         let gone: Vec<String> = self
             .placed
@@ -638,6 +667,8 @@ impl Router {
             disposable: None,
             pending: false,
             parked: false,
+            attached: false,
+            relaying: false,
         };
         if route == Route::Bluetooth {
             let mut bt = self.bluetooth.lock().expect("not poisoned");
@@ -654,13 +685,15 @@ impl Router {
             // From the USB machine to the host's own virtual controller.
             let usb = self.config.usb.as_ref().map(|m| m.machine.cid);
             let device = placed.device.clone();
+            let events = self.events.clone();
             thread::spawn(move || {
                 let Some(usb) = usb else { return };
                 match export(usb, &device.busid)
                     .and_then(|(conn, devid, speed)| usbip::attach(&conn, devid, speed))
                 {
                     Ok(port) => {
-                        info!(busid = %device.busid, name = %device.name, port, "plugged into the host")
+                        info!(busid = %device.busid, name = %device.name, port, "plugged into the host");
+                        let _ = events.send(Msg::Relayed(device.busid.clone()));
                     }
                     Err(e) => {
                         warn!(busid = %device.busid, error = %e, "cannot plug a device into the host")
@@ -674,7 +707,12 @@ impl Router {
             Ok((machine, cid, disposable)) => {
                 placed.machine = Some(machine.clone());
                 placed.disposable = disposable;
-                placed.pending = !self.deliver(source, &placed.device, &machine, cid);
+                if self.deliver(source, &placed.device, &machine, cid) {
+                    placed.attached = source == Source::Host;
+                    placed.relaying = source == Source::UsbMachine;
+                } else {
+                    placed.pending = true;
+                }
             }
             Err(e) => {
                 warn!(busid = %busid, error = %e, "no machine for a device; it stays unconfigured");
@@ -703,17 +741,28 @@ impl Router {
                 };
                 let device = device.clone();
                 let machine = machine.to_owned();
-                thread::spawn(move || relay(usb, cid, &device, &machine));
+                let events = self.events.clone();
+                thread::spawn(move || relay(usb, cid, &device, &machine, &events));
                 true
             }
         }
     }
 
     fn retry(&mut self) {
+        // A start that failed, such as one that came while libvirt was
+        // still letting the machine go, is asked for again. Starting a
+        // machine that is starting or up does nothing.
+        if let (Some(since), Some(usb)) = (self.usb_starting, &self.config.usb) {
+            if since.elapsed() >= Duration::from_secs(30) {
+                let unit = usb.machine.unit.clone();
+                self.usb_starting = Some(Instant::now());
+                self.start(&unit);
+            }
+        }
         let pending: Vec<(Source, String)> = self
             .placed
             .iter()
-            .filter(|(_, p)| p.pending)
+            .filter(|(_, p)| p.pending && !p.relaying)
             .map(|(k, _)| k.clone())
             .collect();
         for key in pending {
@@ -721,13 +770,45 @@ impl Router {
             let (Some(machine), device) = (p.machine.clone(), p.device.clone()) else {
                 continue;
             };
+            // A machine that stopped since, such as the files machine gone
+            // idle, starts again for it.
+            if let Some(unit) = self.unit_of(&machine) {
+                self.start(&unit);
+            }
             let cid = self.cid_of(&machine).unwrap_or(0);
             if self.deliver(key.0, &device, &machine, cid) {
                 if let Some(p) = self.placed.get_mut(&key) {
                     p.pending = false;
+                    p.attached = key.0 == Source::Host;
+                    p.relaying = key.0 == Source::UsbMachine;
                 }
             }
         }
+    }
+
+    fn relayed(&mut self, busid: &str) {
+        if let Some(p) = self.placed.get_mut(&(Source::UsbMachine, busid.to_owned())) {
+            p.attached = true;
+        }
+    }
+
+    /// The device is still plugged in, or its report of going is on its
+    /// way: either way it waits for the next retry, which a removal
+    /// cancels.
+    fn relay_ended(&mut self, busid: &str) {
+        if let Some(p) = self.placed.get_mut(&(Source::UsbMachine, busid.to_owned())) {
+            p.attached = false;
+            p.relaying = false;
+            p.pending = true;
+        }
+    }
+
+    fn unit_of(&self, machine: &str) -> Option<String> {
+        let c = &self.config;
+        [&c.network, &c.bluetooth, &c.storage]
+            .into_iter()
+            .find(|m| m.name == machine)
+            .map(|m| m.unit.clone())
     }
 
     fn cid_of(&self, machine: &str) -> Option<u32> {
@@ -790,6 +871,7 @@ impl Router {
                     "machine": p.machine,
                     "pending": p.pending,
                     "parked": p.parked,
+                    "attached": p.attached,
                 })
             })
             .collect();
@@ -864,8 +946,16 @@ fn connect_when_up(cid: u32, port: u32, timeout: Duration) -> io::Result<File> {
 /// either end closes it: the device is pulled out, or the machine stops.
 /// A machine just started takes a while to listen, so the connection to it
 /// is tried for up to three minutes.
-fn relay(usb: u32, cid: u32, device: &Device, machine: &str) {
+fn relay(usb: u32, cid: u32, device: &Device, machine: &str, events: &Sender<Msg>) {
     let busid = &device.busid;
+    // However it ends, the router hears of it.
+    struct Ended<'a>(&'a Sender<Msg>, &'a str);
+    impl Drop for Ended<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.send(Msg::RelayEnded(self.1.to_owned()));
+        }
+    }
+    let _ended = Ended(events, busid);
     let mut to = match connect_when_up(cid, ATTACH, Duration::from_secs(180)) {
         Ok(conn) => conn,
         Err(e) => {
@@ -885,6 +975,7 @@ fn relay(usb: u32, cid: u32, device: &Device, machine: &str) {
         return;
     }
     info!(busid, name = %device.name, machine, "relaying");
+    let _ = events.send(Msg::Relayed(busid.clone()));
     let shut = |f: &File| unsafe {
         libc::shutdown(f.as_raw_fd(), libc::SHUT_RDWR);
     };

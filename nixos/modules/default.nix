@@ -25,6 +25,9 @@
     ./network-machine.nix
     ./files-machine.nix
     ./shares-machine.nix
+    ./peripherals.nix
+    ./portal-backend.nix
+    ./portal-machine.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix

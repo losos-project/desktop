@@ -18,8 +18,9 @@ pub enum Route {
     /// A hub: the host configures it so what is behind it enumerates, and
     /// routes those one by one.
     Hub,
-    /// Keyboards, mice, game controllers and security keys: HID and
-    /// nothing else, which the host keeps so sign-in and the desktop work.
+    /// Keyboards, mice, game controllers, security keys and smart card
+    /// readers: HID and CCID and nothing else, which the host keeps so
+    /// sign-in, the desktop and eID cards work.
     Host,
     /// Network cards: the network machine.
     Network,
@@ -48,6 +49,7 @@ const CLASS_AUDIO: u8 = 0x01;
 const CLASS_COMM: u8 = 0x02;
 const CLASS_HID: u8 = 0x03;
 const CLASS_IMAGE: u8 = 0x06;
+const CLASS_SMART_CARD: u8 = 0x0b;
 const CLASS_STORAGE: u8 = 0x08;
 const CLASS_CDC_DATA: u8 = 0x0a;
 const CLASS_VIDEO: u8 = 0x0e;
@@ -106,7 +108,12 @@ pub fn route<'a>(device: &Device, modules: impl IntoIterator<Item = &'a str>) ->
         Route::Camera
     } else if has(CLASS_AUDIO) {
         Route::Audio
-    } else if !device.interfaces.is_empty() && classes().all(|(c, _, _)| c == CLASS_HID) {
+    } else if !device.interfaces.is_empty()
+        && classes().all(|(c, _, _)| c == CLASS_HID || c == CLASS_SMART_CARD)
+    {
+        // A smart card reader has no kernel driver: the host's pcscd
+        // drives it. A security key such as a YubiKey is often HID and a
+        // smart card at once.
         Route::Host
     } else {
         Route::Other
@@ -155,6 +162,18 @@ mod tests {
     #[test]
     fn a_keyboard_stays() {
         assert_eq!(route(&device(&[(3, 1, 1), (3, 0, 0)]), []), Route::Host);
+    }
+
+    #[test]
+    fn smart_card_readers_and_security_keys_stay() {
+        assert_eq!(route(&device(&[(0x0b, 0, 0)]), []), Route::Host);
+        // FIDO, a keyboard for one-time codes, and a smart card.
+        let yubikey = device(&[(3, 0, 0), (3, 1, 1), (0x0b, 0, 0)]);
+        assert_eq!(route(&yubikey, []), Route::Host);
+        assert_eq!(
+            route(&yubikey, ["kernel/drivers/hid/usbhid/usbhid.ko.xz"]),
+            Route::Host
+        );
     }
 
     #[test]

@@ -105,6 +105,8 @@ in
   losos = callWithMold ./losos.nix { };
   # Finds those boxes over mDNS and offers each one as an application.
   losos-boxes = callWithMold ./losos-boxes.nix { };
+  # The Agent's machine's channels to the desktop, both ends (docs/agent.md).
+  losos-agent-machine = callWithMold ./losos-agent-machine.nix { };
   # The host's way into its service machines: `nmcli` on the host runs in
   # the network machine (docs/network-machine.md).
   losos-vm-call = callWithMold ./losos-vm-call.nix { };
@@ -113,6 +115,9 @@ in
   # The files machine's init and daemon: the storage it is given, mounted
   # there and served to the host (docs/files-machine.md).
   losos-filesd = callWithMold ./losos-filesd.nix { };
+  # The portals' dialogs in a machine of their own, sys-portal, for the
+  # host's apps and every machine's (docs/portal-machine.md).
+  losos-portal = callWithMold ./losos-portal.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.
@@ -120,6 +125,9 @@ in
   # A guest's apps and windows on the desktop, from macOS's app server or
   # any other that speaks its protocol (docs/app-windows.md).
   app-windows = callWithMold ./app-windows.nix { };
+  # Schizo mode's way out through the person's LosOS edge: in the Tor
+  # gateway, each connection over Tor to the edge's onion exit.
+  losos-edge-chain = callWithMold ./losos-edge-chain.nix { };
   # macOS app support (macos-apps.nix): macOS in dockur/macos on a Mac, and
   # its windows through app-windows.
   macos-app-support = final.callPackage ./macos-app-support.nix { };

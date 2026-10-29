@@ -16,8 +16,10 @@
     proxy, which passes only key and pointer events, is not done.
   - A Bluetooth radio that is not on USB, on a UART or SDIO as on some
     Arm laptops, stays the host's, and Settings does not see it.
-  - Controller passthrough has only run under QEMU, never on a PC's own
-    USB controllers.
+  - Every part has run only in virtual machines: the router, sys-usb and a
+    receiving machine nested in QEMU, and controller passthrough through
+    QEMU's emulated IOMMU (`nixos/tests/peripherals.nix`). None of it has
+    met a PC's own USB controllers or a real Bluetooth radio.
 - **The gaming machine.** [The gaming machine](gaming-machine.md) needs a
   second graphics card. Some of it is not finished:
   - A PC with one card cannot hand it to the machine and take it back
@@ -44,6 +46,20 @@
     server.
   - OpenSSH's `sftp-server` in sys-files is not chrooted to the volume it
     serves. The host is the only one that can ask for one.
+- **The portal machine.** [The portal machine](portal-machine.md) has
+  gaps:
+  - Its dialogs are not attached to the app's window, which is on
+    another machine's display, so they open as windows of their own.
+  - What a machine may write back is kept until the host restarts. After
+    that, saving a copy a machine was given before changes only the copy.
+  - A folder picked for an app in a machine goes back file by file. An
+    empty folder made in the copy reaches the host only once a file is
+    put in it, and a link made in the copy stays in the machine.
+  - Changes made to a picked folder on the host after it was copied do
+    not reach the machine's copy.
+  - Only the files and screenshot portals copy files. A portal that hands
+    an app a file in another way, such as the Account portal's picture,
+    hands a machine's app a path it cannot open.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
@@ -60,6 +76,15 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
+- **The Agent's machine.** The [Agent](agent.md) works on a copy of the
+  folder the person picks, so a file changed on the host while the copy is
+  open is not seen in the machine until the folder is picked again. The
+  machine has no Nix and no pm, so the Agent's `nix_build` and
+  `pm_build` tools fail there. Files the Agent asks to open, such as an
+  artifact, stay in the machine, because only web links open on the
+  desktop. The machine draws in software, with no GPU. Nothing on the
+  desktop shows that the machine is running or stops it, other than closing
+  the Agent and waiting ten minutes.
 - **A default for text files.** Since Sonne left, nothing claims text and
   source files as their default for `xdg-open`. Files opens them in whatever
   app happens to list their type, if any. derisk's Text Editor cannot be
@@ -79,8 +104,9 @@
   the 8 GiB `/usr` slot. Giving machines the host's store over virtiofs would
   save it. A machine's disk grows once, to the size it was made with, and
   nothing makes an existing machine's disk larger. Portal dialogs in a
-  machine, such as a Flatpak's file chooser, are GTK's, drawn through the
-  same waypipe, and nobody has tried them.
+  machine, such as a Flatpak's file chooser, are the
+  [portal machine](portal-machine.md)'s now, and nobody has tried them
+  with a real app in a machine.
 - **The Flatpak machine's loose ends.** A `.flatpakref` or `.flatpakrepo`
   file opened on the host has nothing to open it, because Flatpak is in
   [the machine](hypervisor.md#the-flatpak-machine), so it has to be copied
@@ -333,3 +359,8 @@
   setting to change that. They have run against Nextcloud and Forgejo laid
   out the way a box lays them out, not against a real box. See
   [Backups to a LosOS box](backup.md).
+- **Names through the edge in schizo mode.** With an edge set, schizo mode
+  sends its connections out from the edge, but Tor's exits still look up
+  the names. The edge's SOCKS exit could take the name itself, but the
+  chain only sees the address a program connected to, not the name it
+  looked up ([Schizo mode](schizo-mode.md), "Through an edge").

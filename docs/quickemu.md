@@ -32,7 +32,7 @@ default, and it leaves most of the rest to `/home`. 8 GB of RAM is twice what
 
 quickemu needs `swtpm` beside QEMU for the TPM. The installer ISO is in every
 nightly release on [the releases
-page](https://github.com/losos-project/losos-desktop/releases), as
+page](https://github.com/losos-project/desktop/releases), as
 `losos-desktop_<version>_<arch>-installer.iso`. Save it next to the config,
 under the name the config gives it:
 
