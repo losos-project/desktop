@@ -298,6 +298,10 @@
           # LosOS boxes, one announcing _losos._tcp and one from before
           # that, found over mDNS and offered as applications (losos-boxes.nix).
           losos-boxes = pkgs.testers.runNixOSTest ./nixos/tests/losos-boxes.nix;
+          # A real LosOS box, from the commit the losos client is pinned to,
+          # beside the desktop: found by its announcement, signed in to with
+          # losos, and backed up to (losos-box.nix).
+          losos-box = pkgs.testers.runNixOSTest ./nixos/tests/losos-box.nix;
           # pm makes a machine from the guest template, which boots, lists its
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
