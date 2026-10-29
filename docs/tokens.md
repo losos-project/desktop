@@ -108,6 +108,65 @@ slovensko.sk's hand-off to it while it is open, as
 > Open the eID klient in a machine before signing in on the host. The
 > host reaches only an eID klient that is running.
 
+## Signing in with the eID
+
+A person can sign in to the computer itself with their eID card, as they
+can with a security key. homed does the work, as it does for a key. It
+encrypts a secret for the person's account to a certificate on a PKCS#11
+token, and at login the token decrypts it once the person types the
+token's PIN. The eID card's certificate for encryption is the one used,
+because only its key may decrypt.
+
+The card speaks PKCS#11 only through the Ministry's closed module, which
+comes in the eID klient download. So the module runs in a machine of its
+own, the eID machine (`nixos/guest/eid-machine.nix`), and no closed code
+runs on the host. It is one of the machines the OS runs parts of itself
+in (`nixos/modules/service-machines.nix`). It boots from the host's own
+store, the Machines app does not show it, and it has no network card. `nixos/modules/eid-signin.nix` is the host's side:
+
+- homed loads a PKCS#11 module called `losos-eid`. It is p11-kit's remote
+  mode, not a library: every call goes as p11-kit's RPC to
+  `/run/losos-eid/pkcs11.sock`. Only homed, its helper and homectl load it.
+  Danube and the machines still use the readers through pcscd.
+- systemd hands each connection on that socket to
+  `losos-tokens pkcs11-relay`. The relay lets in root, which is homed, and
+  the person at the seat, and refuses everyone else. It then connects to
+  the eID machine's vsock port 7373 from a port below 1024, which only a
+  program with `CAP_NET_BIND_SERVICE` can bind.
+- In the eID machine, systemd hands each connection to
+  `losos-tokens pkcs11-serve`. It checks that the connection comes from
+  the host and from a port below 1024, and then runs `p11-kit remote` with
+  the module on it. Nothing in the machine or on the host can skip the
+  relay.
+- The module reads the card through the host's pcscd, as any machine
+  does. Each connection loads the module for one conversation and exits
+  with it, so the eID machine holds the readers only while the host is
+  reading the card. A machine running the eID klient for slovensko.sk is
+  refused the readers for those few seconds.
+
+The image carries no part of the eID klient. `losos-eid-signin` turns
+eID sign-in on for the person who runs it, with the card in a reader. The
+first time, it starts `losos-eid-fetch.service`, and polkit asks an
+administrator to allow it. That service downloads and unpacks the eID
+klient as nobody in particular, the way `losos-eid` does in a machine, and
+shares the copy with the eID machine read-only. A path unit starts the eID
+machine from then on, at every boot, and a timer looks for a new eID klient
+every week. Then `losos-eid-signin` finds the card's certificates with
+p11tool, through the same relay. It picks the one whose key may encipher
+and is not an authority's, and enrols it by its ID with
+`homectl update --pkcs11-token-uri`. homed decrypts with the private key
+that shares that ID. homectl asks for the card's PIN, to
+find the key beside the certificate, and for the person's password. If the card has more than one such
+certificate, it lists them and takes the one given on its command line.
+At the login screen, pam_systemd_home asks for the token's PIN, and derisk
+shows the prompt.
+
+> [!IMPORTANT]
+> Nobody has signed in with a real eID card yet. If the Ministry's module
+> insists on its own PIN window rather than taking the PIN homed passes
+> it, that window opens in the eID machine, which has no screen, and
+> signing in fails. The password keeps working either way.
+
 ## Which machine is asking
 
 The host knows which machine a connection comes from by the vsock address
@@ -128,6 +187,15 @@ A web server on the machine's localhost stands in for the eID klient. The
 host's localhost reaches it while it listens, and nothing does once it
 stops. The machine's localhost is 127.0.0.2 in that test, because the host
 half listens on 127.0.0.1 of the same kernel.
+
+`nixos/tests/eid-signin.nix` runs the host's side of eID sign-in and the
+eID machine's half on one machine, with SoftHSM serving a token in place of
+the Ministry's module. The token holds an encryption certificate and a
+signing one. `losos-eid-signin --print` picks the encryption one, homed
+enrols it for a person, and the person logs in on the console with the
+token's PIN and no password. A program run by `nobody` gets no token from
+the relay. A connection to the eID machine's port from an ordinary port is
+refused.
 
 Nothing tests the eID klient itself, which needs a real card and the
 Ministry's servers.

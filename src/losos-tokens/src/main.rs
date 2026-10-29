@@ -3,8 +3,13 @@
 //!
 //!     losos-tokens host [--pcscd PATH] [--loopback-machine NAME] [--forward PORT]...
 //!         relay the host's keys and pcscd to the machines (the host)
-//!     losos-tokens guest [--pcsc-socket PATH] [--host-cid CID] [--serve PORT]... [--localhost ADDR]
+//!     losos-tokens guest [--pcsc-socket PATH] [--host-cid CID] [--serve PORT]... [--localhost ADDR] [--cards-only]
 //!         make the host's keys and readers this machine's (a machine)
+//!     losos-tokens pkcs11-relay --machine-cid CID
+//!         pass a PKCS#11 client on stdin to the eID machine (the host)
+//!     losos-tokens pkcs11-serve [--host-cid CID] -- PROGRAM [ARG]...
+//!         run PROGRAM on stdin's connection if the host's relay made it
+//!         (the eID machine)
 //!
 //! A FIDO key reaches a machine as a copy: `guest` makes a uhid device for
 //! each key the host has, and the host passes CTAPHID reports between that
@@ -24,6 +29,14 @@
 //! something listens on PORT, and `host --forward PORT` listens there and
 //! passes each connection to the machine that serves it (`Services`).
 //!
+//! Signing in to the computer with the eID card takes the Ministry's
+//! closed PKCS#11 module, which runs in a machine of its own rather than
+//! on the host. `pkcs11-serve` hands each connection from the host's
+//! `pkcs11-relay` to `p11-kit remote` there, and the relay is the only
+//! way in: it connects from a privileged vsock port, which no program on
+//! the host without CAP_NET_BIND_SERVICE can, and lets in only root, for
+//! homed, and the person at the seat.
+//!
 //! The host knows which machine a connection is from by the vsock address
 //! the kernel stamps on it, never by anything the machine says, and asks
 //! libvirt which running machine has that address.
@@ -32,8 +45,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::Mutex;
@@ -46,8 +61,9 @@ use tracing_subscriber::EnvFilter;
 use vsock::{VsockAddr, VsockListener, VsockStream, VMADDR_CID_ANY, VMADDR_CID_HOST};
 
 use losos_tokens::{
-    domain_cid, free_key, is_fido_descriptor, listening, parse_hid_uevent, uhid, Frame, Lease,
-    Router, Services, KEYS_PORT, LOCALHOST_PORT, RELAYED_PHYS, REPORT_LEN, SMART_CARDS_PORT,
+    active_uid, domain_cid, free_key, is_fido_descriptor, listening, parse_hid_uevent, uhid, Frame,
+    Lease, Router, Services, KEYS_PORT, LOCALHOST_PORT, PKCS11_PORT, PRIVILEGED_PORTS,
+    RELAYED_PHYS, REPORT_LEN, SMART_CARDS_PORT,
 };
 
 /// Where pcscd listens, on the host and, for programs, in a machine.
@@ -81,8 +97,10 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("host") => host_options(&args[1..]).and_then(host),
         Some("guest") => guest_options(&args[1..]).and_then(|o| guest(&o)),
+        Some("pkcs11-relay") => pkcs11_relay(&args[1..]),
+        Some("pkcs11-serve") => pkcs11_serve(&args[1..]),
         _ => Err(miette!(
-            "usage: losos-tokens host [--pcscd PATH] [--loopback-machine NAME] [--forward PORT]... | guest [--pcsc-socket PATH] [--host-cid CID] [--serve PORT]... [--localhost ADDR]"
+            "usage: losos-tokens host [--pcscd PATH] [--loopback-machine NAME] [--forward PORT]... | guest [--pcsc-socket PATH] [--host-cid CID] [--serve PORT]... [--localhost ADDR] [--cards-only] | pkcs11-relay --machine-cid CID | pkcs11-serve [--host-cid CID] -- PROGRAM [ARG]..."
         )),
     };
     match result {
@@ -133,6 +151,9 @@ struct GuestOptions {
     /// loopback address where nixos/tests/tokens.nix runs the host's end,
     /// with its own listener on 127.0.0.1, on the same kernel.
     localhost: Ipv4Addr,
+    /// Only the readers, for the eID machine, which has no use for a
+    /// copy of the person's security keys.
+    cards_only: bool,
 }
 
 fn guest_options(args: &[String]) -> Result<GuestOptions> {
@@ -141,17 +162,18 @@ fn guest_options(args: &[String]) -> Result<GuestOptions> {
         host_cid: VMADDR_CID_HOST,
         serve: Vec::new(),
         localhost: Ipv4Addr::LOCALHOST,
+        cards_only: false,
     };
     let mut args = args.iter();
     while let Some(flag) = args.next() {
+        if flag == "--cards-only" {
+            options.cards_only = true;
+            continue;
+        }
         let value = args.next().ok_or_else(|| miette!("{flag} needs a value"))?;
         match flag.as_str() {
             "--pcsc-socket" => options.pcsc_socket = PathBuf::from(value),
-            "--host-cid" => {
-                options.host_cid = value
-                    .parse()
-                    .map_err(|_| miette!("--host-cid takes a number"))?
-            }
+            "--host-cid" => options.host_cid = cid(flag, value)?,
             "--serve" => options.serve.push(port(value)?),
             "--localhost" => {
                 options.localhost = value
@@ -164,6 +186,10 @@ fn guest_options(args: &[String]) -> Result<GuestOptions> {
         }
     }
     Ok(options)
+}
+
+fn cid(flag: &str, value: &str) -> Result<u32> {
+    value.parse().map_err(|_| miette!("{flag} takes a number"))
 }
 
 fn port(value: &str) -> Result<u16> {
@@ -688,6 +714,9 @@ impl Stream for TcpStream {
 fn guest(options: &GuestOptions) -> Result<()> {
     std::thread::scope(|scope| {
         scope.spawn(|| loop {
+            if options.cards_only {
+                return;
+            }
             if let Err(e) = keys_from_host(options) {
                 debug!("{e:?}");
             }
@@ -916,4 +945,111 @@ fn cards_from_host(socket: &Path, host_cid: u32) -> Result<()> {
         }
     });
     Ok(())
+}
+
+// Signing in with the eID card.
+
+/// The host's end: a PKCS#11 client's connection, which systemd accepted
+/// on /run/losos-eid/pkcs11.sock and passes as stdin, goes on to the eID
+/// machine at `--machine-cid` if root or the person at the seat made it.
+fn pkcs11_relay(args: &[String]) -> Result<()> {
+    let machine = match args {
+        [flag, value] if flag == "--machine-cid" => cid(flag, value)?,
+        _ => bail!("usage: losos-tokens pkcs11-relay --machine-cid CID"),
+    };
+    // SAFETY: StandardInput=socket makes stdin the accepted connection,
+    // and nothing else here uses it.
+    let client = unsafe { UnixStream::from_raw_fd(io::stdin().as_raw_fd()) };
+    let uid = nix::sys::socket::getsockopt(&client, nix::sys::socket::sockopt::PeerCredentials)
+        .into_diagnostic()
+        .wrap_err("cannot tell who connected")?
+        .uid();
+    // homed and homectl run as root to read the card at login and when a
+    // person enrols it. Anyone else is let in only while at the seat, as
+    // pcscd lets them at the readers; a card's certificate names its
+    // holder, so nobody signed in elsewhere reads it.
+    let seat = std::fs::read_to_string("/run/systemd/seats/seat0").unwrap_or_default();
+    if uid != 0 && active_uid(&seat) != Some(uid) {
+        info!(uid, "refused the eID card: not root and not at the seat");
+        return Ok(());
+    }
+    let stream = connect_privileged(machine, PKCS11_PORT)?;
+    debug!(uid, "passing a PKCS#11 client to the eID machine");
+    splice(client, stream)
+}
+
+/// A vsock connection to `cid`'s `port` from a privileged local port,
+/// which tells the other end only a privileged program made it.
+fn connect_privileged(cid: u32, port: u32) -> Result<VsockStream> {
+    use nix::errno::Errno;
+    use nix::sys::socket::{bind, connect, socket, AddressFamily, SockFlag, SockType};
+
+    // From the top, as the kernel's own privileged binds go, so a free one
+    // is usually the first.
+    for local in (PRIVILEGED_PORTS / 2..PRIVILEGED_PORTS).rev() {
+        let fd: OwnedFd = socket(
+            AddressFamily::Vsock,
+            SockType::Stream,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .into_diagnostic()?;
+        match bind(fd.as_raw_fd(), &VsockAddr::new(VMADDR_CID_ANY, local)) {
+            Ok(()) => {}
+            Err(Errno::EADDRINUSE) => continue,
+            Err(e) => {
+                return Err(e)
+                    .into_diagnostic()
+                    .wrap_err("cannot bind a privileged vsock port (CAP_NET_BIND_SERVICE)")
+            }
+        }
+        connect(fd.as_raw_fd(), &VsockAddr::new(cid, port))
+            .into_diagnostic()
+            .wrap_err("cannot reach the eID machine")?;
+        return Ok(VsockStream::from(fd));
+    }
+    bail!("every privileged vsock port is in use")
+}
+
+/// The eID machine's end: runs the rest of the command line, `p11-kit
+/// remote` and the module, on the connection systemd accepted on
+/// PKCS11_PORT and passes as stdin and stdout, if the host's relay made it.
+fn pkcs11_serve(args: &[String]) -> Result<()> {
+    let mut host_cid = VMADDR_CID_HOST;
+    let mut args = args.iter();
+    let program: Vec<&String> = loop {
+        match args.next().map(String::as_str) {
+            Some("--host-cid") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| miette!("--host-cid needs a value"))?;
+                host_cid = cid("--host-cid", value)?;
+            }
+            Some("--") => break args.collect(),
+            _ => bail!("usage: losos-tokens pkcs11-serve [--host-cid CID] -- PROGRAM [ARG]..."),
+        }
+    };
+    let Some((program, program_args)) = program.split_first() else {
+        bail!("pkcs11-serve needs a program to run");
+    };
+    // SAFETY: StandardInput=socket makes stdin the accepted connection.
+    // It is handed on to the program, so it is never closed here.
+    let stream = unsafe { VsockStream::from_raw_fd(io::stdin().as_raw_fd()) };
+    let peer = stream.peer_addr().into_diagnostic();
+    let _ = stream.into_raw_fd();
+    let peer = peer?;
+    // The machine's own programs, and every other machine, have other
+    // addresses; on the host, only the relay can bind a privileged port.
+    if peer.cid() != host_cid || peer.port() >= PRIVILEGED_PORTS {
+        warn!(
+            cid = peer.cid(),
+            port = peer.port(),
+            "refused a PKCS#11 client that is not the host's relay"
+        );
+        return Ok(());
+    }
+    info!("serving the eID card's PKCS#11 module to the host");
+    Err(Command::new(program).args(program_args).exec())
+        .into_diagnostic()
+        .wrap_err_with(|| format!("cannot run {program}"))
 }

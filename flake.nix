@@ -309,6 +309,11 @@
           # A security key and a smart card reader on the host, used from a
           # machine's half of the relay over vsock's loopback (tokens.nix).
           tokens = pkgs.testers.runNixOSTest ./nixos/tests/tokens.nix;
+          # Signing in with an eID card: homed enrols the certificate that
+          # may decrypt and logs a person in with the PIN, through the
+          # relay and the eID machine's half, with SoftHSM for the card
+          # (eid-signin.nix).
+          eid-signin = pkgs.testers.runNixOSTest ./nixos/tests/eid-signin.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;
