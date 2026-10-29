@@ -12,7 +12,7 @@
 # - a USB sound card gets a disposable machine, destroyed when it is pulled;
 # - a USB keyboard comes back to the host, from sys-usb over USB/IP;
 # - sys-usb killed with a stick in it comes back, and so does the stick;
-# - Settings' Bluetooth page reads Bluetooth as off and starts nothing.
+# - Settings' Bluetooth page gets BlueZ's own answer and starts nothing.
 #
 # The machines run under TCG: the test VM's KVM modules are kept out, as in
 # machines.nix, rather than rely on nested virtualisation. The controller
@@ -261,9 +261,11 @@ in
           machine.succeed("systemctl restart losos-service-machine-sys-usb.service")
           wait(routed("sys-files"), "the stick after sys-usb came back")
 
-      with subtest("Bluetooth's page reads it as off and starts nothing"):
-          out = machine.succeed("su - alice -c 'bluetoothctl show'")
-          print(out)
+      with subtest("Bluetooth's page gets BlueZ's answer and starts nothing"):
+          # The test VM has no radio, so it answers as BlueZ does when
+          # there is none, rather than starting sys-bluetooth to find out.
+          status, out = machine.execute("su - alice -c 'bluetoothctl show'")
+          assert status == 1 and "No default controller available" in out, out
           machine.fail("systemctl is-active losos-service-machine-sys-bluetooth.service")
 
       unplug(s)
