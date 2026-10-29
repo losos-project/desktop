@@ -40,8 +40,11 @@ let
       ];
     }).config;
 
-  # libvirt's view of one: its kernel, initrd and command line from its
-  # system, the host's store shared read-only over 9p, its state disk and
+  # libvirt's view of one: the image's own kernel image, which carries the
+  # certificate of every module the kernel builds (kernel-hardening.nix;
+  # the plain build would load none, and a machine loads no module the
+  # host's tree lacks), and its initrd and command line from
+  # its system, the host's store shared read-only over 9p, its state disk and
   # its cards. @TYPE@ and @CPU@ are KVM's when the host has it and
   # emulation's otherwise, filled in when it is defined.
   domain =
@@ -65,7 +68,7 @@ let
           <type arch='${pkgs.stdenv.hostPlatform.qemuArch}' machine='${
             if pkgs.stdenv.hostPlatform.isx86 then "q35" else "virt"
           }'>hvm</type>
-          <kernel>${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}</kernel>
+          <kernel>${config.system.build.kernelImage}</kernel>
           <initrd>${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}</initrd>
           <cmdline>init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}</cmdline>
         </os>

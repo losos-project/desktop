@@ -114,8 +114,11 @@ in
     );
   };
 
-  # The system's own kernel link, which QEMU boots in the VM tests, to the
-  # same image. NixOS links the plain build first.
+  # The same image for what boots this kernel without the UKI: the system's
+  # own kernel link, which QEMU boots in the VM tests (NixOS links the plain
+  # build first), and service machines (service-machines.nix).
+  system.build.kernelImage = lib.mkIf pc "${kernelImage}/${kernelFile}";
+
   system.systemBuilderCommands = lib.mkIf pc (
     lib.mkAfter ''
       ln -sf ${kernelImage}/${kernelFile} $out/kernel
