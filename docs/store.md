@@ -58,6 +58,20 @@ for everyone without a password. For anyone else, the Store installs for that
 person alone with `--user`, from the app's flatpakref, which needs no remote
 set up.
 
+## Opening a .flatpakref or .flatpakrepo
+
+The Store is the default app for both kinds of file, so opening one in Files
+or from a browser's downloads hands it to the Store. A `.flatpakref` names
+one app and where it comes from; a `.flatpakrepo` describes a remote. The
+Store reads the file's title and, for a remote, its name, then copies the
+file to where flatpak runs: `losos-guest-flatpak store put` keeps it in the
+machine user's runtime directory, since the host's files are not in the
+machine. There it runs `flatpak install --user --from` the file, or `flatpak
+remote-add --user --if-not-exists --from` it, as one of the jobs above, and
+shows the installed apps. Both are for that person alone, the way a phone's
+user installs: a file from a web page is not something to add for everyone
+on the computer.
+
 ## How it reads Flathub
 
 flatpak keeps each remote's catalogue at
