@@ -9,8 +9,9 @@
   is not finished:
   - Bluetooth headphones pair and connect in sys-bluetooth, but there is
     no PipeWire there and no path for their sound to the host's.
-  - A camera or sound card in its disposable machine is driven there, but
-    nothing yet carries its video or sound back to apps on the host.
+  - A camera or printer in its disposable machine is driven there, but
+    nothing yet carries its video back to apps on the host, or print jobs
+    to it. Sound cards play and record through the host's PipeWire.
   - A keyboard or mouse plugged into a port sys-usb holds comes to the
     host over USB/IP, so the host parses its HID descriptors. Qubes's input
     proxy, which passes only key and pointer events, is not done.

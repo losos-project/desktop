@@ -10,11 +10,17 @@
 //! virtual controller when the router connects to its attach port with a
 //! stream from the USB machine behind it.
 //!
-//! Both listen on vsock, which only the host can reach, and only the host's
-//! root at that (vsock.rs).
+//! A disposable machine that is NixOS rather than BusyBox, for a device
+//! that needs a whole stack such as a sound card, also lets the host reach
+//! that stack (`forward`): each connection to a port of its own is joined
+//! to a local socket, such as its sound server's.
+//!
+//! All of them listen on vsock, which only the host can reach, and only the
+//! host's root at that (vsock.rs).
 
 use std::fs::{self, File};
 use std::io::{self, Write};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::thread;
 
@@ -22,6 +28,7 @@ use crossbeam_channel::{bounded, select};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::splice::splice;
 use crate::uevent;
 use crate::usb::{is_busid, Device};
 use crate::usbip;
@@ -32,6 +39,8 @@ pub const EXPORT: u32 = 3240;
 pub const EVENTS: u32 = 3241;
 /// A receiving machine's.
 pub const ATTACH: u32 = 3242;
+/// A sound card's machine's sound server.
+pub const SOUND: u32 = 3244;
 
 /// One line on the event port.
 #[derive(Debug, Serialize, Deserialize)]
@@ -307,4 +316,25 @@ fn serve_command(conn: File) -> io::Result<()> {
     let mut out = serde_json::to_vec(&answer).map_err(io::Error::other)?;
     out.push(b'\n');
     conn.write_all(&out)
+}
+
+/// A service of a disposable machine's that the host reaches: every
+/// connection to `port` joined to the local socket `to` for as long as
+/// both ends keep it.
+pub fn forward(port: u32, to: &Path) -> io::Result<()> {
+    let listener = Listener::bind(port)?;
+    info!(port, to = %to.display(), "forwarding");
+    thread::scope(|s| loop {
+        let conn = match listener.accept() {
+            Ok(conn) => conn,
+            Err(e) => {
+                warn!(error = %e, "cannot take a connection");
+                continue;
+            }
+        };
+        s.spawn(move || match UnixStream::connect(to) {
+            Ok(local) => splice(&conn, &local),
+            Err(e) => warn!(to = %to.display(), error = %e, "cannot reach the service"),
+        });
+    })
 }

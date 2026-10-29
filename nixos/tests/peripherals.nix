@@ -9,7 +9,9 @@
 #   reaches the files machine over USB/IP; pulled out, sys-usb stops a
 #   minute later and the controller is the host's again; three times over;
 # - with sys-usb up, a stick in and out ten times, then six at once, twice;
-# - a USB sound card gets a disposable machine, destroyed when it is pulled;
+# - a USB sound card gets a disposable machine, Kicksecure NixOS with a
+#   sound server, which alice's PipeWire plays to; destroyed when the card
+#   is pulled, and alice's sink with it;
 # - a USB keyboard comes back to the host, from sys-usb over USB/IP;
 # - sys-usb killed with a stick in it comes back, and so does the stick;
 # - Settings' Bluetooth page gets BlueZ's own answer and starts nothing.
@@ -41,8 +43,8 @@ in
 {
   name = "losos-desktop-peripherals";
   # sys-usb boots under emulation four times over, and the files machine
-  # and a disposable machine besides.
-  globalTimeout = 2 * 3600;
+  # and a sound card's NixOS machine besides.
+  globalTimeout = 3 * 3600;
 
   node.pkgsReadOnly = false;
 
@@ -112,11 +114,21 @@ in
           ${pkgs.jq}/bin/jq -r '.[] | "\(.busid)  \(.name)  ->  \(.machine // "host")"' \
             /run/losos-peripherals/devices.json
           lsblk -o NAME,SIZE,TRAN
+          echo
+          su alice -c 'XDG_RUNTIME_DIR=/run/user/1000 pactl list sinks short' 2>/dev/null
         '')
+        pkgs.pulseaudio
       ];
+      # Someone signed in, as far as their PipeWire goes, for a sound
+      # card's machine to be played to.
+      services.pipewire = {
+        enable = true;
+        pulse.enable = true;
+      };
       users.users.alice = {
         isNormalUser = true;
         uid = 1000;
+        linger = true;
       };
     };
 
@@ -134,7 +146,7 @@ in
       virsh = "virsh -c qemu:///system"
 
       def diagnose():
-          for name in ("sys-usb", "sys-files"):
+          for name in ("sys-usb", "sys-files", "disposable-*"):
               print(machine.execute(f"tail -n 100 /var/log/libvirt/qemu/{name}-console.log")[1])
           print(machine.execute(f"{virsh} list --all; cat /run/losos-peripherals/devices.json")[1])
           # Whatever libvirt is still busy with, and what it said.
@@ -241,14 +253,28 @@ in
                   unplug(n)
               wait(lambda ds: not routed("sys-files", 2)(ds), "six sticks to go")
 
-      with subtest("a sound card gets a disposable machine, gone when it is pulled"):
+      with subtest("a sound card gets a Kicksecure machine, which alice plays to, gone when it is pulled"):
           card = plug("usb-audio", audiodev="snd")
           wait(lambda ds: any(d["route"] == "audio" and d["attached"] for d in ds), "the sound card")
-          machine.succeed("virsh -c qemu:///system list --name | grep -q '^disposable-'")
+          dom = f"$({virsh} list --name | grep '^disposable-')"
+          machine.succeed(f"{virsh} dumpxml {dom} | grep -q '<pm:service>true</pm:service>'")
+          machine.succeed(f"{virsh} dumpxml {dom} | grep -q \"<title>A sound card's disposable machine</title>\"")
+          # The router's socket for it, once its sound server has the card,
+          # and the sink alice's PipeWire tunnels to it.
+          pactl = "su - alice -c 'XDG_RUNTIME_DIR=/run/user/1000 pactl list sinks short'"
+          try:
+              retry(lambda _: machine.execute(f"{pactl} | grep -q losos-disposable-")[0] == 0, 1800)
+          except Exception:
+              diagnose()
+              print(machine.execute(f"ls -l /run/losos-peripherals/sound; {pactl}; journalctl -b --no-pager -n 40 _UID=1000")[1])
+              raise
+          # And a stream plays to it.
+          machine.succeed("su - alice -c 'XDG_RUNTIME_DIR=/run/user/1000 timeout 3 pacat -d $(XDG_RUNTIME_DIR=/run/user/1000 pactl list sinks short | grep -o \"losos-disposable-[0-9]*\") /dev/urandom' || [ $? = 124 ]")
           show("sound-card-in-disposable")
-          machine.succeed("virsh -c qemu:///system dumpxml $(virsh -c qemu:///system list --name | grep '^disposable-') | grep -q '<pm:service>true</pm:service>'")
           unplug(card)
-          retry(lambda _: machine.execute("virsh -c qemu:///system list --name | grep -q '^disposable-'")[0] != 0, 300)
+          retry(lambda _: machine.execute(f"{virsh} list --name | grep -q '^disposable-'")[0] != 0, 300)
+          retry(lambda _: machine.execute(f"{pactl} | grep -q losos-disposable-")[0] != 0, 120)
+          machine.fail("ls /run/losos-peripherals/sound/disposable-*")
 
       with subtest("a keyboard in sys-usb comes back to the host"):
           kbd = plug("usb-kbd")

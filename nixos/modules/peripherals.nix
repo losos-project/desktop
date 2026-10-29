@@ -9,13 +9,15 @@
 #   sys-files, the network and files machines (network-machines.nix).
 # - Anything else, a camera, a sound card, a printer, gets a disposable
 #   machine made when it is plugged in and destroyed when it is pulled
-#   out, from the template below.
+#   out, from the templates below. A sound card's is NixOS with
+#   Kicksecure's hardening and a sound server (nixos/guest/sound.nix),
+#   which the host's PipeWire plays to through a socket the router makes.
 # - Keyboards, pointers, game pads and security keys stay on the host,
 #   with the controller of the disk it booted from.
 #
 # losos-peripherals' router (src/losos-peripherals) decides and moves each
-# device. Every one of these machines is BusyBox and that program on the
-# host's own kernel (busybox-guests.nix), hidden from the Machines app, and
+# device. Every other one of these machines is BusyBox and that program on
+# the host's own kernel (busybox-guests.nix). All are hidden from the Machines app, and
 # lazy: none runs before a device needs it, and sys-usb stops a minute
 # after its last device is gone. Settings' Bluetooth page keeps working
 # through the host's bluetoothctl, which is the router's.
@@ -26,6 +28,7 @@
   config,
   lib,
   pkgs,
+  modulesPath,
   ...
 }:
 
@@ -98,6 +101,15 @@ let
         unit = "losos-service-machine-sys-bluetooth.service";
       };
       disposable = disposable;
+      disposables.audio = {
+        template = sound;
+        bridges = [
+          {
+            dir = "/run/losos-peripherals/sound";
+            port = 3244;
+          }
+        ];
+      };
       disposable_cids = [
         4120
         4199
@@ -107,34 +119,37 @@ let
     }
   );
 
-  # The disposable machines' definition, which the router fills in with
+  # The disposable machines' definitions, which the router fills in with
   # each one's name, vsock address and the host's acceleration: no disk,
   # a controller for a device on the host's own ports, the host's store
   # (service-machines.nix shares it the same way), and memory it gives
   # back as it frees it.
-  disposable =
-    let
-      g = guests.disposable.build;
-    in
-    pkgs.writeText "disposable.xml" ''
+  domain =
+    {
+      file,
+      title,
+      memory,
+      os,
+    }:
+    pkgs.writeText file ''
       <domain type='@TYPE@'>
         <name>@NAME@</name>
-        <title>A device's disposable machine</title>
+        <title>${title}</title>
         <metadata>
           <pm:machine xmlns:pm='https://losos-project.github.io/xmlns/pm-machine/1'>
             <pm:label>black</pm:label>
             <pm:service>true</pm:service>
           </pm:machine>
         </metadata>
-        <memory unit='MiB'>256</memory>
+        <memory unit='MiB'>${toString memory}</memory>
         <vcpu>1</vcpu>
         <os>
           <type arch='${pkgs.stdenv.hostPlatform.qemuArch}' machine='${
             if pkgs.stdenv.hostPlatform.isx86 then "q35" else "virt"
           }'>hvm</type>
-          <kernel>${g.kernel}</kernel>
-          <initrd>${g.initrd}</initrd>
-          <cmdline>${g.cmdline}</cmdline>
+          <kernel>${os.kernel}</kernel>
+          <initrd>${os.initrd}</initrd>
+          <cmdline>${os.cmdline}</cmdline>
         </os>
         @CPU@${
           # As service-machines.nix's: a PC's kernel booted by libvirt has
@@ -158,13 +173,86 @@ let
           <vsock model='virtio'>
             <cid auto='no' address='@CID@'/>
           </vsock>
-          <serial type='pty'><target port='0'/></serial>
+          <serial type='pty'>
+            <!-- Kept after the machine is gone, to read what it did. -->
+            <log file='/var/log/libvirt/qemu/@NAME@-console.log' append='off'/>
+            <target port='0'/>
+          </serial>
           <console type='pty'/>
           <rng model='virtio'><backend model='random'>/dev/urandom</backend></rng>
           <memballoon model='virtio' freePageReporting='on'/>
         </devices>
       </domain>
     '';
+
+  disposable = domain {
+    file = "disposable.xml";
+    title = "A device's disposable machine";
+    memory = 256;
+    os = guests.disposable.build;
+  };
+
+  # A sound card's: a NixOS service machine, evaluated as
+  # service-machines.nix evaluates those, on the image's own kernel.
+  soundSystem =
+    (import "${modulesPath}/../lib/eval-config.nix" {
+      system = null;
+      modules = [
+        ../guest/service.nix
+        ../guest/sound.nix
+        {
+          losos.service.name = "sound";
+          nixpkgs.pkgs = pkgs;
+          boot.kernelPackages = lib.mkForce config.boot.kernelPackages;
+        }
+      ];
+    }).config;
+  sound = domain {
+    file = "disposable-sound.xml";
+    title = "A sound card's disposable machine";
+    # systemd, PipeWire and WirePlumber, on a root in memory.
+    memory = 512;
+    os = {
+      # The image's kernel image, which carries the certificate of every
+      # module (kernel-hardening.nix), as service-machines.nix boots.
+      kernel =
+        config.system.build.kernelImage
+          or "${soundSystem.system.build.kernel}/${soundSystem.system.boot.loader.kernelFile}";
+      initrd = "${soundSystem.system.build.initialRamdisk}/${soundSystem.system.boot.loader.initrdFile}";
+      cmdline = "init=${soundSystem.system.build.toplevel}/init ${toString soundSystem.boot.kernelParams}";
+    };
+  };
+
+  # The host's side of a sound card's machine: for each socket the router
+  # has made, a sink tunnelled to the machine's sound server, and a source
+  # when the card records, in the signed-in person's PipeWire; for each
+  # socket gone, its tunnels unloaded. The card's name comes from the
+  # machine, which is the device's, so only plain characters of it show.
+  soundTunnels = pkgs.writeShellScript "losos-peripherals-sound" ''
+    dir=/run/losos-peripherals/sound
+    pactl=${pkgs.pulseaudio}/bin/pactl
+    loaded=$($pactl list modules short)
+    for sock in "$dir"/*; do
+      [ -S "$sock" ] || continue
+      grep -qF "server=unix:$sock " <<<"$loaded" && continue
+      name=''${sock##*/}
+      remote() { $pactl --server="unix:$sock" "$@"; }
+      desc=$(remote list sinks | sed -n 's/^\tDescription: //p' | head -n 1 | tr -cd '[:alnum:] ._()-' | cut -c 1-60)
+      desc=''${desc:-USB sound card}
+      $pactl load-module module-tunnel-sink "server=unix:$sock" "sink_name=losos-$name" \
+        "sink_properties=\"device.description='$desc'\""
+      if remote list sources short | grep -q alsa_input; then
+        $pactl load-module module-tunnel-source "server=unix:$sock" "source_name=losos-$name-in" \
+          "source_properties=\"device.description='$desc'\""
+      fi
+    done
+    $pactl list modules short | while read -r id module args; do
+      case $module in module-tunnel-sink | module-tunnel-source) ;; *) continue ;; esac
+      sock=''${args#server=unix:}
+      sock=''${sock%% *}
+      case $sock in "$dir"/*) [ -S "$sock" ] || $pactl unload-module "$id" ;; esac
+    done
+  '';
 in
 {
   losos.busyboxGuests = {
@@ -310,6 +398,24 @@ in
   };
 
   systemd.tmpfiles.rules = [ "d /var/lib/losos-peripherals/bluetooth 0700 root root -" ];
+
+  # Sound cards' machines in the PipeWire of whoever is signed in, as the
+  # router makes and removes their sockets.
+  systemd.user.paths.losos-peripherals-sound = lib.mkIf config.services.pipewire.pulse.enable {
+    wantedBy = [ "default.target" ];
+    pathConfig.PathChanged = "/run/losos-peripherals/sound";
+  };
+  systemd.user.services.losos-peripherals-sound = lib.mkIf config.services.pipewire.pulse.enable {
+    description = "Play to sound cards in machines of their own";
+    # Once at sign-in too, for cards plugged in before.
+    wantedBy = [ "default.target" ];
+    after = [ "pipewire-pulse.service" ];
+    wants = [ "pipewire-pulse.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = soundTunnels;
+    };
+  };
 
   # For devices the host keeps that sys-usb holds: they come to the host's
   # virtual controller over USB/IP.

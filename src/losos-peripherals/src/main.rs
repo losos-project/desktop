@@ -5,6 +5,7 @@
 //!     losos-peripherals usb-machine
 //!     losos-peripherals receiver
 //!     losos-peripherals bluetooth-machine --bus-config <file>
+//!     losos-peripherals forward --port <vsock port> --to <socket>
 //!     losos-peripherals bluetoothctl [<argument>...]
 //!
 //! `keep` runs at every boot before any controller is passed through and
@@ -12,7 +13,8 @@
 //! router. `usb-machine`, `receiver` and `bluetooth-machine` are the
 //! machines' halves, each a machine's PID 1 (lib.rs). `bluetoothctl` is
 //! the host's bluetoothctl, which asks the router to run it in the
-//! Bluetooth machine.
+//! Bluetooth machine. `forward` is a NixOS disposable machine's, which
+//! lets the host reach its sound server.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -74,6 +76,15 @@ fn main() -> miette::Result<()> {
             };
             guest::bluetooth_machine(&bus).into_diagnostic()
         }
+        Some("forward") => {
+            let (Some(port), Some(to)) = (
+                flag("--port").and_then(|p| p.to_str()?.parse::<u32>().ok()),
+                flag("--to"),
+            ) else {
+                bail!("usage: losos-peripherals forward --port <vsock port> --to <socket>");
+            };
+            guest::forward(port, &to).into_diagnostic()
+        }
         Some("bluetoothctl") => {
             let control = std::env::var_os("LOSOS_PERIPHERALS_CONTROL")
                 .map(PathBuf::from)
@@ -83,6 +94,6 @@ fn main() -> miette::Result<()> {
                 .wrap_err("cannot reach the Bluetooth machine")?;
             std::process::exit(status)
         }
-        _ => bail!("usage: losos-peripherals keep|serve|usb-machine|receiver|bluetooth-machine|bluetoothctl"),
+        _ => bail!("usage: losos-peripherals keep|serve|usb-machine|receiver|bluetooth-machine|forward|bluetoothctl"),
     }
 }

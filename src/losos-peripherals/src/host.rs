@@ -19,13 +19,19 @@
 //! is off the radio waits where it is. A disposable machine is made for a
 //! device when it comes and destroyed when it goes.
 //!
+//! Most disposable machines are BusyBox and the device's driver. A sound
+//! card needs more than a driver to be any use, so its machine is NixOS,
+//! with Kicksecure's hardening and a sound server (nixos/guest/sound.nix),
+//! and the router makes a socket on the host for it (a bridge): the host's
+//! own sound server reaches the machine's through it, and plays to the
+//! card from there.
+//!
 //! What goes where is route.rs's. /run/losos-peripherals/devices.json says
 //! where every device is, for Settings.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,6 +48,7 @@ use crate::keep::mounted_disks;
 use crate::machines;
 use crate::ports::{self, Claim};
 use crate::route::{route, Route};
+use crate::splice::splice;
 use crate::uevent;
 use crate::usb::{is_busid, Device};
 use crate::usbip;
@@ -76,12 +83,34 @@ pub struct Config {
     pub storage: Machine,
     /// The definition disposable machines are made from (machines.rs).
     pub disposable: PathBuf,
+    /// The definitions for routes whose devices need a machine with more
+    /// in it, and what of each the host reaches.
+    #[serde(default)]
+    pub disposables: HashMap<Route, Disposable>,
     /// The vsock addresses disposable machines are given, first to last.
     pub disposable_cids: (u32, u32),
     /// Where the router keeps whether Bluetooth is on, across boots.
     pub state: PathBuf,
     /// The socket `losos-peripherals bluetoothctl` connects to.
     pub control: PathBuf,
+}
+
+/// A disposable machine with a stack of its own for its device.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Disposable {
+    /// Its definition, filled in as the BusyBox one's is.
+    pub template: PathBuf,
+    #[serde(default)]
+    pub bridges: Vec<Bridge>,
+}
+
+/// A socket on the host for a port of the machine's, one for each machine
+/// made: `<dir>/<machine>`, which appears once the machine answers on the
+/// port and goes when the machine does.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Bridge {
+    pub dir: PathBuf,
+    pub port: u32,
 }
 
 /// Where a device is.
@@ -156,6 +185,9 @@ struct Router {
     usb_starting: Option<Instant>,
     usb_idle: Option<Instant>,
     bluetooth: Arc<Mutex<Bluetooth>>,
+    /// Each disposable machine's bridges, by its vsock address; dropping
+    /// them closes their sockets.
+    bridges: HashMap<u32, Vec<Bridged>>,
 }
 
 const STATE: &str = "/run/losos-peripherals/devices.json";
@@ -186,8 +218,19 @@ pub fn serve(config: Config) -> io::Result<()> {
         usb_starting: None,
         usb_idle: None,
         bluetooth: Arc::new(Mutex::new(Bluetooth { on, radio: None })),
+        bridges: HashMap::new(),
         config,
     };
+
+    // Sockets a router before this one left are for machines destroyed
+    // below. Anyone signed in may look in the directories, as at the
+    // control socket.
+    for bridge in router.config.disposables.values().flat_map(|d| &d.bridges) {
+        let _ = fs::remove_dir_all(&bridge.dir);
+        fs::create_dir_all(&bridge.dir)?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&bridge.dir, fs::Permissions::from_mode(0o755))?;
+    }
 
     // Disposable machines a router before this one made are for devices it
     // no longer knows of.
@@ -650,11 +693,21 @@ impl Router {
             .pop_first()
             .ok_or_else(|| io::Error::other("every disposable machine's address is taken"))?;
         let name = format!("{DISPOSABLE}{cid}");
-        if let Err(e) = machines::start_disposable(&self.config.disposable, &name, cid) {
+        let stack = self.config.disposables.get(&route);
+        let template = stack.map_or(&self.config.disposable, |d| &d.template);
+        if let Err(e) = machines::start_disposable(template, &name, cid) {
             self.free_cids.insert(cid);
             return Err(e);
         }
-        info!(machine = %name, "started a disposable machine");
+        info!(machine = %name, ?route, "started a disposable machine");
+        if let Some(stack) = stack {
+            let bridged = stack
+                .bridges
+                .iter()
+                .map(|b| Bridged::open(cid, b.port, b.dir.join(&name)))
+                .collect();
+            self.bridges.insert(cid, bridged);
+        }
         Ok((name, cid, Some(cid)))
     }
 
@@ -834,6 +887,7 @@ impl Router {
                     warn!(machine = %machine, error = %e, "cannot destroy a disposable machine");
                 }
             }
+            self.bridges.remove(&cid);
             self.free_cids.insert(cid);
         } else if let (Source::Host, Some(machine)) = (source, &placed.machine) {
             let _ = machines::detach(machine, &placed.device);
@@ -976,22 +1030,77 @@ fn relay(usb: u32, cid: u32, device: &Device, machine: &str, events: &Sender<Msg
     }
     info!(busid, name = %device.name, machine, "relaying");
     let _ = events.send(Msg::Relayed(busid.clone()));
-    let shut = |f: &File| unsafe {
-        libc::shutdown(f.as_raw_fd(), libc::SHUT_RDWR);
-    };
-    thread::scope(|s| {
-        let (mut a, mut b) = (&from, &to);
-        s.spawn(move || {
-            let _ = io::copy(&mut a, &mut b);
-            shut(a);
-            shut(b);
-        });
-        let (mut a, mut b) = (&to, &from);
-        let _ = io::copy(&mut a, &mut b);
-        shut(a);
-        shut(b);
-    });
+    splice(&from, &to);
     info!(busid, machine, "the relay ended");
+}
+
+/// One bridge's socket for one machine.
+struct Bridged {
+    path: PathBuf,
+    /// Set as the machine goes, under the lock the socket is made under,
+    /// so the socket is either never made or is there to be removed.
+    closed: Arc<Mutex<bool>>,
+}
+
+impl Bridged {
+    fn open(cid: u32, port: u32, path: PathBuf) -> Bridged {
+        let closed = Arc::new(Mutex::new(false));
+        let bridged = Bridged {
+            path: path.clone(),
+            closed: closed.clone(),
+        };
+        thread::spawn(move || bridge(cid, port, &path, &closed));
+        bridged
+    }
+}
+
+impl Drop for Bridged {
+    fn drop(&mut self) {
+        *self.closed.lock().expect("not poisoned") = true;
+        // Wakes the listener, which sees it is closed and stops.
+        let _ = UnixStream::connect(&self.path);
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Makes `path` once machine `cid` answers on `port`, a NixOS machine
+/// taking a while to boot, so whatever watches for the socket finds one
+/// it can use; then joins every connection to it to a connection to the
+/// port, until the machine goes.
+fn bridge(cid: u32, port: u32, path: &Path, closed: &Mutex<bool>) {
+    if let Err(e) = connect_when_up(cid, port, Duration::from_secs(300)) {
+        warn!(cid, port, error = %e, "the machine never answered; no socket for it");
+        return;
+    }
+    let listener = {
+        let closed = closed.lock().expect("not poisoned");
+        if *closed {
+            return;
+        }
+        let _ = fs::remove_file(path);
+        match UnixListener::bind(path) {
+            Ok(l) => {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o666));
+                l
+            }
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "cannot make a bridge's socket");
+                return;
+            }
+        }
+    };
+    info!(path = %path.display(), cid, port, "bridged");
+    for conn in listener.incoming() {
+        if *closed.lock().expect("not poisoned") {
+            return;
+        }
+        let Ok(conn) = conn else { continue };
+        thread::spawn(move || match vsock::connect(cid, port) {
+            Ok(to) => splice(&conn, &to),
+            Err(e) => warn!(cid, port, error = %e, "cannot reach the machine"),
+        });
+    }
 }
 
 /// Runs bluetoothctl in the Bluetooth machine, for one caller of the
@@ -1114,6 +1223,56 @@ mod tests {
             controllers(&dir).into_iter().collect::<Vec<_>>(),
             ["0000:00:14.0"]
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn routes_name_their_disposable_machines() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "network": {"name": "sys-net", "cid": 4100, "unit": "n"},
+                "storage": {"name": "sys-files", "cid": 4101, "unit": "f"},
+                "bluetooth": {"name": "sys-bluetooth", "cid": 4111, "unit": "b"},
+                "disposable": "/busybox.xml",
+                "disposables": {
+                    "audio": {
+                        "template": "/sound.xml",
+                        "bridges": [{"dir": "/run/losos-peripherals/sound", "port": 3244}]
+                    }
+                },
+                "disposable_cids": [4120, 4199],
+                "state": "/var/lib/losos-peripherals",
+                "control": "/run/losos-peripherals/control"
+            }"#,
+        )
+        .unwrap();
+        let sound = &config.disposables[&Route::Audio];
+        assert_eq!(sound.template, Path::new("/sound.xml"));
+        assert_eq!(sound.bridges[0].port, 3244);
+        assert!(!config.disposables.contains_key(&Route::Camera));
+    }
+
+    #[test]
+    fn a_bridge_joins_its_socket_to_the_other_end() {
+        let dir = std::env::temp_dir().join(format!("losos-splice-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server");
+        let server = UnixListener::bind(&path).unwrap();
+        let echo = thread::spawn(move || {
+            let (conn, _) = server.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&conn).read_line(&mut line).unwrap();
+            (&conn).write_all(line.to_uppercase().as_bytes()).unwrap();
+        });
+        let (near, far) = UnixStream::pair().unwrap();
+        let server = UnixStream::connect(&path).unwrap();
+        let joined = thread::spawn(move || splice(&far, &server));
+        (&near).write_all(b"hello\n").unwrap();
+        let mut answer = String::new();
+        BufReader::new(&near).read_line(&mut answer).unwrap();
+        assert_eq!(answer, "HELLO\n");
+        echo.join().unwrap();
+        joined.join().unwrap();
         fs::remove_dir_all(&dir).unwrap();
     }
 }

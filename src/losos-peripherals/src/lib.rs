@@ -8,10 +8,12 @@
 //! phones, and anything else gets a disposable machine of its own, made
 //! when it is plugged in and destroyed when it is pulled out. The host
 //! keeps keyboards, pointers and security keys, which it needs to be used,
-//! and the controller with the disk it booted from.
+//! and the controller with the disk it booted from. A sound card's
+//! machine is NixOS with a sound server, which the host plays to through a
+//! socket the router makes for it.
 //!
 //! This crate is both halves: the host's router (`serve`, host.rs) and the
-//! machines' (`usb-machine` and `receiver`, guest.rs), plus `keep`, which
+//! machines' (`usb-machine`, `receiver` and `forward`, guest.rs), plus `keep`, which
 //! says before any controller moves which ones must stay.
 
 pub mod guest;
@@ -20,6 +22,7 @@ pub mod keep;
 pub mod machines;
 pub mod ports;
 pub mod route;
+pub mod splice;
 pub mod uevent;
 pub mod usb;
 pub mod usbip;

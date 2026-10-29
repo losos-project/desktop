@@ -112,9 +112,30 @@ memory it is not using (`virtio-balloon` with free page reporting).
   destroyed when it is pulled out. It is a transient libvirt domain with no
   disk, so whatever the device did in it is gone with it.
 
+## Sound cards
+
+A sound card is no use with only its driver, so its disposable machine is
+not BusyBox but NixOS, a service machine like schizo mode's Tor gateway,
+with Kicksecure's hardening (`nixos/guest/sound.nix`). It runs PipeWire
+system-wide, since nobody signs in there, with PipeWire's PulseAudio
+server, and `losos-peripherals forward` joins each connection the host makes
+to its vsock port 3244 to that server's socket.
+
+Once the card is in the machine's PipeWire, the router makes a socket for
+the machine, `/run/losos-peripherals/sound/disposable-<cid>`, and removes
+it when the card is pulled out. The host's PipeWire, that of whoever is
+signed in, watches the directory (`losos-peripherals-sound.path`, a user
+unit). For each socket it tunnels a sink to the machine's sound server,
+and a source when the card records too, so the card shows in Settings'
+Sound page as any other would. It unloads them when the socket goes.
+
+The card's name in Settings comes from the machine. The machine is the
+device's, so only letters, digits and a little punctuation of the name
+show.
+
 ## BusyBox machines
 
-Each of these machines is BusyBox, one program and the host's own kernel,
+Each of these machines but a sound card's is BusyBox, one program and the host's own kernel,
 and nothing else (`nixos/modules/busybox-guests.nix`). There is no
 distribution inside to update, no service manager, and no shell anyone logs
 in to. A machine's whole system is its initrd, which sits in the host's
@@ -129,6 +150,8 @@ replaces itself with the machine's program, which is PID 1 from then on.
 | sys-usb | `losos-peripherals usb-machine` | USB controller drivers and `usbip-host`, and no class driver: devices are enumerated and sent on |
 | sys-bluetooth | `losos-peripherals bluetooth-machine` | BlueZ and its own system bus, the host's firmware read-only, and its pairings in a share of the host's `/var/lib/losos-peripherals/bluetooth` |
 | disposable | `losos-peripherals receiver` | the host's kernel modules and firmware read-only, so whatever driver the device needs loads |
+
+A sound card's disposable machine is the exception, as above.
 
 The kernel is the one the host booted, so a machine runs whatever kernel
 the host runs, and an update moves both.
