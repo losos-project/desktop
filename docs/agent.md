@@ -41,7 +41,7 @@ only these:
 | What | How it gets there |
 | ---- | ----------------- |
 | Its window | waypipe over vsock to derisk's gate, like any [machine](hypervisor.md)'s window. derisk frames it in black. |
-| The person's Agent folder, `~/Agent` | Shared over virtiofs as the machine's home. Every file the machine writes there belongs to the person. No other folder of theirs is shared. |
+| The person's files | Only what they pick in the [portal machine](portal-machine.md)'s dialog, such as a project's folder. The machine gets a copy, and what the Agent saves goes back. Drives come through the [files machine](files-machine.md) and network shares through the shares machine, as they do for every machine. Nothing of the host's is shared with it. |
 | The desktop's tools | The tools channel, which passes on only the requests `derisk mcp` offers. |
 | Web links | The tools channel, which opens `http` and `https` links in the person's browser on the desktop. Files are never opened there. |
 | The network | One card on libvirt's `default` network, behind the host's NAT, and so behind the network machine when there is one. |
@@ -49,16 +49,32 @@ only these:
 The machine is a service machine. The host boots it from its own store, so
 it is part of the image and an update brings a new one. The Machines app
 does not list it. Its projects, chats, routines and Claude Code's sign-in
-live in the Agent folder, inside the person's encrypted home, so the
-machine itself keeps nothing.
+live on its one disk, `/var/lib/losos-agent-machine/<uid>/home.qcow2`,
+which is its home. The disk is encrypted with LUKS. Its key is
+`~/.local/share/losos/agent-machine.key`, inside the person's encrypted
+home, so the disk opens only while they are signed in. The host's root end
+reads the key as the person and hands it to libvirt as an ephemeral
+secret, which it forgets once QEMU has opened the disk.
+
+> [!WARNING]
+> Deleting the key deletes the Agent's disk with it. The next open makes a
+> new key and an empty disk, because the old one can no longer be read.
+
+**Its files.** The Agent's "Choose folder" opens the portal machine's
+dialog through the FileChooser portal, like any app in a machine. The
+host's relay copies the folder in and records it as picked for
+`agent-<user>`, and the Agent works on the copy. Each file it saves is
+written back to the person's folder, which is the only place the relay
+lets it write. The relay serves the machine only while the person it
+belongs to, named in its `<pm:person>` metadata, is the one in front.
 
 **It starts when it is needed.** The Agent's desktop entry runs
 `losos-agent-machine open`. That asks a root service on the host, through
 `/run/losos-agent-machine/open.sock`, to start the machine of whoever the
 kernel says connected. The service then passes the link, such as the
 palette's "Ask the agent", to the machine's launch port. The machine
-accepts it only from the host's root. The first open makes the Agent
-folder.
+accepts it only from the host's root. The first open makes the disk and
+its key.
 
 **It stops when it is not.** The machine powers itself off after ten
 minutes with no Agent window, no routine running and no routine
@@ -94,7 +110,7 @@ Claude Code itself is not in the image, because nixpkgs marks it unfree. The
 Agent runs `claude` from `PATH`, or the program `DERISK_AGENT_CLAUDE` names.
 When there is neither, it says so in the chat. Anthropic's installer, run in
 the Agent's machine, puts it in `~/.local/bin`, which is on the machine's
-`PATH` and inside the Agent folder, so it stays when the machine stops. Its
+`PATH` and on the machine's disk, so it stays when the machine stops. Its
 sign-in page opens in the person's browser on the desktop. [What is not done](not-done.md)
 lists this.
 

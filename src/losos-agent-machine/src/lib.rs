@@ -6,8 +6,9 @@
 //! Each person's Agent runs in a machine of their own, `agent-<user>`, made
 //! by nixos/modules/agent.nix. It has three ways to the host and no other:
 //! its windows, through waypipe to derisk's gate like any machine's; the
-//! Agent folder in the person's home, which is the machine's home; and the
-//! tools channel here, which carries the requests [`classify`] lets through.
+//! portal machine's dialogs, which hand it copies of the files the person
+//! picks, as for every machine; and the tools channel here, which carries
+//! the requests [`classify`] lets through.
 
 use serde_json::{json, Value};
 

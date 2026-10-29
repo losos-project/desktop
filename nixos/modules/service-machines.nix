@@ -1,9 +1,11 @@
 # Service machines: the machines the OS runs parts of itself in, such as
-# schizo mode's Tor gateway (schizo.nix), rather than the machines a person
-# makes (machines.nix). Each is a NixOS system of its own, evaluated here
+# schizo mode's Tor gateway (schizo.nix) and the network machine
+# (network-machine.nix), rather than the machines a person makes
+# (machines.nix). Each is either a NixOS system of its own, evaluated here
 # with the image's package set and kernel, and booted from the host's store
-# (nixos/guest/service.nix says how), so it needs no disk image and is
-# updated with the OS.
+# (nixos/guest/service.nix says how), or a BusyBox machine
+# (busybox-guests.nix) booted from its initrd; either way it needs no disk
+# image and is updated with the OS.
 #
 # Each is a libvirt domain like any other, defined again from this image
 # at every start of its unit, losos-service-machine-<name>.service, which
@@ -40,14 +42,35 @@ let
       ];
     }).config;
 
-  # libvirt's view of one: its kernel, initrd and command line from its
-  # system, the host's store shared read-only over 9p, its state disk and
-  # its cards. @TYPE@ and @CPU@ are KVM's when the host has it and
-  # emulation's otherwise, filled in when it is defined.
+  # What it boots: a NixOS system's kernel, initrd and command line, or a
+  # BusyBox machine's.
+  boot =
+    name: machine:
+    if machine.busybox != null then
+      config.losos.busyboxGuests.${machine.busybox}.build
+    else
+      let
+        guest = system name machine;
+      in
+      {
+        kernel = "${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}";
+        initrd = "${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}";
+        cmdline = "init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}";
+      };
+
+  # A BusyBox machine's shares, which it mounts by tag.
+  shares =
+    machine:
+    lib.optionals (machine.busybox != null) config.losos.busyboxGuests.${machine.busybox}.shares;
+
+  # libvirt's view of one: its kernel, initrd and command line, the host's
+  # store shared read-only over 9p, its state disk and its cards. @TYPE@
+  # and @CPU@ are KVM's when the host has it and emulation's otherwise,
+  # filled in when it is defined.
   domain =
     name: machine:
     let
-      guest = system name machine;
+      os = boot name machine;
     in
     pkgs.writeText "${name}.xml" ''
       <domain type='@TYPE@'>
@@ -60,14 +83,20 @@ let
           </pm:machine>
         </metadata>
         <memory unit='MiB'>${toString machine.memory}</memory>
-        <vcpu>${toString machine.cpus}</vcpu>
+        <vcpu>${toString machine.cpus}</vcpu>${lib.optionalString machine.sharedMemory ''
+
+          <!-- virtiofs' daemon reads and writes the machine's memory. -->
+          <memoryBacking>
+            <source type='memfd'/>
+            <access mode='shared'/>
+          </memoryBacking>''}
         <os>
           <type arch='${pkgs.stdenv.hostPlatform.qemuArch}' machine='${
             if pkgs.stdenv.hostPlatform.isx86 then "q35" else "virt"
           }'>hvm</type>
-          <kernel>${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}</kernel>
-          <initrd>${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}</initrd>
-          <cmdline>init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}</cmdline>
+          <kernel>${os.kernel}</kernel>
+          <initrd>${os.initrd}</initrd>
+          <cmdline>${os.cmdline}</cmdline>
         </os>
         @CPU@
         <on_poweroff>destroy</on_poweroff>
@@ -79,6 +108,15 @@ let
             <target dir='nix-store'/>
             <readonly/>
           </filesystem>${
+            lib.concatMapStrings (share: ''
+
+              <filesystem type='mount' accessmode='${if share.writable or false then "mapped" else "squash"}'>
+                <source dir='${share.source}'/>
+                <target dir='${share.tag}'/>${lib.optionalString (!(share.writable or false)) "\n    <readonly/>"}
+              </filesystem>'') (shares machine)
+          }${lib.optionalString machine.xhci ''
+
+            <controller type='usb' model='qemu-xhci'/>''}${
             lib.optionalString (machine.stateSize != null) ''
 
               <disk type='file' device='disk'>
@@ -102,12 +140,17 @@ let
               </vsock>''
           }
           <serial type='pty'>
+            <!-- Kept after the machine is gone, to read why it went. -->
+            <log file='/var/log/libvirt/qemu/${name}-console.log' append='off'/>
             <target port='0'/>
           </serial>
           <console type='pty'/>
           <rng model='virtio'>
             <backend model='random'>/dev/urandom</backend>
           </rng>
+          <!-- Pages the machine frees go back to the host as it frees
+               them, so an idle machine holds little more than it uses. -->
+          <memballoon model='virtio' freePageReporting='on'/>
           ${machine.extraDevices}
           @DEVICES@
         </devices>
@@ -172,6 +215,41 @@ let
       virsh -q destroy ${name} || true
     '';
   };
+  # Follows the machine while its unit is started, and does what it says
+  # when the machine stops without the unit being stopped.
+  watch = name: machine: {
+    description = "Follow ${machine.title}";
+    bindsTo = [ "losos-service-machine-${name}.service" ];
+    after = [ "losos-service-machine-${name}.service" ];
+    wantedBy = [ "losos-service-machine-${name}.service" ];
+    path = [
+      libvirt
+      pkgs.systemd
+      pkgs.coreutils
+    ];
+    environment.LIBVIRT_DEFAULT_URI = "qemu:///system";
+    serviceConfig.Restart = "on-failure";
+    script = ''
+      while :; do
+        while [ "$(virsh -q domstate ${name} 2>/dev/null)" = running ]; do
+          sleep 2
+        done
+        ${
+          if machine.whenStopped == "restart" then
+            ''
+              echo "${name} stopped; starting it again"
+              sleep 1
+              virsh -q start ${name} || sleep 5
+            ''
+          else
+            ''
+              echo "${name} stopped"
+              exec systemctl stop --no-block losos-service-machine-${name}.service
+            ''
+        }
+      done
+    '';
+  };
 in
 {
   options.losos.serviceMachines = lib.mkOption {
@@ -185,7 +263,34 @@ in
         options = {
           module = lib.mkOption {
             type = lib.types.deferredModule;
+            default = { };
             description = "Its NixOS configuration, on top of nixos/guest/service.nix.";
+          };
+          busybox = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            example = "sys-net";
+            description = ''
+              The losos.busyboxGuests machine it boots instead of a NixOS
+              system, whose shares it is given; `module` is unused then.
+            '';
+          };
+          sharedMemory = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Whether its memory is shared with the host's processes, which
+              virtiofs needs: for a machine handed host directories over
+              virtiofs among the devices its unit is started with.
+            '';
+          };
+          xhci = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Whether it has a USB controller, for USB devices handed to it
+              while it runs.
+            '';
           };
           title = lib.mkOption {
             type = lib.types.str;
@@ -228,6 +333,19 @@ in
               }
             );
           };
+          whenStopped = lib.mkOption {
+            type = lib.types.enum [
+              "restart"
+              "stop"
+            ];
+            default = "stop";
+            description = ''
+              What happens when the machine stops by itself (it powered off,
+              or it was destroyed): started again, for a machine the host
+              cannot do without, or its unit stopped too, for a lazy machine
+              that powers off when idle and is started again when needed.
+            '';
+          };
           cid = lib.mkOption {
             type = lib.types.nullOr lib.types.ints.unsigned;
             default = null;
@@ -244,12 +362,22 @@ in
   };
 
   config = {
-    systemd.services = lib.mapAttrs' (
-      name: machine: lib.nameValuePair "losos-service-machine-${name}" (unit name machine)
-    ) config.losos.serviceMachines;
+    systemd.services =
+      lib.mapAttrs' (
+        name: machine: lib.nameValuePair "losos-service-machine-${name}" (unit name machine)
+      ) config.losos.serviceMachines
+      // lib.mapAttrs' (
+        name: machine: lib.nameValuePair "losos-service-machine-${name}-watch" (watch name machine)
+      ) config.losos.serviceMachines;
 
     system.build.serviceMachines = lib.mapAttrs (
-      name: machine: (system name machine).system.build.toplevel
+      name: machine:
+      if machine.busybox != null then
+        pkgs.linkFarm "losos-service-machine-${name}" {
+          inherit (boot name machine) kernel initrd;
+        }
+      else
+        (system name machine).system.build.toplevel
     ) config.losos.serviceMachines;
   };
 }

@@ -88,6 +88,9 @@ in
   losos-installer = callWithMold ./losos-installer.nix { };
   losos-security = callWithMold ./losos-security.nix { };
   losos-hardware = callWithMold ./losos-hardware.nix { };
+  # Peripherals in machines of their own: the host's router and the
+  # machines' halves (docs/peripherals.md).
+  losos-peripherals = callWithMold ./losos-peripherals.nix { };
   # The Windows installer's Linux build, for its tests and for installing
   # into a disk image; the .exe is windows-installer.nix's.
   losos-windows-installer = callWithMold ./losos-windows-installer.nix { };
@@ -99,6 +102,17 @@ in
   losos-boxes = callWithMold ./losos-boxes.nix { };
   # The Agent's machine's channels to the desktop, both ends (docs/agent.md).
   losos-agent-machine = callWithMold ./losos-agent-machine.nix { };
+  # The host's way into its service machines: `nmcli` on the host runs in
+  # the network machine (docs/network-machine.md).
+  losos-vm-call = callWithMold ./losos-vm-call.nix { };
+  # The network machine's init and daemon, in place of NetworkManager there.
+  losos-netd = callWithMold ./losos-netd.nix { };
+  # The files machine's init and daemon: the storage it is given, mounted
+  # there and served to the host (docs/files-machine.md).
+  losos-filesd = callWithMold ./losos-filesd.nix { };
+  # The portals' dialogs in a machine of their own, sys-portal, for the
+  # host's apps and every machine's (docs/portal-machine.md).
+  losos-portal = callWithMold ./losos-portal.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.

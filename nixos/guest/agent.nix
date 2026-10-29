@@ -7,19 +7,23 @@
 # the image and updated with it, and hidden from Machines. Unlike the
 # others it has a screen's worth of userland, the Agent's window drawn in
 # software and carried to the desktop by waypipe as any machine's are
-# (common.nix, "The guest's display"), and a person's files: its home is
-# the Agent folder in theirs, ~/Agent, shared by the host over virtiofs
-# and nothing else of theirs. What it has of the desktop beyond its window
-# is losos-agent-machine's tools channel, which takes derisk's desktop
-# tools and web links to open, and refuses the rest.
+# (common.nix, "The guest's display"), and a home of its own, on the
+# encrypted disk agent.nix gives each person's machine. Nothing of the
+# host's is shared with it: the person's files, their drives' and their
+# network shares' come as they come to every machine, a copy of what they
+# pick in the portal machine's dialog, saved back when the Agent saves it
+# (docs/portal-machine.md). What it has of the desktop beyond its window
+# and those dialogs is losos-agent-machine's tools channel, which takes
+# derisk's desktop tools and web links to open, and refuses the rest.
 {
+  config,
   lib,
   pkgs,
   ...
 }:
 
 let
-  # The one account, whose home is the person's Agent folder. Nobody signs
+  # The one account, whose home is the machine's disk. Nobody signs
   # in as it: its systemd manager runs from boot (linger), and the
   # Agent's window, its chats and routines all run there.
   user = "user";
@@ -27,26 +31,26 @@ let
   channels = lib.getExe pkgs.losos-agent-machine;
 
   # Links the Agent opens, such as Claude Code's sign-in page, open in the
-  # person's browser on the desktop; files do not leave the machine.
+  # person's browser on the desktop; files leave it only through the portal.
   xdgOpen = pkgs.writeShellScriptBin "xdg-open" ''
     exec ${channels} open-uri "$@"
   '';
 in
 {
+  # The portals' dialogs, from the portal machine.
+  imports = [ ../modules/portal-backend.nix ];
+
   # Its root is a tmpfs as every service machine's, here as large as half
   # its memory: /tmp, and what the Agent's previews build there.
   fileSystems."/".options = lib.mkForce [
     "mode=0755"
     "size=50%"
   ];
-  # The person's Agent folder, which agent.nix shares as `home`. virtiofsd
-  # on the host makes everything here the person's there, and everything
-  # there this user's here.
-  fileSystems."/home/${user}" = {
-    device = "home";
-    fsType = "virtiofs";
-  };
-  boot.initrd.availableKernelModules = [ "virtiofs" ];
+  # The home, the disk agent.nix gives the machine, made the first time it
+  # boots there, and handed back to the host as the Agent frees it.
+  losos.service.state = "/home/${user}";
+  fileSystems."/home/${user}".options = [ "discard" ];
+  systemd.tmpfiles.rules = [ "d /home/${user} 0700 ${user} users -" ];
   # vsock, for the window, the launch port and the tools channel.
   boot.kernelModules = [ "vmw_vsock_virtio_transport" ];
 
@@ -59,7 +63,7 @@ in
     home = "/home/${user}";
     shell = pkgs.bashInteractive;
     linger = true;
-    # The share is the home; nothing here makes or owns it.
+    # The disk is the home; tmpfiles above gives it to this user.
     createHome = false;
   };
 
@@ -99,6 +103,35 @@ in
   systemd.user.settings.Manager.DefaultEnvironment =
     "WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland";
 
+  # Portals, as common.nix's. Opening and saving a file, and picking a
+  # folder for a project, are the portal machine's dialogs, through the
+  # host's relay, which hands this machine a copy of what the person
+  # picked and takes it back when the Agent saves it, and only while the
+  # person whose machine this is (agent.nix's <pm:person>) is in front.
+  # Nothing else here is a portal's: the Agent's links go through
+  # xdg-open above, and it reads the desktop's theme itself.
+  losos.portalBackend = {
+    enable = true;
+    inMachine = true;
+  };
+  # What xdg.portal.enable would install, without the xdg-utils it adds:
+  # its scripts are Perl, which service.nix's perlless profile refuses, and
+  # xdg-open here is the one above.
+  services.dbus.packages = [ pkgs.xdg-desktop-portal ];
+  systemd.packages = [ pkgs.xdg-desktop-portal ];
+  programs.fuse.enable = true;
+  environment.pathsToLink = [ "/share/xdg-desktop-portal" ];
+  environment.etc."xdg/xdg-desktop-portal/portals.conf".text = lib.generators.toINI { } {
+    preferred = {
+      default = "none";
+      "org.freedesktop.impl.portal.FileChooser" = "losos";
+      "org.freedesktop.impl.portal.Access" = "losos";
+      "org.freedesktop.impl.portal.Account" = "losos";
+      "org.freedesktop.impl.portal.Screenshot" = "losos";
+      "org.freedesktop.impl.portal.Wallpaper" = "losos";
+    };
+  };
+
   # derisk's agent socket, where `derisk mcp` and the Agent look for it,
   # carried to the host's tools channel.
   systemd.user.services.losos-agent-relay = {
@@ -122,6 +155,9 @@ in
   };
   systemd.user.services."losos-agent-launch@" = {
     description = "Open the Agent";
+    # systemd-run finds the Agent on the unit's PATH, which NixOS keeps to
+    # a handful of tools.
+    path = [ pkgs.derisk.agent ];
     serviceConfig = {
       ExecStart = "${channels} launch";
       StandardInput = "socket";
@@ -162,6 +198,14 @@ in
     };
   };
 
+  # perlless.nix, through service.nix, refuses Perl anywhere in the
+  # closure. Here it comes with `derisk mcp`: derisk links libvirt for its
+  # machines, and libvirt's Xen support carries syslinux's Perl scripts.
+  # Nothing in the machine runs them, its boot is still the profile's,
+  # Perl-free, and the machine runs from the host's store, which holds
+  # derisk and all of that already.
+  system.forbiddenDependenciesRegexes = lib.mkForce [ ];
+
   # Mesa's software renderers, as in common.nix: no GPU here, and the
   # Agent draws with egui.
   hardware.graphics.enable = true;
@@ -180,17 +224,22 @@ in
   # Claude Code is not in the image (docs/agent.md, "Where it ships"); a
   # person who installs it here with Anthropic's installer gets it in
   # ~/.local/bin, on PATH, and its glibc binary finds a loader through
-  # nix-ld. It stays in their Agent folder, so it outlasts the machine.
+  # nix-ld. It stays on the machine's disk, so it outlasts each boot.
   environment.localBinInPath = true;
   programs.nix-ld.enable = true;
 
   environment.systemPackages = [
+    pkgs.xdg-desktop-portal
     pkgs.derisk.agent
     # `derisk mcp`, the desktop's tools for every chat, which the Agent
     # runs from PATH and which reach the desktop through the relay above.
     pkgs.derisk
-    pkgs.git
+    # Without Perl, which the perlless profile refuses: no send-email or
+    # git-svn, which an agent has no use for.
+    pkgs.gitMinimal
     pkgs.adwaita-icon-theme
     (lib.hiPrio xdgOpen)
-  ];
+  ]
+  # The portal backend's definition, which xdg.portal would have linked.
+  ++ config.xdg.portal.extraPortals;
 }
