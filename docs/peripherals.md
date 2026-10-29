@@ -23,7 +23,8 @@ and stop again afterwards.
 | Bluetooth radios | sys-bluetooth, which runs BlueZ |
 | Network cards, USB Ethernet and Wi-Fi dongles | sys-net, the network machine |
 | Drives, card readers, phones and cameras' photos (PTP, MTP) | sys-files, the files machine, which hands the host their files |
-| Cameras, sound cards, printers, anything else | a disposable machine of its own |
+| Sound cards and printers | a Kicksecure machine of its own, which the host plays and prints to |
+| Cameras, anything else | a disposable machine of its own |
 | Keyboards, mice, touchpads, game pads, security keys, smart card and eID readers | the host |
 
 The host keeps what it cannot be used without. Sign-in takes a security
@@ -133,9 +134,37 @@ The card's name in Settings comes from the machine. The machine is the
 device's, so only letters, digits and a little punctuation of the name
 show.
 
+## Printers
+
+A printer's disposable machine is NixOS and Kicksecure too
+(`nixos/guest/printer.nix`), with CUPS, since turning a document into a
+printer's language takes a driver and Ghostscript. It makes one queue for
+the printer it is given:
+
+- A printer that speaks IPP over USB, as most made since 2015 do, is
+  reached through `ipp-usb`, driverless.
+- Any other goes through CUPS' own USB backend, with a driver its IEEE
+  1284 device ID matches, Gutenprint's or CUPS' own, or else CUPS' generic
+  PostScript or PCL one when the ID says it takes either. A printer that
+  matches none gets no queue, and its machine's journal says so.
+
+`losos-peripherals forward` joins each connection the host makes to vsock
+port 3245 to CUPS' socket, and the router makes
+`/run/losos-peripherals/printer/disposable-<cid>` once the queue is there.
+`losos-peripherals-printers.path` on the host then adds a queue of the
+same name to the host's CUPS, IPP Everywhere to the machine's queue, which
+apps' print dialogs list. It removes the queue when the printer is pulled
+out.
+
+The host's CUPS has no printer drivers and looks for no printers on the
+network. It only turns what a person prints into PDF or raster for the
+machine. A printer, and the driver that talks to it, never touch the host.
+A printer's card slot and scanner go to its machine with it, where nothing
+uses them yet.
+
 ## BusyBox machines
 
-Each of these machines but a sound card's is BusyBox, one program and the host's own kernel,
+Each of these machines but a sound card's or a printer's is BusyBox, one program and the host's own kernel,
 and nothing else (`nixos/modules/busybox-guests.nix`). There is no
 distribution inside to update, no service manager, and no shell anyone logs
 in to. A machine's whole system is its initrd, which sits in the host's
@@ -151,7 +180,8 @@ replaces itself with the machine's program, which is PID 1 from then on.
 | sys-bluetooth | `losos-peripherals bluetooth-machine` | BlueZ and its own system bus, the host's firmware read-only, and its pairings in a share of the host's `/var/lib/losos-peripherals/bluetooth` |
 | disposable | `losos-peripherals receiver` | the host's kernel modules and firmware read-only, so whatever driver the device needs loads |
 
-A sound card's disposable machine is the exception, as above.
+Sound cards' and printers' disposable machines are the exceptions, as
+above.
 
 The kernel is the one the host booted, so a machine runs whatever kernel
 the host runs, and an update moves both.

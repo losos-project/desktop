@@ -24,7 +24,8 @@
 //! with Kicksecure's hardening and a sound server (nixos/guest/sound.nix),
 //! and the router makes a socket on the host for it (a bridge): the host's
 //! own sound server reaches the machine's through it, and plays to the
-//! card from there.
+//! card from there. A printer's machine is the same with CUPS
+//! (nixos/guest/printer.nix), which the host's CUPS sends jobs to.
 //!
 //! What goes where is route.rs's. /run/losos-peripherals/devices.json says
 //! where every device is, for Settings.

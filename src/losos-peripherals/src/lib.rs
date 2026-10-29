@@ -10,7 +10,8 @@
 //! keeps keyboards, pointers and security keys, which it needs to be used,
 //! and the controller with the disk it booted from. A sound card's
 //! machine is NixOS with a sound server, which the host plays to through a
-//! socket the router makes for it.
+//! socket the router makes for it, and a printer's NixOS with CUPS, which
+//! the host prints to the same way.
 //!
 //! This crate is both halves: the host's router (`serve`, host.rs) and the
 //! machines' (`usb-machine`, `receiver` and `forward`, guest.rs), plus `keep`, which

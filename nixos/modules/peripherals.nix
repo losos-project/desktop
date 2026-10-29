@@ -11,7 +11,9 @@
 #   machine made when it is plugged in and destroyed when it is pulled
 #   out, from the templates below. A sound card's is NixOS with
 #   Kicksecure's hardening and a sound server (nixos/guest/sound.nix),
-#   which the host's PipeWire plays to through a socket the router makes.
+#   which the host's PipeWire plays to through a socket the router makes;
+#   a printer's is too, with CUPS (nixos/guest/printer.nix), which the
+#   host's CUPS sends jobs to the same way.
 # - Keyboards, pointers, game pads and security keys stay on the host,
 #   with the controller of the disk it booted from.
 #
@@ -110,6 +112,15 @@ let
           }
         ];
       };
+      disposables.printer = {
+        template = printer;
+        bridges = [
+          {
+            dir = "/run/losos-peripherals/printer";
+            port = 3245;
+          }
+        ];
+      };
       disposable_cids = [
         4120
         4199
@@ -192,35 +203,49 @@ let
     os = guests.disposable.build;
   };
 
-  # A sound card's: a NixOS service machine, evaluated as
-  # service-machines.nix evaluates those, on the image's own kernel.
-  soundSystem =
-    (import "${modulesPath}/../lib/eval-config.nix" {
-      system = null;
-      modules = [
-        ../guest/service.nix
-        ../guest/sound.nix
-        {
-          losos.service.name = "sound";
-          nixpkgs.pkgs = pkgs;
-          boot.kernelPackages = lib.mkForce config.boot.kernelPackages;
-        }
-      ];
-    }).config;
+  # A NixOS service machine, evaluated as service-machines.nix evaluates
+  # those, on the image's own kernel, and what libvirt boots of it.
+  nixosOs =
+    name: module:
+    let
+      guest =
+        (import "${modulesPath}/../lib/eval-config.nix" {
+          system = null;
+          modules = [
+            ../guest/service.nix
+            module
+            {
+              losos.service.name = name;
+              nixpkgs.pkgs = pkgs;
+              boot.kernelPackages = lib.mkForce config.boot.kernelPackages;
+            }
+          ];
+        }).config;
+    in
+    {
+      # The image's kernel image, which carries the certificate of every
+      # module (kernel-hardening.nix), as service-machines.nix boots.
+      kernel =
+        config.system.build.kernelImage
+          or "${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}";
+      initrd = "${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}";
+      cmdline = "init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}";
+    };
+
   sound = domain {
     file = "disposable-sound.xml";
     title = "A sound card's disposable machine";
     # systemd, PipeWire and WirePlumber, on a root in memory.
     memory = 512;
-    os = {
-      # The image's kernel image, which carries the certificate of every
-      # module (kernel-hardening.nix), as service-machines.nix boots.
-      kernel =
-        config.system.build.kernelImage
-          or "${soundSystem.system.build.kernel}/${soundSystem.system.boot.loader.kernelFile}";
-      initrd = "${soundSystem.system.build.initialRamdisk}/${soundSystem.system.boot.loader.initrdFile}";
-      cmdline = "init=${soundSystem.system.build.toplevel}/init ${toString soundSystem.boot.kernelParams}";
-    };
+    os = nixosOs "sound" ../guest/sound.nix;
+  };
+
+  printer = domain {
+    file = "disposable-printer.xml";
+    title = "A printer's disposable machine";
+    # systemd and CUPS, and Ghostscript at work on a page.
+    memory = 768;
+    os = nixosOs "printer" ../guest/printer.nix;
   };
 
   # The host's side of a sound card's machine: for each socket the router
@@ -398,6 +423,54 @@ in
   };
 
   systemd.tmpfiles.rules = [ "d /var/lib/losos-peripherals/bluetooth 0700 root root -" ];
+
+  # Printing, for printers in machines of their own: a queue in the host's
+  # CUPS for each, IPP Everywhere to the machine's own queue, made when the
+  # router makes the machine's socket and removed with it. The host has no
+  # printer drivers and nothing it finds on the network: the machine's
+  # CUPS drives the printer, and only documents the person prints are
+  # parsed here.
+  services.printing = {
+    enable = true;
+    browsing = false;
+    browsed.enable = false;
+    webInterface = false;
+  };
+  systemd.paths.losos-peripherals-printers = {
+    wantedBy = [ "multi-user.target" ];
+    pathConfig.PathChanged = "/run/losos-peripherals/printer";
+  };
+  systemd.services.losos-peripherals-printers = {
+    description = "Print to printers in machines of their own";
+    after = [ "cups.socket" ];
+    path = [
+      config.services.printing.package
+      pkgs.gnugrep
+      pkgs.gnused
+      pkgs.coreutils
+    ];
+    serviceConfig.Type = "oneshot";
+    # CUPS reaches a socket by its path as the URI's host. The printer's
+    # name comes from the machine, which is the device's, so only plain
+    # characters of it show.
+    script = ''
+      dir=/run/losos-peripherals/printer
+      for sock in "$dir"/*; do
+        [ -S "$sock" ] || continue
+        name=''${sock##*/}
+        lpstat -p "$name" >/dev/null 2>&1 && continue
+        desc=$(lpoptions -h "$sock" -p printer 2>/dev/null |
+          grep -o "printer-make-and-model='[^']*'" | cut -d "'" -f 2 |
+          tr -cd '[:alnum:] ._()-' | cut -c 1-60)
+        lpadmin -p "$name" -D "''${desc:-USB printer}" -E \
+          -v "ipp://$(printf %s "$sock" | sed 's|/|%2F|g')/printers/printer" -m everywhere
+      done
+      lpstat -v 2>/dev/null | sed -n 's|^device for \([^:]*\): ipp://%2Frun%2Flosos-peripherals%2Fprinter%2F\([^/]*\)/.*|\1 \2|p' |
+        while read -r queue machine; do
+          [ -S "$dir/$machine" ] || lpadmin -x "$queue"
+        done
+    '';
+  };
 
   # Sound cards' machines in the PipeWire of whoever is signed in, as the
   # router makes and removes their sockets.

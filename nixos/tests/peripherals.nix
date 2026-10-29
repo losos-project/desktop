@@ -12,6 +12,9 @@
 # - a USB sound card gets a disposable machine, Kicksecure NixOS with a
 #   sound server, which alice's PipeWire plays to; destroyed when the card
 #   is pulled, and alice's sink with it;
+# - a USB printer on one of the host's own ports, the kernel's printer
+#   gadget on dummy_hcd, gets a Kicksecure machine with CUPS, and alice
+#   prints to it from the host's CUPS; pulled, its queue goes too;
 # - a USB keyboard comes back to the host, from sys-usb over USB/IP;
 # - sys-usb killed with a stick in it comes back, and so does the stick;
 # - Settings' Bluetooth page gets BlueZ's own answer and starts nothing.
@@ -116,6 +119,7 @@ in
           lsblk -o NAME,SIZE,TRAN
           echo
           su alice -c 'XDG_RUNTIME_DIR=/run/user/1000 pactl list sinks short' 2>/dev/null
+          lpstat -v 2>/dev/null
         '')
         pkgs.pulseaudio
       ];
@@ -275,6 +279,31 @@ in
           retry(lambda _: machine.execute(f"{virsh} list --name | grep -q '^disposable-'")[0] != 0, 300)
           retry(lambda _: machine.execute(f"{pactl} | grep -q losos-disposable-")[0] != 0, 120)
           machine.fail("ls /run/losos-peripherals/sound/disposable-*")
+
+      with subtest("a printer gets a Kicksecure machine with CUPS, which alice prints to"):
+          # The kernel's own printer gadget on its dummy controller, a port
+          # of the host's, saying it takes PostScript; what it is sent comes
+          # out of /dev/g_printer0.
+          machine.succeed("modprobe dummy_hcd")
+          machine.succeed("modprobe g_printer pnp_string='MFG:LosOS;MDL:Test Printer;CMD:POSTSCRIPT;CLS:PRINTER;'")
+          wait(lambda ds: any(d["route"] == "printer" and d["attached"] for d in ds), "the printer")
+          dom = f"$({virsh} list --name | grep '^disposable-')"
+          machine.succeed(f"{virsh} dumpxml {dom} | grep -q \"<title>A printer's disposable machine</title>\"")
+          machine.succeed("systemd-run --unit printed sh -c 'cat /dev/g_printer0 > /tmp/printed'")
+          try:
+              retry(lambda _: machine.execute("lpstat -v | grep -q 'losos-peripherals%2Fprinter'")[0] == 0, 1800)
+          except Exception:
+              diagnose()
+              print(machine.execute("ls -l /run/losos-peripherals/printer; lpstat -t; journalctl -b --no-pager -n 40 -u cups -u losos-peripherals-printers")[1])
+              raise
+          queue = machine.succeed("lpstat -v | sed -n 's/^device for \\([^:]*\\): .*/\\1/p'").strip()
+          machine.succeed(f"su - alice -c 'lp -d {queue} /etc/os-release'")
+          retry(lambda _: machine.execute("head -c 2 /tmp/printed | grep -q '%!'")[0] == 0, 900)
+          show("printer-in-disposable")
+          machine.succeed("rmmod g_printer")
+          retry(lambda _: machine.execute(f"{virsh} list --name | grep -q '^disposable-'")[0] != 0, 300)
+          retry(lambda _: machine.execute("lpstat -v | grep -q 'losos-peripherals%2Fprinter'")[0] != 0, 120)
+          machine.succeed("rmmod dummy_hcd")
 
       with subtest("a keyboard in sys-usb comes back to the host"):
           kbd = plug("usb-kbd")
