@@ -54,6 +54,8 @@ in
     ../modules/home-folders.nix
     # uutils, sudo-rs's su and Sequoia's gpg, as on the host.
     ../modules/userland.nix
+    # The host's security keys and smart card readers.
+    ./tokens.nix
   ];
 
   options.losos.guest.name = lib.mkOption {
