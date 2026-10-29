@@ -248,6 +248,7 @@
           "losos-installer"
           "losos-report"
           "losos-hardware"
+          "losos-peripherals"
           "losos-security"
           "losos-swap"
           "losos-windows-installer"
@@ -257,6 +258,11 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-vm-call"
+          "losos-netd"
+          "losos-filesd"
+          "losos-portal"
+          "losos-agent-machine"
           "losos-edge-chain"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
@@ -302,6 +308,25 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # USB devices plugged into sys-usb's controller wake it and reach
+          # their machines, over and over, and it sleeps again once they are
+          # gone (peripherals.nix).
+          peripherals = pkgs.testers.runNixOSTest ./nixos/tests/peripherals.nix;
+          # The network and files machines under load: connections, downloads
+          # and DNS through the network machine, nmcli through losos-vm-call,
+          # schizo mode cutting the host off, the machine destroyed and
+          # started again; drives copied to and ejected from the files
+          # machine, which powers off when idle (service-machines.nix).
+          service-machines = pkgs.testers.runNixOSTest ./nixos/tests/service-machines.nix;
+          # The portal machine: a host app's request starts it, an app in
+          # another machine gets a copy of the file picked for it and saves
+          # it back to the host, and it stops when idle (portal-machine.nix).
+          portal-machine = pkgs.testers.runNixOSTest ./nixos/tests/portal-machine.nix;
+          # Opening the Agent starts the person's own machine, whose window
+          # reaches the host from its address, whose home is its own
+          # encrypted disk, kept across starts, and whose tools channel their
+          # session answers (agent.nix).
+          agent-machine = pkgs.testers.runNixOSTest ./nixos/tests/agent-machine.nix;
           # Schizo mode: the kill switch before the network, the host's,
           # its names' and a machine's connections through the Tor gateway
           # to a Tor network of the test's own, and nothing out with the
