@@ -102,6 +102,8 @@ in
   losos = callWithMold ./losos.nix { };
   # Finds those boxes over mDNS and offers each one as an application.
   losos-boxes = callWithMold ./losos-boxes.nix { };
+  # The Agent's machine's channels to the desktop, both ends (docs/agent.md).
+  losos-agent-machine = callWithMold ./losos-agent-machine.nix { };
   # The host's way into its service machines: `nmcli` on the host runs in
   # the network machine (docs/network-machine.md).
   losos-vm-call = callWithMold ./losos-vm-call.nix { };

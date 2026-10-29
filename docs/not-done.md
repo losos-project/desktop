@@ -66,6 +66,15 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
+- **The Agent's machine.** The [Agent](agent.md) works on a copy of the
+  folder the person picks, so a file changed on the host while the copy is
+  open is not seen in the machine until the folder is picked again. The
+  machine has no Nix and no pm, so the Agent's `nix_build` and
+  `pm_build` tools fail there. Files the Agent asks to open, such as an
+  artifact, stay in the machine, because only web links open on the
+  desktop. The machine draws in software, with no GPU. Nothing on the
+  desktop shows that the machine is running or stops it, other than closing
+  the Agent and waiting ten minutes.
 - **A default for text files.** Since Sonne left, nothing claims text and
   source files as their default for `xdg-open`. Files opens them in whatever
   app happens to list their type, if any. derisk's Text Editor cannot be

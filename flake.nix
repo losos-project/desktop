@@ -262,6 +262,7 @@
           "losos-netd"
           "losos-filesd"
           "losos-portal"
+          "losos-agent-machine"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -320,6 +321,16 @@
           # another machine gets a copy of the file picked for it and saves
           # it back to the host, and it stops when idle (portal-machine.nix).
           portal-machine = pkgs.testers.runNixOSTest ./nixos/tests/portal-machine.nix;
+          # Opening the Agent starts the person's own machine, whose window
+          # reaches the host from its address, whose home is its own
+          # encrypted disk, kept across starts, and whose tools channel their
+          # session answers (agent.nix).
+          agent-machine = pkgs.testers.runNixOSTest ./nixos/tests/agent-machine.nix;
+          # Schizo mode: the kill switch before the network, the host's,
+          # its names' and a machine's connections through the Tor gateway
+          # to a Tor network of the test's own, and nothing out with the
+          # gateway down (schizo.nix).
+          schizo = pkgs.testers.runNixOSTest ./nixos/tests/schizo.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;
