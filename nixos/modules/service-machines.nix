@@ -94,7 +94,13 @@ let
           </pm:machine>
         </metadata>
         <memory unit='MiB'>${toString machine.memory}</memory>
-        <vcpu>${toString machine.cpus}</vcpu>
+        <vcpu>${toString machine.cpus}</vcpu>${lib.optionalString machine.sharedMemory ''
+
+          <!-- virtiofs' daemon reads and writes the machine's memory. -->
+          <memoryBacking>
+            <source type='memfd'/>
+            <access mode='shared'/>
+          </memoryBacking>''}
         <os>
           <type arch='${pkgs.stdenv.hostPlatform.qemuArch}' machine='${
             if pkgs.stdenv.hostPlatform.isx86 then "q35" else "virt"
@@ -288,6 +294,15 @@ in
             description = ''
               The losos.busyboxGuests machine it boots instead of a NixOS
               system, whose shares it is given; `module` is unused then.
+            '';
+          };
+          sharedMemory = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Whether its memory is shared with the host's processes, which
+              virtiofs needs: for a machine handed host directories over
+              virtiofs among the devices its unit is started with.
             '';
           };
           xhci = lib.mkOption {
