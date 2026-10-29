@@ -65,6 +65,7 @@ there:
 - a progress line along the top while a page loads;
 - an extension's popup in the top right corner;
 - a bar for a site's permission request;
+- the find bar, along the bottom, while it is open;
 - a notice on a page whose web process died;
 - the link under the pointer.
 
@@ -103,10 +104,14 @@ command palette, where "Tabs › Wikipedia" switches to that tab and
 - **Page** has the address, "Secure" or "Not secure", and how many of
   [system-wide ad blocking](adblock.md)'s filter sets are in force. The top
   bar shows these lines and the palette leaves them out. Then come Open
-  Address, which opens the palette, and Copy Address.
+  Address, which opens the palette, Copy Address, and Find in Page.
 - **Tabs** lists each tab by its title, then New Tab, Next Tab and Previous
   Tab.
 - **Navigate** has Back, Forward, Reload and Stop.
+- **Bookmarks** has Bookmark This Page, or Remove Bookmark on a page that
+  has one, then each bookmark by its title.
+- **History** lists the fifteen pages visited last, newest first, then
+  Clear History.
 - **Close Tab** lists each tab by its title.
 - **Extensions** has each extension's button, meaning its popup or what it
   does when clicked, its options page, and Enable or Disable.
@@ -125,6 +130,8 @@ there is no palette and no menus, and only the keyboard reaches the tabs.
 | Ctrl+Tab, Ctrl+Shift+Tab | The next and previous tab |
 | Ctrl+R, F5 | Reload |
 | Alt+Left, Alt+Right | Back and forward |
+| Ctrl+F | Find in the page |
+| Ctrl+D | Bookmark the page, or remove its bookmark |
 
 A middle click on a link opens it in a tab behind the current one. An
 extension's own shortcuts from its manifest's `commands` work too, such as
@@ -132,6 +139,68 @@ Bitwarden's Ctrl+Shift+L to fill a login, and Esc closes its popup.
 
 Downloads go to `~/Downloads` and never overwrite a file there.
 [Downloads](#downloads) explains how they are fetched and shown.
+
+## Finding text
+
+Ctrl+F, or Find in Page in the Page menu, opens the find bar along the
+bottom of the window. Typing there highlights every match in the page,
+ignoring case, and scrolls to the first; the bar says how many there are, up
+to a thousand. Enter and Next go to the next match and Shift+Enter and
+Previous to the one before, wrapping round the page. Esc or Close takes the
+bar and the highlights away. Switching tabs with the bar open searches the
+new tab for the same text.
+
+## History and bookmarks
+
+Every page a tab finishes loading goes in the history, newest first, once
+per address, up to a thousand pages. A page's title is taken when it
+arrives, which is often after the load. Only pages from the web and local
+files count: not a new tab, an extension's page or the captive portal's
+sign-in. The bookmarks keep the order they were added in. Both live in
+`~/.local/share/danube`, as `history.json` and `bookmarks.json`, written
+whole to a new file that replaces the old one whenever they change.
+
+The History and Bookmarks menus show them, so the command palette searches
+them as it does every menu: typing part of a bookmark's title finds it.
+Picking one loads it in the tab in front. Clear History empties the history
+and leaves the bookmarks. The captive portal's window and a page shown as
+the desktop background keep neither.
+
+## Uploading files
+
+A page's file upload button opens the desktop's file chooser, through the
+file chooser portal, `org.freedesktop.portal.FileChooser`. Several files can
+be chosen where the page allows it, and the page's accepted types are the
+dialog's first filter, with every file as the second, since a page's list is
+only a hint.
+
+The sandbox shows Danube nothing of the home directory beyond its own
+folders and Downloads, so a file chosen anywhere else has to be handed in.
+The portals do that for a sandboxed app through the document portal: the
+chosen file appears under `$XDG_RUNTIME_DIR/doc`, which inside Danube's
+sandbox is the document portal's view for `org.losos.Danube` and holds only
+the files the person chose for it. Danube's web processes read them from
+there too.
+
+The portals recognise a sandboxed app as they recognise a Flatpak. The
+process on the other end of the app's bus connection, which is its
+xdg-dbus-proxy, has a `/.flatpak-info` at its root naming the app and an
+instance, and `$XDG_RUNTIME_DIR/.flatpak/<instance>/bwrapinfo.json` names
+the sandbox's process. Danube starts its proxy in a small sandbox of its own
+carrying that file, writes `bwrapinfo.json` when its own sandbox starts, and
+removes it when it ends.
+
+## Site notifications
+
+A site that the person allowed to show notifications (see
+[Sites' permissions](#sites-permissions)) shows them on the desktop, through
+derisk's notification server, as downloads do. Each one says which site
+sent it on its last line, so a page cannot pass its words off as the
+system's. Clicking it brings its tab to the front and runs the page's own
+click handler. Dismissing it runs the page's close handler, and a page
+closing its own takes it off the desktop. A notification with the tag of
+one still shown replaces it. Without a notification server, the text shows
+as a toast in the window instead.
 
 ## Downloads
 
@@ -319,9 +388,13 @@ Danube uses two sandboxes, both built with the
     fonts, icons and derisk's settings are visible read-only where they
     exist;
   - an empty runtime directory with only the Wayland, PipeWire and
-    PulseAudio sockets and derisk's directory;
+    PulseAudio sockets, derisk's directory, and the document portal's view
+    for Danube as `doc`, which holds only files the person chose to upload;
   - the session bus through xdg-dbus-proxy, which lets through only the
-    desktop portals, notifications and the accessibility bus.
+    desktop portals, notifications and the accessibility bus. The proxy
+    runs in a small sandbox of its own, with only the Nix store, `/etc` and
+    the runtime directory, and the `/.flatpak-info` that tells the portals
+    which app is asking ([Uploading files](#uploading-files)).
 
   A seccomp filter denies the system calls Flatpak denies, such as keyctl,
   ptrace's relatives, kexec and bpf, except the namespace calls the next

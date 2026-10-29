@@ -4,10 +4,17 @@
 //! read-only; the GPU; its own profile, cache and settings directories, and
 //! Downloads, writable; the fonts, themes and icons a user installs,
 //! read-only; the Wayland, PipeWire and PulseAudio sockets and derisk's;
-//! the compiled filter lists. The session bus only through xdg-dbus-proxy,
-//! filtered to the portals, notifications and accessibility. Nothing else
-//! in the home directory exists in there, so a compromised browser cannot
-//! read SSH keys or other programs' data.
+//! the compiled filter lists; the files the person chose to upload, as
+//! the document portal shows them to Danube. The session bus only through
+//! xdg-dbus-proxy, filtered to the portals, notifications and
+//! accessibility. Nothing else in the home directory exists in there, so a
+//! compromised browser cannot read SSH keys or other programs' data.
+//!
+//! The portals tell a sandboxed app by the `/.flatpak-info` file at the
+//! root of whoever is on the other end of its bus connection, which is
+//! the proxy ([`bus_proxy`]): with one, the file chooser hands Danube its
+//! chosen files through the document portal, the one way into this
+//! sandbox from outside it, instead of as paths it cannot open.
 //!
 //! A seccomp filter refuses the system calls a browser never needs.
 //! Network access is shared: it is a browser. There is no Landlock ruleset
@@ -78,6 +85,10 @@ pub struct Session {
     pub bus_proxy: Option<PathBuf>,
     /// Where losos-adblock compiles its lists.
     pub adblock_state: PathBuf,
+    /// The document portal's view for Danube
+    /// (`$XDG_RUNTIME_DIR/doc/by-app/<app id>`), shown in the sandbox as
+    /// `$XDG_RUNTIME_DIR/doc`, where the file chooser's files are.
+    pub documents: Option<PathBuf>,
     /// More to show read-only: the folder of a page shown as the desktop
     /// background.
     pub read_only: Vec<PathBuf>,
@@ -98,6 +109,7 @@ pub fn plan(session: &Session) -> Plan {
         // No network namespace: the network process needs the host's.
         unshare: vec![Unshare::Pid, Unshare::Ipc, Unshare::Uts],
         deny_syscalls: syscall_denylist(),
+        no_inherited_fds: true,
         program: session.program.clone(),
         chdir: Some(s(home)),
         ..Plan::default()
@@ -172,6 +184,15 @@ pub fn plan(session: &Session) -> Plan {
     } else {
         plan.env.push(("DBUS_SESSION_BUS_ADDRESS".into(), None));
     }
+    if let Some(documents) = &session.documents {
+        plan.ops.push(Op::Bind {
+            src: s(documents),
+            dest: s(&run.join("doc")),
+            ro: false,
+            dev: false,
+            optional: true,
+        });
+    }
 
     // An empty home with Danube's directories and the user's own fonts,
     // themes and icons in it.
@@ -208,6 +229,47 @@ pub fn plan(session: &Session) -> Plan {
     plan
 }
 
+/// The sandbox xdg-dbus-proxy runs in: the Nix store to run from, the
+/// runtime directory (the session bus and the proxy's own socket) and
+/// `bus_dir` when the bus is elsewhere, and `/.flatpak-info` saying
+/// `app_info`, which the portals read through the proxy's process to know
+/// which app is asking, and that it is sandboxed.
+pub fn bus_proxy(runtime_dir: &Path, bus_dir: Option<&Path>, app_info: &str, program: Vec<String>) -> Plan {
+    let mut plan = Plan {
+        // A PID namespace of its own too: Hakoniwa mounts a /proc in
+        // every container, which a shared one refuses.
+        unshare: vec![Unshare::Pid, Unshare::Ipc, Unshare::Uts],
+        deny_syscalls: syscall_denylist(),
+        no_inherited_fds: true,
+        program,
+        ..Plan::default()
+    };
+    for path in ["/nix/store", "/etc"] {
+        plan.ops.push(Op::Bind {
+            src: path.into(),
+            dest: path.into(),
+            ro: true,
+            dev: false,
+            optional: true,
+        });
+    }
+    plan.ops.push(Op::Dev("/dev".into()));
+    for dir in std::iter::once(runtime_dir).chain(bus_dir.filter(|d| !d.starts_with(runtime_dir))) {
+        plan.ops.push(Op::Bind {
+            src: s(dir),
+            dest: s(dir),
+            ro: false,
+            dev: false,
+            optional: false,
+        });
+    }
+    plan.ops.push(Op::File {
+        dest: "/.flatpak-info".into(),
+        contents: app_info.to_owned(),
+    });
+    plan
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +283,7 @@ mod tests {
             wayland_display: "wayland-0".into(),
             bus_proxy: None,
             adblock_state: "/var/lib/losos-adblock".into(),
+            documents: Some(root.join("run/doc/by-app/org.losos.Danube")),
             read_only: vec![root.join("home/Pictures/page")],
             program: vec!["/bin/danube".into()],
         };
@@ -251,6 +314,7 @@ mod tests {
             );
         }
         assert!(plan.ops.contains(&Op::Tmpfs(s(&session.home))));
+        assert!(plan.no_inherited_fds);
         // WebKit's page sandboxes could not be built under Landlock.
         assert!(plan.landlock.is_empty());
         // A background page's folder shows, read-only, after the home's
@@ -268,6 +332,37 @@ mod tests {
             bound > tmpfs,
             "{page} is not bound read-only after the home"
         );
+        // Danube's documents are where an app's own are in a Flatpak.
+        assert!(plan.ops.iter().any(|op| matches!(op,
+            Op::Bind { src, dest, .. } if src.ends_with("by-app/org.losos.Danube") && *dest == s(&root.join("run/doc")))));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_bus_proxy_says_which_app_it_is() {
+        let plan = bus_proxy(
+            Path::new("/run/user/1000"),
+            Some(Path::new("/run/user/1000")),
+            "[Application]\nname=org.losos.Danube\n",
+            vec!["/nix/store/x/bin/xdg-dbus-proxy".into()],
+        );
+        assert!(plan.ops.contains(&Op::File {
+            dest: "/.flatpak-info".into(),
+            contents: "[Application]\nname=org.losos.Danube\n".into(),
+        }));
+        // The runtime directory once, writable: the proxy makes its socket
+        // there.
+        let runtime: Vec<_> = plan
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::Bind { dest, ro: false, .. } if dest == "/run/user/1000"))
+            .collect();
+        assert_eq!(runtime.len(), 1);
+        // The home is not there at all, nor the launcher's descriptors,
+        // its connection to the whole session bus among them.
+        assert!(!plan.ops.iter().any(|op| matches!(op, Op::Bind { src, .. } if src.starts_with("/home"))));
+        assert!(plan.no_inherited_fds);
+        // A PID namespace, without which Hakoniwa cannot mount /proc.
+        assert!(plan.unshare.contains(&Unshare::Pid));
     }
 }

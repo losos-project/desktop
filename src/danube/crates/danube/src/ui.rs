@@ -4,8 +4,9 @@
 //! what derisk.rs registers. Ctrl+L asks derisk for the palette, and the
 //! window's title names the active tab. What the window still draws is
 //! drawn with mcsapi's components in the desktop's theme: a progress
-//! line while a page loads, a permission request's bar, a crashed page's
-//! notice, the link under the pointer, and toasts.
+//! line while a page loads, a permission request's bar, the find bar
+//! (Ctrl+F), a crashed page's notice, the link under the pointer, and
+//! toasts.
 //!
 //! The page is WebKit's last frame for the active tab, painted as a
 //! texture; input over it goes back to WebKit (input.rs).
@@ -17,12 +18,13 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use eframe::egui::{self, Key, Modifiers};
 use mcsapi_components::{
-    toast, Alert, Button, ButtonSize, ButtonVariant, Checkbox, Progress, Toaster, Tokens,
+    toast, Alert, Button, ButtonSize, ButtonVariant, Checkbox, Input, Progress, Toaster, Tokens,
 };
 
 use crate::config;
 use crate::derisk::Update;
 use crate::input;
+use crate::library::Page;
 use crate::shared::{Command, Commands, Event, ExtCommand, ExtensionInfo, PermissionAsk, Tab, TabId};
 
 /// The window's short side below which it is laid out for a phone.
@@ -55,6 +57,18 @@ pub struct Window {
     focused: bool,
     remember: bool,
     theme: ThemeWatch,
+    /// The find bar, while it is open.
+    find: Option<FindBar>,
+}
+
+/// What the find bar holds.
+#[derive(Default)]
+struct FindBar {
+    text: String,
+    /// What was last searched for, and in which tab.
+    searched: Option<(TabId, String)>,
+    /// Put the keyboard in the field on the next frame.
+    focus: bool,
 }
 
 /// A frame uploaded to the GPU, and the frame it holds: an unchanged frame
@@ -145,6 +159,11 @@ struct State {
     /// pixels, drawn over the page's top right corner.
     popup: Option<(String, i32, i32)>,
     popup_frame: Option<Arc<egui::ColorImage>>,
+    /// The last search's matches, by tab: `None` inside for none.
+    found: Option<(TabId, Option<u32>)>,
+    /// The newest pages in the history, and the bookmarks.
+    history: Vec<Page>,
+    bookmarks: Vec<Page>,
 }
 
 impl State {
@@ -214,8 +233,16 @@ impl State {
                 self.popup_frame = None;
                 return false;
             }
+            Event::Found(id, count) => {
+                self.found = Some((id, count));
+                return false;
+            }
+            Event::Library { history, bookmarks } => {
+                self.history = history;
+                self.bookmarks = bookmarks;
+            }
             // Handled by the window itself before they get here.
-            Event::Copied(_) | Event::Notice(_) | Event::Quit => return false,
+            Event::Copied(_) | Event::Notice(_) | Event::ShowFind | Event::Quit => return false,
             // The tab shows WebKit's error page, which says it better.
             Event::LoadFailed { .. } => return false,
         }
@@ -304,6 +331,7 @@ impl Window {
             focused: true,
             remember: false,
             theme: ThemeWatch::new(),
+            find: None,
         }
     }
 
@@ -320,6 +348,7 @@ impl Window {
                 Ok(Event::Quit) | Err(TryRecvError::Disconnected) => return false,
                 Ok(Event::Copied(text)) => ctx.copy_text(text),
                 Ok(Event::Notice(text)) => toast(ctx, text, None),
+                Ok(Event::ShowFind) => self.open_find(),
                 Ok(event) => changed |= self.state.apply(event),
                 Err(TryRecvError::Empty) => break,
             }
@@ -341,6 +370,8 @@ impl Window {
             filters: self.state.filters,
             palette: self.palette,
             extensions: self.state.extensions.clone(),
+            history: self.state.history.clone(),
+            bookmarks: self.state.bookmarks.clone(),
         };
         self.derisk_behind = self.updates.try_send(update).is_err();
     }
@@ -402,6 +433,14 @@ impl Window {
         if !self.captive && pressed(ctrl(Key::W)) {
             self.send(Command::Close(tab.id));
         }
+        if pressed(ctrl(Key::F)) {
+            self.open_find();
+        }
+        if !self.captive && pressed(ctrl(Key::D)) {
+            let marked = self.state.bookmarks.iter().any(|b| b.uri == tab.uri);
+            self.send(Command::Bookmark(tab.id));
+            toast(ctx, if marked { "Bookmark removed" } else { "Bookmarked" }, Some(tab_title(tab)));
+        }
         if pressed(ctrl(Key::R)) || pressed(egui::KeyboardShortcut::new(Modifiers::NONE, Key::F5)) {
             self.send(Command::Reload(tab.id));
         }
@@ -424,6 +463,70 @@ impl Window {
             if let Some(next) = crate::derisk::neighbour(tabs, tab.id, true) {
                 self.send(Command::Activate(next));
             }
+        }
+    }
+
+    fn open_find(&mut self) {
+        self.find.get_or_insert_with(FindBar::default).focus = true;
+    }
+
+    /// The find bar along the bottom: the text to find, how many matches
+    /// there are, the next and previous, and closing it, which Escape
+    /// also does. Enter goes to the next match, Shift+Enter the previous.
+    fn find_bar(&mut self, ui: &mut egui::Ui, tab: &Tab, tokens: &Tokens) {
+        let Some(bar) = &mut self.find else { return };
+        let mut commands = Vec::new();
+        let mut close = false;
+        ui.horizontal(|ui| {
+            let field = ui.add(Input::new(&mut bar.text).placeholder("Find in page").width(240.0));
+            if std::mem::take(&mut bar.focus) {
+                field.request_focus();
+            }
+            let (enter, shift, escape) = ui.input(|i| {
+                (i.key_pressed(Key::Enter), i.modifiers.shift, i.key_pressed(Key::Escape))
+            });
+            if field.lost_focus() && enter && !bar.text.is_empty() {
+                commands.push(Command::FindAgain(tab.id, !shift));
+                field.request_focus();
+            }
+            close |= escape && (field.has_focus() || field.lost_focus());
+            let searched = (tab.id, bar.text.clone());
+            if bar.searched.as_ref() != Some(&searched) {
+                // A search left in another tab is ended there.
+                if let Some((old, _)) = bar.searched.as_ref().filter(|(old, _)| *old != tab.id) {
+                    commands.push(Command::Find(*old, String::new()));
+                }
+                commands.push(Command::Find(tab.id, bar.text.clone()));
+                bar.searched = Some(searched);
+            }
+            let found = match self.state.found {
+                _ if bar.text.is_empty() => String::new(),
+                Some((id, Some(1))) if id == tab.id => "1 match".into(),
+                Some((id, Some(n))) if id == tab.id => format!("{n} matches"),
+                Some((id, None)) if id == tab.id => "No matches".into(),
+                _ => String::new(),
+            };
+            ui.label(egui::RichText::new(found).color(tokens.muted_foreground));
+            let small = |label| Button::new(label).variant(ButtonVariant::Outline).size(ButtonSize::Sm);
+            if ui.add(small("Previous")).clicked() {
+                commands.push(Command::FindAgain(tab.id, false));
+            }
+            if ui.add(small("Next")).clicked() {
+                commands.push(Command::FindAgain(tab.id, true));
+            }
+            if ui.add(Button::new("Close").variant(ButtonVariant::Ghost).size(ButtonSize::Sm)).clicked() {
+                close = true;
+            }
+        });
+        if close {
+            if let Some((id, _)) = bar.searched.take() {
+                commands.push(Command::Find(id, String::new()));
+            }
+            self.find = None;
+            self.state.found = None;
+        }
+        for command in commands {
+            self.send(command);
         }
     }
 
@@ -705,6 +808,11 @@ impl eframe::App for Window {
             egui::Panel::top("permission")
                 .frame(bar)
                 .show(ui, |ui| self.permission(ui, ask));
+        }
+        if let Some(t) = tab.as_ref().filter(|_| self.find.is_some()) {
+            egui::Panel::bottom("find")
+                .frame(bar)
+                .show(ui, |ui| self.find_bar(ui, t, &tokens));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(tokens.background))

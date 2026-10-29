@@ -25,8 +25,10 @@ mod engine;
 mod extensions;
 mod ffi;
 mod input;
+mod library;
 mod notify;
 mod permissions;
+mod portal;
 mod shared;
 mod ui;
 mod webkit;
@@ -35,7 +37,7 @@ use std::convert::Infallible;
 use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitCode};
+use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
 
@@ -542,8 +544,17 @@ fn listen(listener: &UnixListener, commands: &Commands, stop: &Stop) {
     }
 }
 
-/// Runs Danube again inside its sandbox, with a filtered session bus, and
-/// `shown` (a background page's folder) read-only.
+/// Runs Danube again inside its sandbox, with a filtered session bus, the
+/// files chosen for uploads, and `shown` (a background page's folder)
+/// read-only.
+///
+/// To the portals Danube is a sandboxed app named org.losos.Danube, as a
+/// Flatpak is: its bus proxy carries a `/.flatpak-info` with that name and
+/// an instance id, and the instance's `bwrapinfo.json` under
+/// `$XDG_RUNTIME_DIR/.flatpak` names the sandbox's process, which is how
+/// xdg-desktop-portal finds an app's sandbox from its proxy. The file
+/// chooser then hands over chosen files through the document portal
+/// (portal.rs) rather than as paths outside the sandbox.
 fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, Error> {
     let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -551,58 +562,128 @@ fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, 
             // SAFETY: getuid cannot fail.
             PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() }))
         });
-    let (proxy, bus) = bus_proxy(&runtime_dir);
+    let instance = format!("danube-{}", std::process::id());
+    let app_info = format!(
+        "[Application]\nname={}\n\n[Instance]\ninstance-id={instance}\n\n[Context]\nshared=network;ipc;\n",
+        derisk::APP_ID
+    );
+    let flatpak = runtime_dir.join(".flatpak").join(&instance);
+    // A Danube that was killed left its instance behind.
+    if let Ok(entries) = std::fs::read_dir(runtime_dir.join(".flatpak")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let pid = name.to_str().and_then(|n| n.strip_prefix("danube-"));
+            if pid.is_some_and(|pid| !Path::new("/proc").join(pid).exists()) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    // Where the sandbox's process is written once it starts; without it the
+    // portals refuse Danube rather than treat it as unsandboxed.
+    let info = std::fs::create_dir_all(&flatpak)
+        .and_then(|()| std::fs::File::create(flatpak.join("bwrapinfo.json")))
+        .map_err(|error| warn!(%error, "no instance info; the portals will not answer"))
+        .ok();
+    let bus = bus_proxy(&runtime_dir, &app_info);
     let mut program = vec![exe.to_string_lossy().into_owned()];
     program.extend(std::env::args().skip(1));
     let session = danube_sandbox::browser::Session {
         home: home.to_path_buf(),
-        runtime_dir,
+        runtime_dir: runtime_dir.clone(),
         wayland_display: std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into()),
         bus_proxy: bus.clone(),
         adblock_state: ADBLOCK_STATE.into(),
+        documents: documents(&runtime_dir),
         read_only: shown.into_iter().map(Path::to_path_buf).collect(),
         program,
     };
-    let result = danube_sandbox::run(danube_sandbox::browser::plan(&session));
-    if let Some(mut proxy) = proxy {
-        let _ = proxy.kill();
-        let _ = proxy.wait();
+    let mut plan = danube_sandbox::browser::plan(&session);
+    if let Some(info) = info {
+        let fd = std::os::fd::IntoRawFd::into_raw_fd(info);
+        plan.info_fd = Some(fd);
+        plan.consumed_fds.push(fd);
     }
+    let result = danube_sandbox::run(plan);
+    // The proxy's sandbox dies with this process, which is about to end.
     if let Some(bus) = bus {
         let _ = std::fs::remove_file(bus);
     }
+    let _ = std::fs::remove_dir_all(flatpak);
     Ok(result?)
 }
 
-/// Starts xdg-dbus-proxy, so the browser sees only the parts of the
-/// session bus it uses: the desktop portals (file chooser, opening links
-/// in other apps), notifications and the accessibility bus. `None` when
-/// there is no session bus or no proxy; the browser then gets no bus.
-fn bus_proxy(runtime_dir: &Path) -> (Option<Child>, Option<PathBuf>) {
-    let Some(address) = std::env::var_os("DBUS_SESSION_BUS_ADDRESS") else {
-        return (None, None);
+/// Starts xdg-dbus-proxy in a sandbox of its own (danube-sandbox's
+/// `bus_proxy` plan) that says it is `app_info`'s, so the browser sees
+/// only the parts of the session bus it uses: the desktop portals (file
+/// chooser, opening links in other apps), notifications and the
+/// accessibility bus. `None` when there is no session bus or no proxy; the
+/// browser then gets no bus.
+fn bus_proxy(runtime_dir: &Path, app_info: &str) -> Option<PathBuf> {
+    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()?;
+    let Some(proxy) = on_path("xdg-dbus-proxy") else {
+        warn!("xdg-dbus-proxy is not installed; the browser gets no session bus");
+        return None;
     };
     let socket = runtime_dir.join(format!("danube-bus-{}", std::process::id()));
-    let child = std::process::Command::new("xdg-dbus-proxy")
-        .arg(address)
-        .arg(&socket)
-        .args([
-            "--filter",
-            "--talk=org.freedesktop.portal.*",
-            "--talk=org.freedesktop.Notifications",
-            "--talk=org.a11y.Bus",
-        ])
-        .spawn();
-    let Ok(child) = child else {
-        warn!("xdg-dbus-proxy is not installed; the browser gets no session bus");
-        return (None, None);
-    };
-    for _ in 0..50 {
+    // A bus outside the runtime directory is shown in the proxy's sandbox
+    // too.
+    let bus_dir = address
+        .split(',')
+        .find_map(|part| part.strip_prefix("unix:path="))
+        .and_then(|path| Path::new(path).parent().map(Path::to_path_buf));
+    let program = vec![
+        proxy.to_string_lossy().into_owned(),
+        address.clone(),
+        socket.to_string_lossy().into_owned(),
+        "--filter".into(),
+        "--talk=org.freedesktop.portal.*".into(),
+        "--talk=org.freedesktop.Notifications".into(),
+        "--talk=org.a11y.Bus".into(),
+    ];
+    let plan = danube_sandbox::browser::bus_proxy(runtime_dir, bus_dir.as_deref(), app_info, program);
+    // Its own thread waits on it for as long as Danube runs, and the
+    // sandbox dies with that thread.
+    let waiter = thread::spawn(move || match danube_sandbox::run(plan) {
+        Ok(code) => warn!(?code, "xdg-dbus-proxy ended"),
+        Err(error) => warn!(error = ?miette::Report::new(error), "xdg-dbus-proxy did not start"),
+    });
+    // A slow machine (a phone, a VM without a GPU) takes seconds to set up
+    // a sandbox; a proxy that ended already never makes its socket.
+    for _ in 0..200 {
         if socket.exists() {
-            return (Some(child), Some(socket));
+            return Some(socket);
+        }
+        if waiter.is_finished() {
+            break;
         }
         thread::sleep(Duration::from_millis(50));
     }
     warn!("xdg-dbus-proxy did not start; the browser gets no session bus");
-    (Some(child), None)
+    None
+}
+
+/// `name`'s full path, from `PATH`: a sandbox runs its program by path.
+fn on_path(name: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::canonicalize(path).ok())
+}
+
+/// Starts the document portal, which D-Bus starts on its first call, and
+/// returns its view for Danube: what the file chooser shares with it.
+fn documents(runtime_dir: &Path) -> Option<PathBuf> {
+    let bus = webkit::Bus::session().ok()?;
+    let reply = bus.call_sync(
+        "org.freedesktop.portal.Documents",
+        "/org/freedesktop/portal/documents",
+        "org.freedesktop.portal.Documents",
+        "GetMountPoint",
+        &webkit::Var::Tuple(Vec::new()),
+    );
+    if let Err(error) = reply {
+        warn!(error, "no document portal; uploads cannot reach the sandbox");
+        return None;
+    }
+    Some(runtime_dir.join("doc/by-app").join(derisk::APP_ID)).filter(|dir| dir.is_dir())
 }
