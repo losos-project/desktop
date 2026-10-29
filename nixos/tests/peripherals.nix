@@ -137,6 +137,8 @@ in
           for name in ("sys-usb", "sys-files"):
               print(machine.execute(f"tail -n 100 /var/log/libvirt/qemu/{name}-console.log")[1])
           print(machine.execute(f"{virsh} list --all; cat /run/losos-peripherals/devices.json")[1])
+          # Whatever libvirt is still busy with, and what it said.
+          print(machine.execute("ps -eo pid,etime,args | grep -E '[v]irsh|[q]emu-system|[m]odprobe'; journalctl -b --no-pager -n 80 -u libvirtd -u virtqemud")[1])
           print(machine.execute("journalctl -b --no-pager -n 150 -u losos-peripherals -u losos-peripherals-keep -u losos-passthrough-sys-usb -u losos-service-machine-sys-usb")[1])
 
       def devices():
@@ -160,7 +162,10 @@ in
               )
               props["drive"] = f"d{name}"
           extra = "".join(f",{k}={v}" for k, v in props.items())
-          machine.send_monitor_command(f"device_add {driver},bus=pt.0,id={name}{extra}")
+          out = machine.send_monitor_command(f"device_add {driver},bus=pt.0,id={name}{extra}")
+          # QEMU's monitor answers a device it cannot plug in with a line
+          # saying why, and nothing at all otherwise.
+          assert "rror" not in out and "arning" not in out, out
           return name
 
       def unplug(name):

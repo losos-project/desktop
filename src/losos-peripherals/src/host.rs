@@ -519,6 +519,7 @@ impl Router {
         }
         let route = self.route(&device);
         if route != Route::Hub {
+            info!(busid = %device.busid, name = %device.name, ?route, "a device in the USB machine");
             self.usb_idle = None;
             self.place(Source::UsbMachine, device, route);
         }
