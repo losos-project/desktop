@@ -13,7 +13,9 @@
 #   Kicksecure's hardening and a sound server (nixos/guest/sound.nix),
 #   which the host's PipeWire plays to through a socket the router makes;
 #   a printer's is too, with CUPS (nixos/guest/printer.nix), which the
-#   host's CUPS sends jobs to the same way.
+#   host's CUPS sends jobs to the same way, and a camera's, with ffmpeg
+#   (nixos/guest/camera.nix), which the host makes a camera of that apps
+#   open, streaming only while one does.
 # - Keyboards, pointers, game pads and security keys stay on the host,
 #   with the controller of the disk it booted from.
 #
@@ -118,6 +120,15 @@ let
           {
             dir = "/run/losos-peripherals/printer";
             port = 3245;
+          }
+        ];
+      };
+      disposables.camera = {
+        template = camera;
+        bridges = [
+          {
+            dir = "/run/losos-peripherals/camera";
+            port = 3246;
           }
         ];
       };
@@ -246,6 +257,14 @@ let
     # systemd and CUPS, and Ghostscript at work on a page.
     memory = 768;
     os = nixosOs "printer" ../guest/printer.nix;
+  };
+
+  camera = domain {
+    file = "disposable-camera.xml";
+    title = "A camera's disposable machine";
+    # systemd, and ffmpeg decoding and scaling 720p.
+    memory = 512;
+    os = nixosOs "camera" ../guest/camera.nix;
   };
 
   # The host's side of a sound card's machine: for each socket the router
@@ -490,9 +509,34 @@ in
     };
   };
 
+  # Cameras in machines of their own: a v4l2loopback device for each
+  # camera machine's socket, which apps open as a camera, and which streams
+  # from the machine only while one reads it (camera.rs). The module makes
+  # none of its own; `cameras` makes them.
+  boot.extraModulePackages = [ config.boot.kernelPackages.v4l2loopback ];
+  boot.extraModprobeConfig = "options v4l2loopback devices=0";
+  systemd.services.losos-peripherals-cameras = {
+    description = "Make cameras of the cameras in machines of their own";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "systemd-modules-load.service" ];
+    serviceConfig = {
+      ExecStart = "${peripherals} cameras --dir /run/losos-peripherals/camera";
+      Restart = "always";
+      RestartSec = 1;
+      # It reads sockets and writes frames, and needs nothing else.
+      PrivateNetwork = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      NoNewPrivileges = true;
+    };
+  };
+
   # For devices the host keeps that sys-usb holds: they come to the host's
-  # virtual controller over USB/IP.
-  boot.kernelModules = [ "vhci_hcd" ];
+  # virtual controller over USB/IP. v4l2loopback for the cameras, above.
+  boot.kernelModules = [
+    "vhci_hcd"
+    "v4l2loopback"
+  ];
 
   # Settings' Bluetooth page runs bluetoothctl, which is the router's here
   # and BlueZ's in sys-bluetooth. The host's BlueZ stays installed and

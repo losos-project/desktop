@@ -25,7 +25,9 @@
 //! and the router makes a socket on the host for it (a bridge): the host's
 //! own sound server reaches the machine's through it, and plays to the
 //! card from there. A printer's machine is the same with CUPS
-//! (nixos/guest/printer.nix), which the host's CUPS sends jobs to.
+//! (nixos/guest/printer.nix), which the host's CUPS sends jobs to, and a
+//! camera's with ffmpeg (nixos/guest/camera.nix), which the host's
+//! cameras stream from (camera.rs).
 //!
 //! What goes where is route.rs's. /run/losos-peripherals/devices.json says
 //! where every device is, for Settings.

@@ -15,6 +15,9 @@
 # - a USB printer on one of the host's own ports, the kernel's printer
 #   gadget on dummy_hcd, gets a Kicksecure machine with CUPS, and alice
 #   prints to it from the host's CUPS; pulled, its queue goes too;
+# - a USB camera, the test's own on dummy_hcd too (uvc-camera.py), gets a
+#   Kicksecure machine with ffmpeg, and the host a camera alice reads a
+#   frame of, streamed only while she does; pulled, the camera goes too;
 # - a USB keyboard comes back to the host, from sys-usb over USB/IP;
 # - sys-usb killed with a stick in it comes back, and so does the stick;
 # - Settings' Bluetooth page gets BlueZ's own answer and starts nothing.
@@ -120,8 +123,12 @@ in
           echo
           su alice -c 'XDG_RUNTIME_DIR=/run/user/1000 pactl list sinks short' 2>/dev/null
           lpstat -v 2>/dev/null
+          grep -H . /sys/devices/virtual/video4linux/*/name 2>/dev/null
         '')
         pkgs.pulseaudio
+        # The camera, and what reads the host's.
+        pkgs.python3
+        pkgs.ffmpeg-headless
       ];
       # Someone signed in, as far as their PipeWire goes, for a sound
       # card's machine to be played to.
@@ -133,6 +140,8 @@ in
         isNormalUser = true;
         uid = 1000;
         linger = true;
+        # As the person at the seat reads a camera.
+        extraGroups = [ "video" ];
       };
     };
 
@@ -306,6 +315,42 @@ in
           retry(lambda _: machine.execute(f"{virsh} list --name | grep -q '^disposable-'")[0] != 0, 300)
           retry(lambda _: machine.execute("lpstat -v | grep -q 'losos-peripherals%2Fprinter'")[0] != 0, 120)
           machine.succeed("rmmod dummy_hcd")
+
+      with subtest("a camera gets a Kicksecure machine, which streams to the host only while alice reads it"):
+          # A camera of the test's own on the dummy controller, red all over.
+          machine.succeed("modprobe dummy_hcd")
+          machine.succeed("modprobe raw_gadget")
+          machine.succeed("systemd-run --unit camera python3 ${./uvc-camera.py}")
+          wait(lambda ds: any(d["route"] == "camera" and d["attached"] for d in ds), "the camera")
+          dom = f"$({virsh} list --name | grep '^disposable-')"
+          machine.succeed(f"{virsh} dumpxml {dom} | grep -q \"<title>A camera's disposable machine</title>\"")
+          # The host's camera, named for the camera, from the machine.
+          named = "grep -l 'LosOS Test Camera' /sys/devices/virtual/video4linux/*/name"
+          try:
+              retry(lambda _: machine.execute(named)[0] == 0, 1800)
+          except Exception:
+              diagnose()
+              print(machine.execute("ls -l /run/losos-peripherals/camera; journalctl -b --no-pager -n 40 -u losos-peripherals-cameras -u camera")[1])
+              raise
+          video = "/dev/" + machine.succeed(named).split("/")[-2]
+          # Off until something reads it.
+          cameras = "journalctl -b --no-pager -u losos-peripherals-cameras"
+          machine.fail(f"{cameras} | grep -q 'the camera is on'")
+          # A frame alice reads has the camera's red in its middle.
+          out = machine.succeed(
+              f"su - alice -c \"timeout 900 ffmpeg -nostdin -loglevel error -f v4l2 -i {video}"
+              " -vf 'select=gte(n\\,10),crop=2:2:639:359' -frames:v 1 -f rawvideo -pix_fmt rgb24 -\""
+              " | od -An -tu1"
+          )
+          r, g, b = [int(x) for x in out.split()[:3]]
+          assert r > 200 and g < 60 and b < 60, out
+          show("camera-in-disposable")
+          # And it is off again once she stops.
+          retry(lambda _: machine.execute(f"{cameras} | grep -q 'the camera is off'")[0] == 0, 60)
+          machine.succeed("systemctl stop camera")
+          retry(lambda _: machine.execute(f"{virsh} list --name | grep -q '^disposable-'")[0] != 0, 300)
+          retry(lambda _: machine.execute(named)[0] != 0, 120)
+          machine.succeed("rmmod raw_gadget dummy_hcd")
 
       with subtest("a keyboard in sys-usb comes back to the host"):
           kbd = plug("usb-kbd")

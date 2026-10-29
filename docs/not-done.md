@@ -9,10 +9,11 @@
   is not finished:
   - Bluetooth headphones pair and connect in sys-bluetooth, but there is
     no PipeWire there and no path for their sound to the host's.
-  - A camera in its disposable machine is driven there, but nothing yet
-    carries its video back to apps on the host. Sound cards play and
-    record through the host's PipeWire, and printers print from the
-    host's CUPS.
+  - A camera reaches apps on the host as one size, 1280x720, whatever the
+    camera can do, and its own microphone goes to its machine with it,
+    where nothing carries its sound to the host. Sound cards play and
+    record through the host's PipeWire, printers print from the host's
+    CUPS, and cameras film through a v4l2loopback device.
   - A printer's scanner goes to its machine with it, and nothing there
     scans. A printer Gutenprint and CUPS have no driver for, and that
     speaks neither IPP over USB, PostScript nor PCL, gets no queue.

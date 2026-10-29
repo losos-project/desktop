@@ -6,6 +6,8 @@
 //!     losos-peripherals receiver
 //!     losos-peripherals bluetooth-machine --bus-config <file>
 //!     losos-peripherals forward --port <vsock port> --to <socket>
+//!     losos-peripherals camera-machine
+//!     losos-peripherals cameras --dir <directory>
 //!     losos-peripherals bluetoothctl [<argument>...]
 //!
 //! `keep` runs at every boot before any controller is passed through and
@@ -14,7 +16,9 @@
 //! machines' halves, each a machine's PID 1 (lib.rs). `bluetoothctl` is
 //! the host's bluetoothctl, which asks the router to run it in the
 //! Bluetooth machine. `forward` is a NixOS disposable machine's, which
-//! lets the host reach its sound server.
+//! lets the host reach its sound server or CUPS, and `camera-machine` a
+//! camera machine's, which streams its camera to the host; `cameras` is
+//! the host's, which makes a camera apps can open of each.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -22,7 +26,7 @@ use std::path::{Path, PathBuf};
 use miette::{bail, IntoDiagnostic, WrapErr};
 use tracing_subscriber::EnvFilter;
 
-use losos_peripherals::{guest, host, keep};
+use losos_peripherals::{camera, guest, host, keep};
 
 fn main() -> miette::Result<()> {
     // stderr: the journal for the router, the serial console in a machine.
@@ -85,6 +89,13 @@ fn main() -> miette::Result<()> {
             };
             guest::forward(port, &to).into_diagnostic()
         }
+        Some("camera-machine") => guest::camera_machine().into_diagnostic(),
+        Some("cameras") => {
+            let Some(dir) = flag("--dir") else {
+                bail!("usage: losos-peripherals cameras --dir <directory>");
+            };
+            camera::cameras(&dir).into_diagnostic()
+        }
         Some("bluetoothctl") => {
             let control = std::env::var_os("LOSOS_PERIPHERALS_CONTROL")
                 .map(PathBuf::from)
@@ -94,6 +105,6 @@ fn main() -> miette::Result<()> {
                 .wrap_err("cannot reach the Bluetooth machine")?;
             std::process::exit(status)
         }
-        _ => bail!("usage: losos-peripherals keep|serve|usb-machine|receiver|bluetooth-machine|forward|bluetoothctl"),
+        _ => bail!("usage: losos-peripherals keep|serve|usb-machine|receiver|bluetooth-machine|forward|camera-machine|cameras|bluetoothctl"),
     }
 }
