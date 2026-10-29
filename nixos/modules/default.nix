@@ -20,6 +20,7 @@
     ./busybox-guests.nix
     ./busybox-host-kernel.nix
     ./passthrough.nix
+    ./gaming.nix
     ./vm-call.nix
     ./network-machine.nix
     ./files-machine.nix

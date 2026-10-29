@@ -249,6 +249,7 @@
           "losos-report"
           "losos-hardware"
           "losos-peripherals"
+          "losos-gaming"
           "losos-security"
           "losos-swap"
           "losos-windows-installer"
@@ -344,6 +345,11 @@
           # pm and its podman plugin, and none of either for root
           # (windows-apps.nix).
           windows-apps = pkgs.testers.runNixOSTest ./nixos/tests/windows-apps.nix;
+          # The gaming machine without a card to give it: the card refused
+          # for want of an IOMMU, a boot that carries on, and a definition
+          # libvirt's schema accepts with nothing on it that says virtual
+          # machine (gaming.nix).
+          gaming = pkgs.testers.runNixOSTest ./nixos/tests/gaming.nix;
           installer-boot = pkgs.testers.runNixOSTest (
             import ./nixos/tests/installer-boot.nix { inherit self; }
           );
