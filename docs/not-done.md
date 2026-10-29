@@ -30,6 +30,9 @@
     in libvirt and checks the boot unit, without a card to move.
   - Disks and other devices still carry QEMU's names, which some
     anti-cheats look for.
+- **Focus mode.** [Focus mode](focus-mode.md) pauses background work, but
+  the desktop's own bar and dock stay on screen: a full-screen request
+  from a program does not yet hide them.
 - **The network and files machines.** [The network machine](network-machine.md)
   and [the files machine](files-machine.md) have gaps:
   - Handing a network card over by VFIO has only run in QEMU. The VM test

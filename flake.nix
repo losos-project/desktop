@@ -250,6 +250,7 @@
           "losos-hardware"
           "losos-peripherals"
           "losos-gaming"
+          "losos-focus"
           "losos-security"
           "losos-swap"
           "losos-windows-installer"
@@ -350,6 +351,10 @@
           # libvirt's schema accepts with nothing on it that says virtual
           # machine (gaming.nix).
           gaming = pkgs.testers.runNixOSTest ./nixos/tests/gaming.nix;
+          # Focus mode as a game turns it on: gamemoderun in a session freezes
+          # the background slices and stops what focus stops, and the game
+          # exiting or its player logging out undoes it (focus.nix).
+          focus = pkgs.testers.runNixOSTest ./nixos/tests/focus.nix;
           installer-boot = pkgs.testers.runNixOSTest (
             import ./nixos/tests/installer-boot.nix { inherit self; }
           );

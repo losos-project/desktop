@@ -237,11 +237,24 @@ fn main() -> miette::Result<()> {
                 .next()
                 .and_then(|p| p.parse::<u16>().ok())
                 .ok_or_else(|| miette!("the gaming machine shows no Looking Glass screen ({display})"))?;
-            let status = Command::new("looking-glass-client")
-                .args(["-f", domain::SHARED, "-c", "127.0.0.1", "-p", &port.to_string()])
-                .args(["win:title=Gaming", "win:autoResize=yes", "input:escapeKey=KEY_RIGHTCTRL"])
-                .status()
-                .into_diagnostic()?;
+            let client = |program: &str, prefix: &[&str]| {
+                Command::new(program)
+                    .args(prefix)
+                    .args(["-f", domain::SHARED, "-c", "127.0.0.1", "-p", &port.to_string()])
+                    .args(["win:title=Gaming", "win:autoResize=yes", "input:escapeKey=KEY_RIGHTCTRL"])
+                    .status()
+            };
+            // Under GameMode, so focus mode (docs/focus-mode.md) holds the
+            // host's background work while the window is open: the game is
+            // in Windows, but its frames are copied here. Without GameMode
+            // the window opens all the same.
+            let status = match client("gamemoderun", &["looking-glass-client"]) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    client("looking-glass-client", &[])
+                }
+                other => other,
+            }
+            .into_diagnostic()?;
             if !status.success() {
                 bail!("looking-glass-client exited with {status}");
             }
