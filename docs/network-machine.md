@@ -118,6 +118,14 @@ is set, the file is there: a placeholder until sys-net has enrolled, then
 the last account that worked. So connections fail rather than leave
 through a Tor exit.
 
+## Through a VPN
+
+With a [VPN](vpn.md) set, sys-net joins sys-vpn's two networks and hands
+it everything that would have left through the cards: the host's and its
+machines' connections, or in schizo mode the Tor gateway's. sys-vpn's own
+uplink then leaves the way the host's would have, through the edge when
+one is set. While sys-vpn is not there, those connections go nowhere.
+
 ## Staying up
 
 sys-net starts at boot and is never idle: the host has no other way out.
@@ -141,4 +149,5 @@ destroyed in the middle of a download.
 | Booting and following service machines | `nixos/modules/service-machines.nix` |
 | The machine's program | `src/losos-netd` |
 | The edge it leaves through, the host's half | `nixos/modules/edge-exit.nix`, `src/losos-netd/src/edge.rs`, `edge_run.rs`, `dnssd.rs` |
+| Routing through sys-vpn ([VPN](vpn.md)) | `src/losos-netd/src/vpn.rs`, `nixos/modules/vpn.nix` |
 | Host-to-machine calls | `src/losos-vm-call`, `nixos/modules/vm-call.nix` |

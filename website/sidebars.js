@@ -33,6 +33,7 @@ module.exports = {
         'security-report',
         'kernel-hardening',
         'schizo-mode',
+        'vpn',
       ],
     },
     {

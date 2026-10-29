@@ -100,6 +100,12 @@ pub struct State {
     schizo: Option<bool>,
     /// The edge's tunnel is up (edge_run.rs): names go through it too.
     edge_dns: bool,
+    /// The VPN's rules as applied: the link they take and the servers
+    /// they send into sys-vpn (losos_netd::vpn), and the provider's
+    /// servers the forwarder asks. None while no VPN is set.
+    vpn: Option<(Vec<Vec<String>>, Vec<String>)>,
+    /// Whether the VPN's table leads to sys-vpn rather than nowhere.
+    vpn_routed: bool,
     upstreams: String,
     running: Vec<(Vec<String>, Option<Child>, Instant)>,
     /// Bumped on every change `nmcli monitor` would print.
@@ -199,6 +205,8 @@ impl State {
             failed: BTreeMap::new(),
             radio: true,
             schizo: None,
+            vpn: None,
+            vpn_routed: false,
             edge_dns: false,
             upstreams: String::new(),
             generation: 0,
@@ -504,6 +512,11 @@ impl State {
             self.schizo = Some(schizo);
             self.changed(format!("schizo mode {}", if schizo { "on" } else { "off" }));
         }
+        let vpn = host
+            .as_ref()
+            .and_then(|h| read(h.join("vpn")))
+            .map(|t| nameservers(&t));
+        self.follow_vpn(vpn);
         let host_upstreams = host
             .as_ref()
             .and_then(|h| read(h.join("upstreams")))
@@ -511,6 +524,8 @@ impl State {
             .unwrap_or_default();
         let servers: Vec<String> = if schizo {
             self.config.gateway.iter().cloned().collect()
+        } else if let Some((_, dns)) = &self.vpn {
+            dns.clone()
         } else if self.edge_dns {
             losos_netd::edge::DNS
                 .iter()
@@ -549,7 +564,7 @@ impl State {
                 info!(?servers, "DNS servers");
             }
         }
-        let forced = schizo || self.edge_dns;
+        let forced = schizo || self.vpn.is_some() || self.edge_dns;
         if forced != Path::new(FORCED).exists() {
             let _ = if forced {
                 std::fs::write(FORCED, "")
@@ -557,6 +572,81 @@ impl State {
                 std::fs::remove_file(FORCED)
             };
         }
+    }
+
+    /// The VPN's rules and table (losos_netd::vpn), from `provider`, the
+    /// provider's servers while one is set. Only once schizo mode is known,
+    /// since it decides which link the rules take; until then the firewall
+    /// forwards nothing from the host anyway. Rules are added before the
+    /// old ones go, so a change never leaves a moment without them.
+    fn follow_vpn(&mut self, provider: Option<Vec<String>>) {
+        if self.schizo.is_none() {
+            return;
+        }
+        let schizo = self.schizo_on();
+        let from = self
+            .config
+            .link(if schizo { "torext" } else { "up" })
+            .map(|l| l.name.clone());
+        let wanted = provider.and_then(|servers| {
+            let dns = losos_netd::vpn::dns(&servers);
+            let rules = losos_netd::vpn::rules(&from?, if schizo { &[] } else { &dns });
+            Some((rules, dns))
+        });
+        let table = losos_netd::vpn::TABLE.to_string();
+        let old = self
+            .vpn
+            .as_ref()
+            .map(|(r, _)| r.clone())
+            .unwrap_or_default();
+        let new = wanted.as_ref().map(|(r, _)| r.clone()).unwrap_or_default();
+        if wanted.is_some() {
+            // sys-vpn when its link is here, nowhere until then.
+            let link = self.config.link("vpn").map(|l| l.name.clone());
+            let routed = match (&self.config.vpn_gateway, &link) {
+                (Some(gateway), Some(link)) if self.links.contains_key(link) => ip(&[
+                    "-4", "route", "replace", "default", "via", gateway, "dev", link, "table",
+                    &table,
+                ]),
+                _ => false,
+            };
+            if !routed && (self.vpn_routed || self.vpn.is_none()) {
+                ip(&[
+                    "-4",
+                    "route",
+                    "replace",
+                    "unreachable",
+                    "default",
+                    "table",
+                    &table,
+                ]);
+            }
+            if routed != self.vpn_routed {
+                self.vpn_routed = routed;
+                info!(routed, "VPN");
+            }
+        }
+        if old == new {
+            self.vpn = wanted;
+            return;
+        }
+        for rule in new.iter().filter(|r| !old.contains(r)) {
+            let mut args = vec!["-4", "rule", "add"];
+            args.extend(rule.iter().map(String::as_str));
+            ip(&args);
+        }
+        for rule in old.iter().filter(|r| !new.contains(r)) {
+            let mut args = vec!["-4", "rule", "del"];
+            args.extend(rule.iter().map(String::as_str));
+            ip(&args);
+        }
+        if wanted.is_none() {
+            ip(&["-4", "route", "flush", "table", &table]);
+            self.vpn_routed = false;
+        }
+        let on = wanted.is_some();
+        self.vpn = wanted;
+        self.changed(format!("VPN {}", if on { "on" } else { "off" }));
     }
 
     /// The firewall and routing for schizo mode on or off. False when it
@@ -883,6 +973,7 @@ impl Shared {
             schizo: state.schizo_on(),
             gateway: state.config.gateway.clone(),
             up: state.config.link("up").map(|l| l.name.clone()),
+            vpnext: state.config.link("vpnext").map(|l| l.name.clone()),
             cards: state
                 .links
                 .iter()

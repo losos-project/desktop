@@ -23,6 +23,7 @@
     ./vm-call.nix
     ./network-machine.nix
     ./edge-exit.nix
+    ./vpn.nix
     ./files-machine.nix
     ./shares-machine.nix
     ./windows-apps.nix

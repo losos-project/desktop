@@ -13,6 +13,7 @@ pub mod dnssd;
 pub mod edge;
 pub mod nmcli;
 pub mod saved;
+pub mod vpn;
 pub mod wpa;
 
 use std::path::PathBuf;
@@ -48,6 +49,9 @@ pub struct Config {
     pub gateway: Option<String>,
     /// The routing table schizo mode uses.
     pub schizo_table: u32,
+    /// sys-vpn's inside address, where everything goes while a VPN is set
+    /// (docs/vpn.md).
+    pub vpn_gateway: Option<String>,
     /// nft rulesets: the whole firewall at boot, and schizo mode on and off.
     pub nft_base: Option<PathBuf>,
     pub nft_on: Option<PathBuf>,
@@ -84,6 +88,7 @@ impl Config {
                     router: rest.first().map(|r| (*r).into()),
                 }),
                 ["gateway", address] => config.gateway = Some((*address).into()),
+                ["vpn-gateway", address] => config.vpn_gateway = Some((*address).into()),
                 ["schizo-table", table] => {
                     config.schizo_table = table.parse().map_err(|_| bad())?
                 }
@@ -133,6 +138,7 @@ mod tests {
              link up 52:54:00:4C:1E:01 up0 10.139.0.1/24\n\
              link wan 52:54:00:4c:1e:02 wan0 10.139.1.2/24 10.139.1.1\n\
              gateway 10.152.152.10\n\
+             vpn-gateway 10.154.0.10\n\
              host /var/lib/losos-host\n\
              state-disk /dev/vda /var/lib/losos-network\n\
              share adblock /var/lib/losos-adblock\n\
@@ -146,6 +152,7 @@ mod tests {
             Some("10.139.1.1")
         );
         assert_eq!(config.schizo_table, 152);
+        assert_eq!(config.vpn_gateway.as_deref(), Some("10.154.0.10"));
         assert_eq!(config.run[0][..3], ["losos-vm-call", "serve", "5000"]);
         assert!(Config::parse("link up").is_err());
     }

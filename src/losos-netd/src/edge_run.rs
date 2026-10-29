@@ -140,7 +140,7 @@ fn pass(shared: &Shared, edge: &Edge, current: &mut Current) {
             return;
         }
         Some(Err(e)) => {
-            kill_switch(&view.up, view.schizo);
+            kill_switch(&view, view.schizo);
             shared.set_edge_dns(false);
             edge.set(blocked(format!("the edge setting: {e}")));
             return;
@@ -162,7 +162,7 @@ fn pass(shared: &Shared, edge: &Edge, current: &mut Current) {
         // around Tor.
         shared.set_edge_dns(false);
     } else {
-        kill_switch(&view.up, false);
+        kill_switch(&view, false);
         if current.up && !handshake_fresh() {
             warn!("the tunnel to the edge has had no handshake for minutes");
             current.up = false;
@@ -569,12 +569,13 @@ fn route_nowhere() {
 /// The rules that send the host's traffic to the edge's table: its own
 /// networks first, through the main table without its default route, then
 /// everything else, and this machine's forwarder's servers, into the table.
-/// The table starts out nowhere.
-fn kill_switch(up: &Option<String>, schizo: bool) {
+/// sys-vpn's uplink takes the same way as the host (docs/vpn.md): with a
+/// VPN set, its tunnel rides the edge's. The table starts out nowhere.
+fn kill_switch(view: &View, schizo: bool) {
     if schizo {
         return;
     }
-    let Some(up) = up else { return };
+    let Some(up) = &view.up else { return };
     let table = TABLE.to_string();
     let rules_present = Command::new("ip")
         .args(["-4", "rule", "show", "pref", &PREF_EDGE.to_string()])
@@ -595,27 +596,32 @@ fn kill_switch(up: &Option<String>, schizo: bool) {
     ]);
     let local = PREF_LOCAL.to_string();
     let edge = PREF_EDGE.to_string();
-    ip(&[
-        "-4",
-        "rule",
-        "add",
-        "pref",
-        &local,
-        "iif",
-        up,
-        "lookup",
-        "main",
-        "suppress_prefixlength",
-        "0",
-    ]);
+    let from: Vec<&String> = std::iter::once(up).chain(&view.vpnext).collect();
+    for link in &from {
+        ip(&[
+            "-4",
+            "rule",
+            "add",
+            "pref",
+            &local,
+            "iif",
+            link,
+            "lookup",
+            "main",
+            "suppress_prefixlength",
+            "0",
+        ]);
+    }
     for server in DNS {
         ip(&[
             "-4", "rule", "add", "pref", &edge, "to", server, "lookup", &table,
         ]);
     }
-    ip(&[
-        "-4", "rule", "add", "pref", &edge, "iif", up, "lookup", &table,
-    ]);
+    for link in &from {
+        ip(&[
+            "-4", "rule", "add", "pref", &edge, "iif", link, "lookup", &table,
+        ]);
+    }
 }
 
 /// Everything of the edge's undone: the rules, the table and the tunnel.
@@ -656,6 +662,8 @@ pub struct View {
     pub schizo: bool,
     pub gateway: Option<String>,
     pub up: Option<String>,
+    /// sys-vpn's uplink, whose tunnel leaves through the edge too.
+    pub vpnext: Option<String>,
     /// The cards with an address, by name.
     pub cards: Vec<(String, std::net::Ipv4Addr)>,
     /// The networks this machine is on.
