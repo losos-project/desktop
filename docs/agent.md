@@ -56,6 +56,14 @@ home, so the disk opens only while they are signed in. The host's root end
 reads the key as the person and hands it to libvirt as an ephemeral
 secret, which it forgets once QEMU has opened the disk.
 
+Like every service machine that runs NixOS, it has Kicksecure's hardening
+([schizo mode](schizo-mode.md) says what that is). No program in it can
+trace another or read its memory, and io_uring is off. It keeps one SUID
+program, PAM's `unix_chkpwd`, which Kicksecure keeps too: without it the
+machine's user session does not start. Claude Code's sandbox still works,
+because bubblewrap runs in user namespaces and needs no SUID. A debugger
+the Agent starts on a program it built is refused.
+
 > [!WARNING]
 > Deleting the key deletes the Agent's disk with it. The next open makes a
 > new key and an empty disk, because the old one can no longer be read.
