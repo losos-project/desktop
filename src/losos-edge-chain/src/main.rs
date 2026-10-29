@@ -46,20 +46,27 @@ fn main() -> ExitCode {
     }
 }
 
+const USAGE: &str =
+    "usage: losos-edge-chain --listen <addr:port> --tor <addr:port> [--config <file>]";
+
 fn args() -> Result<Args> {
     let mut listen = None;
     let mut tor = None;
     let mut config = PathBuf::from(EDGE_FILE);
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
-        let value = it.next().ok_or_else(|| miette!("{flag} takes a value"))?;
+        // The flag first, so a flag that takes no value, or none this
+        // program knows, is not met with "takes a value".
+        let mut value = || it.next().ok_or_else(|| miette!("{flag} takes a value"));
         match flag.as_str() {
-            "--listen" => listen = Some(value.parse().into_diagnostic().wrap_err("--listen")?),
-            "--tor" => tor = Some(value.parse().into_diagnostic().wrap_err("--tor")?),
-            "--config" => config = PathBuf::from(value),
-            _ => bail!(
-                "usage: losos-edge-chain --listen <addr:port> --tor <addr:port> [--config <file>]"
-            ),
+            "--listen" => listen = Some(value()?.parse().into_diagnostic().wrap_err("--listen")?),
+            "--tor" => tor = Some(value()?.parse().into_diagnostic().wrap_err("--tor")?),
+            "--config" => config = PathBuf::from(value()?),
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                std::process::exit(0);
+            }
+            _ => bail!("unknown argument {flag}\n{USAGE}"),
         }
     }
     Ok(Args {
