@@ -246,6 +246,7 @@
         # Each program's own test suite runs as part of its build.
         // lib.genAttrs [
           "losos-installer"
+          "losos-report"
           "losos-hardware"
           "losos-security"
           "losos-swap"

@@ -111,6 +111,33 @@ carries `losos`. Each box is an app of the phone. Opening it opens the admin
 pages in the default browser, and its action, **Manage in the terminal**,
 opens `losos`.
 
+## In the command palette
+
+Text typed into derisk's command palette is also looked for inside the
+files of the boxes `losos` is signed in to: the files in LosOS Cloud and
+the default branches of LosOS Git's repositories, as the box's own
+palette finds them. A file found that way is a row named after the file,
+with the folder or repository it is in and the words around the match,
+such as `budget.md  mattbox · LosOS Cloud › Documents · the rent is due`.
+Choosing a cloud file opens its folder in LosOS Cloud, and choosing a line
+in Git opens the file at that line, both in the default browser.
+
+`losos-boxes search <text>` does the searching. It runs `losos hosts`,
+then `losos call GET /api/cloud/text` and `/api/git/text` on up to three
+of the boxes it lists, all at once, and prints the rows as JSON. On a PC
+it runs in the LosOS boxes machine, where `losos` and its tokens are:
+derisk runs `losos-boxes-search` there through the guest agent, which is
+`losos-boxes search` as the machine's user, on that user's bus. derisk
+asks only while the machine is running and never starts it for a search.
+On a phone derisk runs `losos-boxes search` in the session itself.
+
+A search never asks for anything. `losos` keeps its tokens in the
+keyring, and asking a locked keyring for them makes it show a password
+window, so while the keyring is locked `losos-boxes search` finds nothing.
+It also finds nothing in a box that does not answer, or whose search is
+off, or that runs no LosOS Git. derisk asks once the typed text has three
+characters, and one search at a time.
+
 ## The terminal client
 
 `losos` shows the same panes as a box's admin pages, with the same words and

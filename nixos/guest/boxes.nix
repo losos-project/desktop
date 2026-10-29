@@ -14,6 +14,32 @@
 let
   # Where losos-boxes reaches the host's resolved, below.
   hostResolve = "/run/losos-boxes/resolve";
+
+  # common.nix's one account, whose keyring holds what `losos` signed in to.
+  user = "user";
+
+  # What the host's command palette runs here through the guest agent to
+  # find text in the boxes' files and Git (docs/losos-boxes.md, "In the
+  # command palette"). The agent runs it as root with an empty environment,
+  # and `losos` keeps its tokens in the user's keyring, reached over the
+  # user's bus: so it runs `losos-boxes search` as the user, on that bus,
+  # with the user's PATH, where `losos` and its secret-tool are.
+  boxesSearch = pkgs.writeShellApplication {
+    name = "losos-boxes-search";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.util-linux
+    ];
+    text = ''
+      uid=$(id -u ${user})
+      exec runuser -u ${user} -- env \
+        HOME=/home/${user} \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        PATH="/etc/profiles/per-user/${user}/bin:/run/current-system/sw/bin" \
+        losos-boxes search "$@"
+    '';
+  };
 in
 {
   imports = [ ./common.nix ];
@@ -23,6 +49,7 @@ in
     # `losos-boxes list` prints what the machine sees, and the entries run
     # `losos-boxes terminal`.
     pkgs.losos-boxes
+    boxesSearch
     # `losos ci setup` puts a CI key and the box's address into a GitHub
     # repository's Actions secrets with gh, so a workflow can reach the box;
     # it signs in with `gh auth login` here, where the keys are.
