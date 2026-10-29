@@ -24,6 +24,16 @@
 let
   libvirt = config.virtualisation.libvirtd.package;
   stateDir = name: "/var/lib/losos-service-machines/${name}";
+  # The same UUID at every definition: libvirt takes a definition without
+  # one as a new domain, and refuses it while the old one of that name
+  # exists, so a machine that stopped could never be defined again.
+  uuid =
+    name:
+    let
+      h = builtins.hashString "sha256" "losos-service-machine-${name}";
+      p = start: len: builtins.substring start len h;
+    in
+    "${p 0 8}-${p 8 4}-${p 12 4}-${p 16 4}-${p 20 12}";
   runDir = name: "/run/losos-service-machines/${name}";
 
   system =
@@ -75,6 +85,7 @@ let
     pkgs.writeText "${name}.xml" ''
       <domain type='@TYPE@'>
         <name>${name}</name>
+        <uuid>${uuid name}</uuid>
         <title>${machine.title}</title>
         <metadata>
           <pm:machine xmlns:pm='https://losos-project.github.io/xmlns/pm-machine/1'>

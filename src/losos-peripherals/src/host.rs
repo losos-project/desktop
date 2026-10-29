@@ -152,7 +152,8 @@ struct Router {
     /// it has had nothing on it.
     usb_controllers: BTreeSet<String>,
     usb_up: bool,
-    usb_starting: bool,
+    /// Since when it has been asked to start, until it listens.
+    usb_starting: Option<Instant>,
     usb_idle: Option<Instant>,
     bluetooth: Arc<Mutex<Bluetooth>>,
 }
@@ -182,7 +183,7 @@ pub fn serve(config: Config) -> io::Result<()> {
             .map(|u| controllers(&u.devices))
             .unwrap_or_default(),
         usb_up: false,
-        usb_starting: false,
+        usb_starting: None,
         usb_idle: None,
         bluetooth: Arc::new(Mutex::new(Bluetooth { on, radio: None })),
         config,
@@ -530,24 +531,24 @@ impl Router {
     }
 
     fn start_usb(&mut self) {
-        if self.usb_up || self.usb_starting {
+        if self.usb_up || self.usb_starting.is_some() {
             return;
         }
         if let Some(usb) = &self.config.usb {
-            self.usb_starting = true;
+            self.usb_starting = Some(Instant::now());
             self.start(&usb.machine.unit);
         }
     }
 
     fn usb_up(&mut self) {
         self.usb_up = true;
-        self.usb_starting = false;
+        self.usb_starting = None;
         self.usb_idle = Some(Instant::now());
     }
 
     fn usb_gone(&mut self) {
         self.usb_up = false;
-        self.usb_starting = false;
+        self.usb_starting = None;
         self.usb_idle = None;
         let gone: Vec<String> = self
             .placed
@@ -747,6 +748,16 @@ impl Router {
     }
 
     fn retry(&mut self) {
+        // A start that failed, such as one that came while libvirt was
+        // still letting the machine go, is asked for again. Starting a
+        // machine that is starting or up does nothing.
+        if let (Some(since), Some(usb)) = (self.usb_starting, &self.config.usb) {
+            if since.elapsed() >= Duration::from_secs(30) {
+                let unit = usb.machine.unit.clone();
+                self.usb_starting = Some(Instant::now());
+                self.start(&unit);
+            }
+        }
         let pending: Vec<(Source, String)> = self
             .placed
             .iter()
