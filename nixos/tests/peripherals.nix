@@ -171,8 +171,9 @@ in
               [d for d in ds if d["machine"] == machine_name and d["attached"]]
           ) >= count
 
+      # Hubs and the driver's own tablet, which the host keeps, stay.
       def nothing_plugged(ds):
-          return all(d["route"] == "hub" for d in ds)
+          return all(d["route"] in ("hub", "host") for d in ds)
 
       def controller_driver():
           return machine.succeed(f"basename $(readlink /sys/bus/pci/devices/{pt}/driver)").strip()
