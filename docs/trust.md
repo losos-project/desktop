@@ -46,9 +46,13 @@ Everything the flake builds from, besides this repository:
   and the portal backend. The `components/mcsapi` submodule is the same
   mcsapi commit, and builds `x2mcsapi`.
 - **The LosOS terminal client**, `losos`, built from the LosOS repository at
-  `github.com/dasmatus/losos`, at the commit `nixos/pkgs/losos.nix` names. It
-  is a sparse `fetchgit` of the directories it builds from, checked by hash,
-  with its crates pinned by its `Cargo.lock` and `cargoHash`. See
+  `github.com/dasmatus/losos`, at the commit `nixos/pkgs/losos-pin.nix`
+  names. It is a sparse `fetchgit` of the directories it builds from, checked
+  by hash, with its crates pinned by its `Cargo.lock` and `cargoHash`. A
+  second sparse fetch of the same commit, the box's modules and lososd's
+  crates, is read only by `nix flake check`, to boot a box in
+  `nixos/tests/losos-box.nix`; the image and the release never do. The LosOS
+  repository's release workflow proposes each new pin as a pull request. See
   [LosOS boxes](losos-boxes.md).
 - **Home Manager**, `github.com/nix-community/home-manager`, pinned by
   revision and `narHash` in `flake.lock`. Only `nix flake check` reads it, to
