@@ -21,8 +21,9 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-/// Where the host's choice reaches the gateway: the host writes
-/// /run/losos-schizo/edge/edge.json and shares the folder read-only.
+/// Where the host's choice reaches the gateway. The host writes
+/// /run/losos-schizo/edge/edge.json and shares that folder read-only, which
+/// the gateway mounts here.
 pub const EDGE_FILE: &str = "/run/losos-edge/edge.json";
 
 /// How long Tor gets to build a circuit to the onion service and the edge
@@ -308,12 +309,14 @@ pub fn original_dst(stream: &TcpStream) -> io::Result<SocketAddr> {
     }
 }
 
-/// Whether a destination may go out through the edge. The gateway's own
-/// addresses and loopback would loop back into the gateway, and an address
-/// the firewall did not redirect is the listener itself.
+/// Whether a destination may go out through the edge. The gateway's inside
+/// address, on any port, and loopback would loop back into the gateway, and
+/// a connection the firewall did not redirect reads as the listener itself.
+/// The gateway's uplink address is not checked here: it is private, and the
+/// edge's exit lets out only public addresses.
 pub fn may_leave(dst: SocketAddr, listen: SocketAddr) -> bool {
     let ip = dst.ip();
-    dst != listen && !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast()
+    ip != listen.ip() && !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast()
 }
 
 #[cfg(test)]
@@ -363,6 +366,8 @@ mod tests {
         let listen: SocketAddr = "10.152.152.10:9041".parse().unwrap();
         assert!(may_leave("93.184.215.14:443".parse().unwrap(), listen));
         assert!(!may_leave(listen, listen));
+        // Any other port of the gateway's inside address, such as DNS.
+        assert!(!may_leave(SocketAddr::new(listen.ip(), 53), listen));
         assert!(!may_leave("127.0.0.1:9050".parse().unwrap(), listen));
         assert!(!may_leave("0.0.0.0:80".parse().unwrap(), listen));
         assert!(!may_leave("[::1]:80".parse().unwrap(), listen));
