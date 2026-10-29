@@ -18,6 +18,7 @@ module.exports = {
         'peripherals',
         'network-machine',
         'files-machine',
+        'portal-machine',
         'layout',
         'hibernation',
         'drivers',
