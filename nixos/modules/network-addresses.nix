@@ -52,5 +52,9 @@
   ports = {
     nmcli = 5000;
     apply = 5001;
+    # The edge traffic leaves through (edge-exit.nix): its status, and the
+    # Tor gateway's file for it.
+    edgeStatus = 5002;
+    edgeChain = 5003;
   };
 }

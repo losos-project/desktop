@@ -26,7 +26,11 @@
     through it.
   - The keyboard's Wi-Fi and airplane keys reach the host's rfkill, not
     the machine's. Settings' Wi-Fi switch works.
-  - The edge proxies are not in sys-net yet.
+  - The edge as a way out has a command, `losos-edge`, and no row in
+    Settings yet. sys-net checks no gateway's passport, so an edge on
+    the network counts as a gateway by its own word; it is only ever the
+    way to the official edges it lists, never the exit.
+  - The edge's tunnel carries IPv4 only, like the rest of sys-net.
   - Without an IOMMU, NetworkManager on the host keeps the networks the
     host has saved, and sys-net keeps none of its own.
   - Network shares have a command, `losos-shares`, and no page in
@@ -323,3 +327,8 @@
   setting to change that. They have run against Nextcloud and Forgejo laid
   out the way a box lays them out, not against a real box. See
   [Backups to a LosOS box](backup.md).
+- **Names through the edge in schizo mode.** With an edge set, schizo mode
+  sends its connections out from the edge, but Tor's exits still look up
+  the names. The edge's SOCKS exit could take the name itself, but the
+  chain only sees the address a program connected to, not the name it
+  looked up ([Schizo mode](schizo-mode.md), "Through an edge").

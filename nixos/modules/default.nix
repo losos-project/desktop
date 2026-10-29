@@ -22,6 +22,7 @@
     ./passthrough.nix
     ./vm-call.nix
     ./network-machine.nix
+    ./edge-exit.nix
     ./files-machine.nix
     ./shares-machine.nix
     ./windows-apps.nix
