@@ -35,6 +35,10 @@ use crate::rules::{Blocklist, Verdict};
 /// Where resolved lists the servers it uses, for a system without
 /// NetworkManager.
 const RESOLV_CONF: &str = "/run/systemd/resolve/resolv.conf";
+/// Servers that replace every network's while the file is there, in
+/// resolv.conf's `nameserver` lines: schizo mode's Tor gateway
+/// (nixos/modules/schizo.nix), past which no other server is reachable.
+const OVERRIDE: &str = "/run/losos-adblock/upstreams";
 /// How long one upstream gets before the next is tried.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the compiled list is checked for changes and the upstreams
@@ -207,6 +211,11 @@ pub fn nm_upstreams(text: &str, own: &[SocketAddr]) -> Vec<SocketAddr> {
 }
 
 fn load_upstreams(own: &[SocketAddr]) -> Vec<SocketAddr> {
+    if let Ok(text) = fs::read_to_string(OVERRIDE) {
+        let found = upstreams(&text, own);
+        debug!(?found, "upstream servers, from {OVERRIDE}");
+        return found;
+    }
     // NetworkManager knows each network's servers. Without it, resolved's
     // resolv.conf lists them, and outside a resolved system /etc/resolv.conf
     // does; under resolved that names only the stub, which is skipped.
