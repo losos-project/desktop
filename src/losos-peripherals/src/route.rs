@@ -29,6 +29,9 @@ pub enum Route {
     /// Drives, card readers and phones: the files machine, which mounts
     /// them and gives the host their files.
     Storage,
+    /// Printers, and the card slots and scanners of a printer that has
+    /// them: a disposable machine of their own.
+    Printer,
     /// Cameras: a disposable machine of their own.
     Camera,
     /// Sound cards and headsets: a disposable machine of their own.
@@ -41,7 +44,10 @@ impl Route {
     /// Whether a device on this route gets a disposable machine made for
     /// it, rather than going to one that is always there.
     pub fn disposable(self) -> bool {
-        matches!(self, Route::Camera | Route::Audio | Route::Other)
+        matches!(
+            self,
+            Route::Printer | Route::Camera | Route::Audio | Route::Other
+        )
     }
 }
 
@@ -49,6 +55,7 @@ const CLASS_AUDIO: u8 = 0x01;
 const CLASS_COMM: u8 = 0x02;
 const CLASS_HID: u8 = 0x03;
 const CLASS_IMAGE: u8 = 0x06;
+const CLASS_PRINTER: u8 = 0x07;
 const CLASS_SMART_CARD: u8 = 0x0b;
 const CLASS_STORAGE: u8 = 0x08;
 const CLASS_CDC_DATA: u8 = 0x0a;
@@ -59,10 +66,11 @@ const CLASS_WIRELESS: u8 = 0xe0;
 /// would drive its interfaces, such as `kernel/drivers/net/usb/r8152.ko.xz`.
 ///
 /// One device can be several things: a headset is sound and HID (its
-/// volume buttons), a modem is a network card and a CD of its drivers. The
-/// first of network, Bluetooth, storage, camera and sound wins, since each
-/// is what the device is for; input (HID, and the joystick drivers that
-/// take vendor-specific game pads) decides only when it is all there is.
+/// volume buttons), a modem is a network card and a CD of its drivers, a
+/// printer often has a card slot. The first of network, Bluetooth,
+/// printer, storage, camera and sound wins, since each is what the device
+/// is for; input (HID, and the joystick drivers that take vendor-specific
+/// game pads) decides only when it is all there is.
 pub fn route<'a>(device: &Device, modules: impl IntoIterator<Item = &'a str>) -> Route {
     if device.is_hub() {
         return Route::Hub;
@@ -73,6 +81,8 @@ pub fn route<'a>(device: &Device, modules: impl IntoIterator<Item = &'a str>) ->
             Route::Network
         } else if path.contains("/drivers/bluetooth/") {
             Route::Bluetooth
+        } else if path.contains("/drivers/usb/class/usblp") {
+            Route::Printer
         } else if path.contains("/drivers/usb/storage/") {
             Route::Storage
         } else if path.contains("/drivers/media/") {
@@ -100,6 +110,8 @@ pub fn route<'a>(device: &Device, modules: impl IntoIterator<Item = &'a str>) ->
         Route::Bluetooth
     } else if has(CLASS_COMM) || has(CLASS_CDC_DATA) {
         Route::Network
+    } else if has(CLASS_PRINTER) {
+        Route::Printer
     } else if has(CLASS_STORAGE) || has(CLASS_IMAGE) {
         // Still-image devices are cameras and phones speaking PTP or MTP:
         // their photos and files, which the files machine reads.
@@ -125,11 +137,12 @@ fn first(a: Route, b: Route) -> Route {
     let rank = |r| match r {
         Route::Network => 0,
         Route::Bluetooth => 1,
-        Route::Storage => 2,
-        Route::Camera => 3,
-        Route::Audio => 4,
-        Route::Host => 5,
-        Route::Hub | Route::Other => 6,
+        Route::Printer => 2,
+        Route::Storage => 3,
+        Route::Camera => 4,
+        Route::Audio => 5,
+        Route::Host => 6,
+        Route::Hub | Route::Other => 7,
     };
     if rank(b) < rank(a) {
         b
@@ -241,7 +254,8 @@ mod tests {
             route(&device(&[(0x0e, 1, 0), (0x0e, 2, 0)]), []),
             Route::Camera
         );
-        assert_eq!(route(&device(&[(7, 1, 2)]), []), Route::Other);
+        assert_eq!(route(&device(&[(7, 1, 2)]), []), Route::Printer);
+        assert_eq!(route(&device(&[(0xff, 0, 0)]), []), Route::Other);
         assert_eq!(route(&device(&[]), []), Route::Other);
     }
 
@@ -252,5 +266,21 @@ mod tests {
             ..device(&[(9, 0, 0)])
         };
         assert_eq!(route(&d, []), Route::Hub);
+    }
+
+    #[test]
+    fn a_printer_with_a_card_slot_is_a_printer() {
+        let mfp = device(&[(7, 1, 2), (8, 6, 0x50), (0xff, 0xff, 0xff)]);
+        assert_eq!(route(&mfp, []), Route::Printer);
+        assert_eq!(
+            route(
+                &mfp,
+                [
+                    "kernel/drivers/usb/storage/usb-storage.ko.xz",
+                    "kernel/drivers/usb/class/usblp.ko.xz"
+                ]
+            ),
+            Route::Printer
+        );
     }
 }

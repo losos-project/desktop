@@ -23,7 +23,8 @@ and stop again afterwards.
 | Bluetooth radios | sys-bluetooth, which runs BlueZ |
 | Network cards, USB Ethernet and Wi-Fi dongles | sys-net, the network machine |
 | Drives, card readers, phones and cameras' photos (PTP, MTP) | sys-files, the files machine, which hands the host their files |
-| Cameras, sound cards, printers, anything else | a disposable machine of its own |
+| Sound cards, printers and cameras | a Kicksecure machine of its own, which the host plays to, prints to and films from |
+| Anything else | a disposable machine of its own |
 | Keyboards, mice, touchpads, game pads, security keys, smart card and eID readers | the host |
 
 The host keeps what it cannot be used without. Sign-in takes a security
@@ -112,9 +113,80 @@ memory it is not using (`virtio-balloon` with free page reporting).
   destroyed when it is pulled out. It is a transient libvirt domain with no
   disk, so whatever the device did in it is gone with it.
 
+## Sound cards
+
+A sound card is no use with only its driver, so its disposable machine is
+not BusyBox but NixOS, a service machine like schizo mode's Tor gateway,
+with Kicksecure's hardening (`nixos/guest/sound.nix`). It runs PipeWire
+system-wide, since nobody signs in there, with PipeWire's PulseAudio
+server, and `losos-peripherals forward` joins each connection the host makes
+to its vsock port 3244 to that server's socket.
+
+Once the card is in the machine's PipeWire, the router makes a socket for
+the machine, `/run/losos-peripherals/sound/disposable-<cid>`, and removes
+it when the card is pulled out. The host's PipeWire, that of whoever is
+signed in, watches the directory (`losos-peripherals-sound.path`, a user
+unit). For each socket it tunnels a sink to the machine's sound server,
+and a source when the card records too, so the card shows in Settings'
+Sound page as any other would. It unloads them when the socket goes.
+
+The card's name in Settings comes from the machine. The machine is the
+device's, so only letters, digits and a little punctuation of the name
+show.
+
+## Printers
+
+A printer's disposable machine is NixOS and Kicksecure too
+(`nixos/guest/printer.nix`), with CUPS, since turning a document into a
+printer's language takes a driver and Ghostscript. It makes one queue for
+the printer it is given:
+
+- A printer that speaks IPP over USB, as most made since 2015 do, is
+  reached through `ipp-usb`, driverless.
+- Any other goes through CUPS' own USB backend, with a driver its IEEE
+  1284 device ID matches, Gutenprint's or CUPS' own, or else CUPS' generic
+  PostScript or PCL one when the ID says it takes either. A printer that
+  matches none gets no queue, and its machine's journal says so.
+
+`losos-peripherals forward` joins each connection the host makes to vsock
+port 3245 to CUPS' socket, and the router makes
+`/run/losos-peripherals/printer/disposable-<cid>` once the queue is there.
+`losos-peripherals-printers.path` on the host then adds a queue of the
+same name to the host's CUPS, IPP Everywhere to the machine's queue, which
+apps' print dialogs list. It removes the queue when the printer is pulled
+out.
+
+The host's CUPS has no printer drivers and looks for no printers on the
+network. It only turns what a person prints into PDF or raster for the
+machine. A printer, and the driver that talks to it, never touch the host.
+A printer's card slot and scanner go to its machine with it, where nothing
+uses them yet.
+
+## Cameras
+
+A camera's video is MJPEG, H.264 or raw frames from code someone else
+wrote, so the host decodes none of it. Its disposable machine is NixOS and
+Kicksecure as well (`nixos/guest/camera.nix`), with ffmpeg. Once the camera
+is in, `losos-peripherals camera-machine` listens on vsock port 3246 and
+the router makes `/run/losos-peripherals/camera/disposable-<cid>`.
+
+The host's `losos-peripherals-cameras` service makes a camera for each
+socket. It is a v4l2loopback device, named for the camera, which apps open
+as they would the camera itself, browsers included. Nothing streams until
+an app reads from the device: v4l2loopback says when one starts and when
+the last one stops, and only then does the host ask the machine for the
+stream. The machine runs ffmpeg for as long as the host keeps that
+connection, turning whatever the camera gives into 1280x720 YUYV at 30
+frames a second, scaled to fit with black around it. So the camera, and
+its light, are on only while an app uses it. In between, the device shows
+a black frame. It goes when the camera is pulled out.
+
+The camera's name comes from the machine, so only plain characters of it
+show, as with sound cards.
+
 ## BusyBox machines
 
-Each of these machines is BusyBox, one program and the host's own kernel,
+Each of these machines but a sound card's, a printer's or a camera's is BusyBox, one program and the host's own kernel,
 and nothing else (`nixos/modules/busybox-guests.nix`). There is no
 distribution inside to update, no service manager, and no shell anyone logs
 in to. A machine's whole system is its initrd, which sits in the host's
@@ -129,6 +201,9 @@ replaces itself with the machine's program, which is PID 1 from then on.
 | sys-usb | `losos-peripherals usb-machine` | USB controller drivers and `usbip-host`, and no class driver: devices are enumerated and sent on |
 | sys-bluetooth | `losos-peripherals bluetooth-machine` | BlueZ and its own system bus, the host's firmware read-only, and its pairings in a share of the host's `/var/lib/losos-peripherals/bluetooth` |
 | disposable | `losos-peripherals receiver` | the host's kernel modules and firmware read-only, so whatever driver the device needs loads |
+
+Sound cards', printers' and cameras' disposable machines are the
+exceptions, as above.
 
 The kernel is the one the host booted, so a machine runs whatever kernel
 the host runs, and an update moves both.
