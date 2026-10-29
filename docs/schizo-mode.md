@@ -103,6 +103,29 @@ What it printed last is kept in
 `/var/log/libvirt/qemu/losos-tor-gateway-console.log`, so a gateway that
 died can still be read.
 
+Every service machine that runs NixOS is hardened the way Kicksecure, the
+Debian derivative Whonix is built on, hardens itself
+(`nixos/guest/kicksecure.nix`). It takes Kicksecure's settings from its
+security-misc package but not its Debian, so the machine stays part of the
+verified image:
+
+- Kicksecure's kernel command line: no merged slab caches, memory zeroed
+  when it is allocated and when it is freed, a random kernel stack offset,
+  no vsyscalls or 32-bit system calls, and every CPU mitigation with SMT
+  off.
+- Its sysctls. Kernel pointers and logs are hidden. Unprivileged BPF,
+  io_uring, kexec, SysRq and ptrace are off. There are no core dumps. Pings,
+  redirects, source routes and router adverts get no answer.
+- Its disabled kernel modules: rare network protocols and file systems,
+  network file systems, FireWire, Thunderbolt and GPS. A machine that needs
+  one back lists it in `losos.service.kicksecure.allowModules`.
+- No SUID programs and no sudo, and root is locked.
+
+The gateway is therefore what Whonix's Gateway is: Kicksecure with Tor.
+The settings are kept as data in `nixos/guest/kicksecure-settings.nix`, so
+a BusyBox service machine can boot with the same command line and set the
+same sysctls.
+
 Service machines are lazy. Nothing starts one until it is needed: the
 gateway starts when schizo mode is turned on and stops when it is turned
 off, so a PC that never uses the mode never runs it. Its state disk is
