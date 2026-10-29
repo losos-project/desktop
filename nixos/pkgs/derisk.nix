@@ -16,6 +16,8 @@
 {
   lib,
   rustPlatform,
+  fetchurl,
+  linkFarm,
   pkg-config,
   lld,
   libxkbcommon,
@@ -45,7 +47,7 @@
 }:
 
 let
-  version = "0.1.0-unstable-2026-10-28";
+  version = "0.1.0-unstable-2026-10-29";
 
   # The components/derisk submodule, at the commit this tree records for it
   # (flake.nix, `self.submodules`). cleanSource drops the submodule's .git
@@ -55,7 +57,29 @@ let
     src = lib.cleanSource ../../components/derisk;
   };
 
-  cargoHash = "sha256-RaCjjo6azcPqJp+2G1lQpiG+3GgIfqo7uBzFIq6Em1I=";
+  # ocrs' two models, with which derisk reads every screenshot's text to
+  # black out its secrets (docs/screenshots.md): one finds the words, the
+  # other reads each line. ocrs publishes them at unversioned URLs, so the
+  # hashes are the pin (docs/trust.md). derisk looks for them in
+  # share/derisk/ocr beside its bin.
+  ocrModels = linkFarm "ocrs-models" [
+    {
+      name = "text-detection.onnx";
+      path = fetchurl {
+        url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx";
+        hash = "sha256-qReyPb2VJLRl336SJkGz/ymBYj303tWgI0AE7y/ufP4=";
+      };
+    }
+    {
+      name = "text-recognition.onnx";
+      path = fetchurl {
+        url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx";
+        hash = "sha256-hsFFwu25bIyu1bHruPRNcGQIkiIRRRwwnGJRV91gYcU=";
+      };
+    }
+  ];
+
+  cargoHash = "sha256-4OLowRR8G8rNCGS1sV9rkSvlLtXDzRXu+BeJVWM4Y6Q=";
 
   # Fat LTO (Cargo.toml: lto = true) compiles every dependency as bitcode
   # (-C linker-plugin-lto) and links it in one rustc. That link is killed on
@@ -356,6 +380,9 @@ rustPlatform.buildRustPackage {
     # (derisk's host::gpui_apps, derisk-portal's access::dialog_program).
     ln -s ${gpui}/bin/derisk-gpui $out/bin/derisk-gpui
 
+    # The OCR models screenshots are redacted with, where derisk looks.
+    install -Dm644 -t $out/share/derisk/ocr ${ocrModels}/*
+
     install -Dm644 -t $out/lib/systemd/user crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/*
     substituteInPlace $out/lib/systemd/user/derisk-agent.service \
       --replace-fail "ExecStart=derisk " "ExecStart=$out/bin/derisk "
@@ -373,6 +400,7 @@ rustPlatform.buildRustPackage {
 
   passthru = {
     inherit
+      ocrModels
       gpui
       terminal
       index
