@@ -23,9 +23,11 @@
 pub mod homed;
 pub mod join;
 pub mod login;
+pub mod manage;
 pub mod pam;
 pub mod schizo;
 pub mod service;
+pub mod sync;
 pub mod tls;
 
 use std::fmt;
@@ -34,10 +36,10 @@ use std::fmt;
 pub const STATE_DIR: &str = "/var/lib/losos-login-bridge";
 /// The joined box, in [`STATE_DIR`].
 pub const JOINED_FILE: &str = "/var/lib/losos-login-bridge/joined.json";
-/// The directory token the box gave this computer when it joined, one line,
-/// root-only. The sync pass reads the people list and checks in for schizo
-/// mode with it (dasmatus/losos `backend/src/directory.rs`). `leave` deletes
-/// it with [`JOINED_FILE`].
+/// The computer's own token for the box's people list
+/// (`GET /api/directory/people`), which joining got: root's alone, 0600.
+/// The sync pass also checks in for schizo mode with it, and `leave`
+/// deletes it with [`JOINED_FILE`].
 pub const DIRECTORY_TOKEN_FILE: &str = "/var/lib/losos-login-bridge/directory-token";
 /// The join service's socket, which any local user may open; the service
 /// asks polkit about each caller.
