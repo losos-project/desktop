@@ -60,6 +60,54 @@ connection holds the readers until its last connection closes. Until then
 the host refuses every other machine's connections, and its journal says
 which machine holds them. The host's own programs are not limited this way.
 
+## Hand-offs between apps
+
+Some sites hand work to an app on the person's own computer through
+`localhost`. slovensko.sk signs a person in with their eID card this way.
+The page sends the browser to `http://127.0.0.1:24727/`, where an eID
+client listens (BSI TR-03124), and the eID client reads the card and sends
+the browser back. With the browser on the host and the eID klient in a
+machine, the two localhosts are different places.
+
+`losos-tokens guest` looks at what listens in its machine every two
+seconds, on the ports it serves (24727 in the image), and tells the host
+when something starts or stops listening on one. `losos-tokens host`
+listens on the same ports of the host's localhost and passes each
+connection to the machine that serves the port, over vsock port 7372. If
+several machines serve it, the one that started last gets it, since that
+is the one the person just opened the app in. If no machine serves it, the
+host closes the connection, as a computer with nothing listening would. A
+machine reaches only the ports it serves, and only from the host.
+
+The hand-off works the other way without help. Danube in a machine reaches
+the eID klient on that machine's own localhost.
+
+## The Slovak eID
+
+The Ministry of the Interior's eID klient signs in to slovensko.sk and
+other Slovak public services with the eID card. Every x86_64 machine has
+it as an app, "eID klient". Its licence lets nobody pass it on, so the
+image carries only `losos-eid`, from `nixos/guest/eid.nix`. The first time
+the app is started, `losos-eid` downloads the eID klient from
+`eidas.minv.sk` into `~/.local/share/losos-eid` in the machine. Each later
+start asks the server for the file's size and downloads it again only when
+the size has changed, because the server gives no date or version for the
+file. Without the network, the copy already there runs.
+
+The download is an AppImage. `losos-eid` unpacks it without running
+anything from it, and starts the eID klient in an FHS environment with the
+few libraries it does not carry. The eID klient is built only for X11, so
+every machine runs xwayland-satellite, an X server that turns each X11
+window into a Wayland one for waypipe to carry. The card goes through the
+host's reader as described in [Smart cards](#smart-cards), and the eID
+klient asks for its PIN in a window of its own. The host forwards
+slovensko.sk's hand-off to it while it is open, as
+[Hand-offs between apps](#hand-offs-between-apps) describes.
+
+> [!IMPORTANT]
+> Open the eID klient in a machine before signing in on the host. The
+> host reaches only an eID klient that is running.
+
 ## Which machine is asking
 
 The host knows which machine a connection comes from by the vsock address
@@ -76,3 +124,10 @@ that answers INIT and CTAP2's getInfo. The machine half makes its copy,
 `fido2-token -I` reads the key's AAGUID through it, and stopping the key
 takes the copy away. vsmartcard's virtual reader in the host's pcscd is
 listed through the machine's socket, and so is the virtual card put into it.
+A web server on the machine's localhost stands in for the eID klient. The
+host's localhost reaches it while it listens, and nothing does once it
+stops. The machine's localhost is 127.0.0.2 in that test, because the host
+half listens on 127.0.0.1 of the same kernel.
+
+Nothing tests the eID klient itself, which needs a real card and the
+Ministry's servers.
