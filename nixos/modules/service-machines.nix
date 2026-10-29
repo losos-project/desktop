@@ -168,10 +168,8 @@ let
             <!-- Kept after the machine is gone, to read why it went. -->
             <log file='/var/log/libvirt/qemu/${name}-console.log' append='off'/>
             <target port='0'/>
-            <log file='/var/log/libvirt/qemu/${name}-console.log' append='off'/>
           </serial>
           <console type='pty'/>
-          <memballoon model='virtio' freePageReporting='on'/>
           <rng model='virtio'>
             <backend model='random'>/dev/urandom</backend>
           </rng>
