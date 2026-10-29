@@ -203,16 +203,20 @@ installed with [pm](pm.md) is the one it uses.
 same crate and `cargoHash` as that repository's own `.#losos`. Its build
 script reads the admin UI's catalogue, palette, pane keywords and the salmon,
 and the crate links the envelope crate in `backend/access`. So a sparse
-checkout fetches those directories and nothing else, about 3 MB of a 140 MB
+checkout fetches those directories and nothing else, about 3 MB of a 400 MB
 tree. That is why it is a `fetchgit` pin and not a `components/` submodule,
 as [trust](trust.md) explains: the flake copies its submodules on every
 evaluation.
 
-To move it to a newer LosOS, change the `rev` and `hash` in that file, the
-`cargoHash` if `admin-ui/tui/Cargo.lock` changed, and the version, which is
-the tag in the LosOS tree's `nix/version.nix` at that commit. The client's
-own test suites, a mock box and edge over TLS and a pseudo terminal, run in
-the LosOS repository's CI, not here.
+The commit and its hashes are in `nixos/pkgs/losos-pin.nix`. The LosOS
+repository moves them: on every release tag its `desktop-pin` workflow
+opens a pull request here that points the file at the tag, with the hashes
+of the client's sources, its vendored crates and the box's sources, so
+nobody edits them by hand. To pin another commit, run that repository's
+`.github/scripts/desktop-pin.sh <tag> <checkout of this repository>`, or put
+the commit in `rev` and let a build report each hash. The client's own test
+suites, a mock box and edge over TLS and a pseudo terminal, run in the LosOS
+repository's CI, not here.
 
 `losos-boxes` lives in `src/losos-boxes`, and `nixos/pkgs/losos-boxes.nix`
 builds it with its unit tests. `nixos/tests/losos-boxes.nix` boots two boxes,
@@ -220,6 +224,14 @@ as far as mDNS and nginx go, one announcing `_losos._tcp` and one from before
 that announcement. It also boots a phone's session with resolved and no
 Avahi. The session lists both boxes, writes their entries, and drops the
 first box's entry when that box leaves the network.
+`nixos/tests/losos-box.nix` boots a real box beside a desktop: the box's
+own modules from the pinned commit, with lososd, LosOS Login, LosOS Cloud
+and LosOS Git, claimed as the setup wizard claims it. The desktop finds it
+by its announcement, signs `losos` in with a token made for the GPG key the
+box was installed with and reads the box's state through the encrypted
+envelope, then pins its certificate and backs a home up to it
+([backups](backup.md)). The pin's pull requests run it, so a change in LosOS
+that breaks the desktop shows there before it merges.
 `nixos/tests/machines.nix` makes a LosOS boxes machine on a host whose LAN
 has a box. It checks that the machine offers the box, that another machine's
 request for the box's name goes through it and gets the box's answer, that a

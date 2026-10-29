@@ -281,7 +281,9 @@ pub fn fenced(lines: &[String], budget: usize) -> String {
 /// unpaged; none when it cannot run.
 pub fn journal(args: &[&str]) -> Vec<String> {
     Command::new("journalctl")
-        .args(["--no-pager", "--output=short-monotonic"])
+        // --quiet leaves out "-- No entries --", which would read as a
+        // line of the log.
+        .args(["--no-pager", "--quiet", "--output=short-monotonic"])
         .args(args)
         .env("SYSTEMD_COLORS", "0")
         .output()
