@@ -120,6 +120,17 @@ in
         "mmc_block"
       ];
       files."/etc/losos-filesd.conf" = filesdConfig;
+      # Kicksecure keeps rare file systems and optical drives out of a
+      # system to keep their parsers away from its kernel. This machine is
+      # where an untrusted drive's parsers belong, away from the host's
+      # kernel, so a Mac's USB stick or a DVD opens here.
+      kicksecure.allowModules =
+        (import ../guest/kicksecure-settings.nix { inherit (pkgs.stdenv.hostPlatform) isx86; })
+        .disabledModules.filesystems
+        ++ [
+          "cdrom"
+          "sr_mod"
+        ];
     };
 
     losos.serviceMachines.${name} = {

@@ -15,7 +15,11 @@ rustPlatform.buildRustPackage {
 
   src = ../../src/losos-netd;
 
-  cargoLock.lockFile = ../../src/losos-netd/Cargo.lock;
+  cargoLock = {
+    lockFile = ../../src/losos-netd/Cargo.lock;
+    # LosOS's edge path rule (src/losos-netd/src/edge.rs), from git.
+    outputHashes."losos-edge-path-0.1.0" = "sha256-cDHVnD8JdAODLlzhR/4l3OEFtY6VawyEH52spAhrhS8=";
+  };
 
   # nmcli's language, the saved networks and wpa_supplicant's answers.
   doCheck = true;

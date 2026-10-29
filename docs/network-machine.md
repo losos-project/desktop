@@ -72,6 +72,60 @@ sys-net's traffic there, over the bridge `losos-wan0`. The host's own
 connections and its machines' still go through sys-net, its ad blocker and
 its firewall. The VM tests run this way.
 
+## Through an edge
+
+A LosOS edge can be the PC's way out to the internet, the way a VPN is.
+Sites then see the edge's address, not the network the PC is on. It is
+off until someone gives the PC an account on an edge, as root or through
+polkit:
+
+```sh
+losos-edge set <id> [<url>]   # the account's token on stdin
+losos-edge                    # how things stand, as JSON
+losos-edge off
+```
+
+The account is a tenant the edge's operator lets out
+(`losos.edge.tenants.<id>.exit` on the edge, LosOS's handbook, "The edge
+as an exit"). The host keeps it in `/var/lib/losos-edge/account`, root's
+alone, and hands sys-net a copy through its share.
+
+**Which edge.** sys-net picks the edge with LosOS's own rule, the crate a
+LosOS box goes by (`losos-edge-path`): a gateway on the network first,
+found by DNS-SD (`_losos-edge._tcp`), else the URL the person set. A
+gateway on the network is never the exit, though. Only an edge out on the
+internet may be one, so through a gateway the exit is one of the official
+edges the gateway lists, the one the account's id weighs heaviest on.
+Every address the exit's URL and its WireGuard endpoint resolve to must be
+public and on none of the PC's own networks, or sys-net refuses it.
+
+**Outside schizo mode** sys-net enrols its WireGuard key at the exit and
+brings up `losos-edge`, a tunnel to it. The host's and its machines'
+traffic then takes a routing table whose only way out is the tunnel. The
+PC's own networks stay in reach, for printers and LosOS boxes. While the
+tunnel is down, or the edge refuses the account, that traffic goes
+nowhere, the way a VPN's kill switch works, and `losos-edge` says why.
+Names go to Quad9 through the tunnel once it is up; until then sys-net
+asks the network's own servers, which is how it finds the edge at all.
+The key never leaves sys-net's state disk.
+
+**In schizo mode** the tunnel is down, and Tor carries everything. sys-net
+enrols through Tor and hands the host the edge's onion address and the
+SOCKS account the enrolment came with. The host writes them where the Tor
+gateway reads them ([Schizo mode](schizo-mode.md), "Through an edge"),
+and the edge is then where connections leave Tor. From the moment an edge
+is set, the file is there: a placeholder until sys-net has enrolled, then
+the last account that worked. So connections fail rather than leave
+through a Tor exit.
+
+## Through a VPN
+
+With a [VPN](vpn.md) set, sys-net joins sys-vpn's two networks and hands
+it everything that would have left through the cards: the host's and its
+machines' connections, or in schizo mode the Tor gateway's. sys-vpn's own
+uplink then leaves the way the host's would have, through the edge when
+one is set. While sys-vpn is not there, those connections go nowhere.
+
 ## Staying up
 
 sys-net starts at boot and is never idle: the host has no other way out.
@@ -94,4 +148,6 @@ destroyed in the middle of a download.
 | BusyBox machines and the host's modules in them | `nixos/modules/busybox-guests.nix`, `busybox-host-kernel.nix` |
 | Booting and following service machines | `nixos/modules/service-machines.nix` |
 | The machine's program | `src/losos-netd` |
+| The edge it leaves through, the host's half | `nixos/modules/edge-exit.nix`, `src/losos-netd/src/edge.rs`, `edge_run.rs`, `dnssd.rs` |
+| Routing through sys-vpn ([VPN](vpn.md)) | `src/losos-netd/src/vpn.rs`, `nixos/modules/vpn.nix` |
 | Host-to-machine calls | `src/losos-vm-call`, `nixos/modules/vm-call.nix` |

@@ -133,6 +133,31 @@ replaces itself with the machine's program, which is PID 1 from then on.
 The kernel is the one the host booted, so a machine runs whatever kernel
 the host runs, and an update moves both.
 
+Each one is hardened the way Kicksecure hardens a system, with the same
+settings the NixOS service machines take (`nixos/guest/kicksecure-settings.nix`,
+[schizo-mode.md](schizo-mode.md#service-machines)). A BusyBox machine has
+no sysctl.d and no NixOS, so `busybox-guests.nix` applies them itself:
+
+- Kicksecure's kernel parameters go on the machine's command line. The
+  kernel takes the ones it knows and hands the rest to `/init`, which
+  ignores them.
+- `/init` sets Kicksecure's sysctls with `sysctl -w` before anything else
+  runs.
+- `/etc/modprobe.d/kicksecure.conf` turns each disabled module into
+  `install <module> /bin/false`, which stops it even when it is asked for by
+  name. A blacklisted module is a `blacklist` line, which stops mdev loading
+  it for a device.
+
+A machine takes a module back with
+`losos.busyboxGuests.<name>.kicksecure.allowModules`, and sets a sysctl of
+its own with `kicksecure.sysctl`. Three do:
+
+| Machine | What it changes, and why |
+| --- | --- |
+| sys-net | Answers pings, because the host pings it to see it is up. Uses loose reverse-path filtering, because strict filtering drops the multicast replies that LAN edges answer a DNS-SD browse with. |
+| sys-shares | Loads the CIFS and NFS clients, because mounting network shares is its job. The servers, `ksmbd` and `nfsd`, stay off. |
+| sys-files | Loads the rare file systems, `cdrom` and `sr_mod`. A Mac's USB stick or a DVD should be read here, away from the host's kernel, since this machine exists to parse drives nobody vouches for. |
+
 ## Bluetooth in Settings
 
 Settings' Bluetooth page runs `bluetoothctl`, as it always has. On a PC the

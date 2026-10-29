@@ -53,11 +53,14 @@ let
   cfg = config.losos.machines.network;
   addresses = import ./network-addresses.nix;
   schizoAddresses = import ./schizo-addresses.nix;
+  vpnAddresses = import ./vpn-addresses.nix;
   inherit (addresses)
     up
     wan
     tor
     torext
+    vpn
+    vpnext
     ;
   name = "sys-net";
   libvirt = config.virtualisation.libvirtd.package;
@@ -130,6 +133,8 @@ let
   # The machine's side of what the host shares: the ad blocker's compiled
   # list and the host's word on the mode and its servers.
   hostShare = "/var/lib/losos-host";
+  inherit (config.environment) etc;
+  encryptedDns = etc ? "losos-adblock/encrypted-dns";
 
   # The firewall, loaded whole at boot (losos-netd's nft-base). Until
   # losos-netd has applied the mode, nothing from the host is forwarded, so
@@ -146,9 +151,10 @@ let
         udp dport 68 accept
         # mDNS from the host and those networks, which losos-netd reflects
         # between them; never from the gateway's links.
-        iifname != { "${wan.link}", "${tor.link}", "${torext.link}" } udp dport 5353 accept
-        # The ad blocker's forwarder, the host's one DNS server.
-        iifname "${up.link}" ip daddr ${up.machine} meta l4proto { tcp, udp } th dport 53 accept
+        iifname != { "${wan.link}", "${tor.link}", "${torext.link}", "${vpn.link}", "${vpnext.link}" } udp dport 5353 accept
+        # The ad blocker's forwarder, the host's one DNS server, and sys-vpn's
+        # for its provider's endpoint, the one name it looks up.
+        iifname { "${up.link}", "${vpnext.link}" } ip daddr ${up.machine} meta l4proto { tcp, udp } th dport 53 accept
       }
       chain forward {
         type filter hook forward priority filter; policy drop;
@@ -172,7 +178,7 @@ let
     table ip network-nat {
       chain postrouting {
         type nat hook postrouting priority srcnat;
-        oifname != "${up.link}" ip saddr { ${up.network}/${toString up.prefix}, ${schizoAddresses.uplink.network}/${toString schizoAddresses.uplink.prefix} } masquerade
+        oifname != "${up.link}" ip saddr { ${up.network}/${toString up.prefix}, ${schizoAddresses.uplink.network}/${toString schizoAddresses.uplink.prefix}, ${vpnAddresses.uplink.network}/${toString vpnAddresses.uplink.prefix} } masquerade
       }
     }
   '';
@@ -184,6 +190,7 @@ let
     flush chain inet network mode-output
     add rule inet network mode-forward iifname "${up.link}" oifname != { "${tor.link}", "${torext.link}" } accept
     add rule inet network mode-forward iifname "${torext.link}" oifname != { "${up.link}", "${tor.link}" } accept
+    add rule inet network mode-forward iifname "${vpnext.link}" oifname != { "${up.link}", "${tor.link}", "${torext.link}", "${vpn.link}" } accept
   '';
   # Whonix's rule, here: the host's and its machines' connections reach the
   # gateway and nothing else, the gateway's own reach the internet, and
@@ -194,8 +201,9 @@ let
     flush chain inet network mode-output
     add rule inet network mode-forward iifname "${up.link}" oifname "${tor.link}" accept
     add rule inet network mode-forward iifname "${torext.link}" oifname != { "${up.link}", "${tor.link}" } accept
+    add rule inet network mode-forward iifname "${vpnext.link}" oifname != { "${up.link}", "${tor.link}", "${torext.link}", "${vpn.link}" } accept
     add rule inet network mode-output oifname { "lo", "${up.link}", "${tor.link}" } accept
-    add rule inet network mode-output oifname "${torext.link}" ct state established,related accept
+    add rule inet network mode-output oifname { "${torext.link}", "${vpnext.link}" } ct state established,related accept
     add rule inet network mode-output udp dport 67 accept
     add rule inet network mode-output drop
   '';
@@ -209,7 +217,10 @@ let
     link wan ${wan.mac} ${wan.link} ${wan.machine}/${toString wan.prefix} ${wan.host}
     link tor ${tor.mac} ${tor.link} ${schizoAddresses.inside.host}/${toString schizoAddresses.inside.prefix}
     link torext ${torext.mac} ${torext.link} ${schizoAddresses.uplink.host}/${toString schizoAddresses.uplink.prefix}
+    link vpn ${vpn.mac} ${vpn.link} ${vpnAddresses.inside.net}/${toString vpnAddresses.inside.prefix}
+    link vpnext ${vpnext.mac} ${vpnext.link} ${vpnAddresses.uplink.net}/${toString vpnAddresses.uplink.prefix}
     gateway ${schizoAddresses.inside.gateway}
+    vpn-gateway ${vpnAddresses.inside.vpn}
     nft-base ${nftBase}
     nft-on ${nftOn}
     nft-off ${nftOff}
@@ -217,6 +228,8 @@ let
     state-disk /dev/vda /var/lib/losos-network
     run losos-vm-call serve ${toString addresses.ports.nmcli} losos-netd nmcli
     run losos-vm-call serve ${toString addresses.ports.apply} losos-netd apply
+    run losos-vm-call serve ${toString addresses.ports.edgeStatus} losos-netd edge status
+    run losos-vm-call serve ${toString addresses.ports.edgeChain} losos-netd edge chain
     run losos-adblock --state /var/lib/losos-adblock serve --listen ${up.machine}:53
     run losos-peripherals receiver
   '';
@@ -242,8 +255,11 @@ in
         pkgs.losos-adblock
         pkgs.wpa_supplicant
         pkgs.nftables
-        # BusyBox's ip has no policy routing, which schizo mode uses.
+        # BusyBox's ip has no policy routing, which schizo mode and the
+        # edge's tunnel use.
         pkgs.iproute2
+        # The edge's tunnel (edge-exit.nix): its key and its peer.
+        pkgs.wireguard-tools
         # USB network cards from sys-usb, over USB/IP (peripherals.nix).
         pkgs.losos-peripherals
       ];
@@ -271,6 +287,34 @@ in
         }
       ];
       files."/etc/losos-netd.conf" = netdConfig;
+      # This machine's own lookups, the edge's names among them, go to its
+      # forwarder like the host's: through Tor in schizo mode, through the
+      # edge's tunnel once it is up.
+      files."/etc/resolv.conf" = pkgs.writeText "resolv.conf" ''
+        nameserver ${up.machine}
+      '';
+      # The forwarder's encrypted DNS (adblock.nix, docs/adblock.md): the
+      # image's servers and default mode, which the person's choice in the
+      # adblock share replaces, and the CA bundle its verifier reads to
+      # check them. Only with an ad blocker that has them.
+      files."/etc/losos-adblock/encrypted-dns" =
+        lib.mkIf encryptedDns
+          etc."losos-adblock/encrypted-dns".source;
+      files."/etc/losos-adblock/encrypted-dns-default" =
+        lib.mkIf encryptedDns
+          etc."losos-adblock/encrypted-dns-default".source;
+      files."/etc/ssl/certs/ca-certificates.crt" =
+        lib.mkIf encryptedDns "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+      kicksecure.sysctl = {
+        # The host checks the machine is up by pinging it, as the stress
+        # test does; nothing past the host can reach it to ping.
+        "net.ipv4.icmp_echo_ignore_all" = 0;
+        # Loose, not strict: strict drops the multicast replies the LAN's
+        # edges answer a DNS-SD browse with, and the machine routes for
+        # the host over a second interface.
+        "net.ipv4.conf.all.rp_filter" = 2;
+        "net.ipv4.conf.default.rp_filter" = 2;
+      };
     };
 
     losos.serviceMachines.${name} = {

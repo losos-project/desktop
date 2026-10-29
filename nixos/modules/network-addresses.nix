@@ -41,6 +41,16 @@
     mac = "52:54:00:4c:1e:04";
     link = "torext0";
   };
+  # sys-vpn's two networks (vpn-addresses.nix), on which the network
+  # machine hands sys-vpn the host's connections and routes its uplink.
+  vpn = {
+    mac = "52:54:00:4c:1e:06";
+    link = "vpn0";
+  };
+  vpnext = {
+    mac = "52:54:00:4c:1e:07";
+    link = "vpnext0";
+  };
   # The network shares machine (shares-machine.nix), on the host's link
   # with the network machine as its router, as the host is.
   shares = {
@@ -52,5 +62,9 @@
   ports = {
     nmcli = 5000;
     apply = 5001;
+    # The edge traffic leaves through (edge-exit.nix): its status, and the
+    # Tor gateway's file for it.
+    edgeStatus = 5002;
+    edgeChain = 5003;
   };
 }

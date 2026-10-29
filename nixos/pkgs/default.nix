@@ -118,6 +118,9 @@ in
   # The files machine's init and daemon: the storage it is given, mounted
   # there and served to the host (docs/files-machine.md).
   losos-filesd = callWithMold ./losos-filesd.nix { };
+  # sys-vpn's program (docs/vpn.md): the providers, the check of their
+  # WireGuard files on the host, and the tunnel in the machine.
+  losos-vpn = callWithMold ./losos-vpn.nix { };
   # The portals' dialogs in a machine of their own, sys-portal, for the
   # host's apps and every machine's (docs/portal-machine.md).
   losos-portal = callWithMold ./losos-portal.nix { };

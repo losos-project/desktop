@@ -135,6 +135,19 @@ in
         "nfs"
         "fuse"
       ];
+      # Kicksecure keeps network file systems out; mounting them is this
+      # machine's whole job. The servers (nfsd, ksmbd) stay out.
+      kicksecure.allowModules = [
+        "cifs"
+        "cifs_arc4"
+        "cifs_md4"
+        "nfs"
+        "nfs_acl"
+        "nfsv3"
+        "nfsv4"
+        "nfs_layout_nfsv41_files"
+        "nfs_layout_flexfiles"
+      ];
       files."/etc/losos-filesd.conf" = filesdConfig;
     };
 
