@@ -15,6 +15,9 @@
     ./nvidia.nix
     ./libvirt.nix
     ./machines.nix
+    ./service-machines.nix
+    ./schizo.nix
+    ./schizo-reboot.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix
