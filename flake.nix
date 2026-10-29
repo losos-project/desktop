@@ -261,6 +261,7 @@
           "losos-vm-call"
           "losos-netd"
           "losos-filesd"
+          "losos-portal"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -311,6 +312,10 @@
           # started again; drives copied to and ejected from the files
           # machine, which powers off when idle (service-machines.nix).
           service-machines = pkgs.testers.runNixOSTest ./nixos/tests/service-machines.nix;
+          # The portal machine: a host app's request starts it, an app in
+          # another machine gets a copy of the file picked for it and saves
+          # it back to the host, and it stops when idle (portal-machine.nix).
+          portal-machine = pkgs.testers.runNixOSTest ./nixos/tests/portal-machine.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;

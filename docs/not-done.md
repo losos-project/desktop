@@ -34,6 +34,20 @@
     server.
   - OpenSSH's `sftp-server` in sys-files is not chrooted to the volume it
     serves. The host is the only one that can ask for one.
+- **The portal machine.** [The portal machine](portal-machine.md) has
+  gaps:
+  - Its dialogs are not attached to the app's window, which is on
+    another machine's display, so they open as windows of their own.
+  - What a machine may write back is kept until the host restarts. After
+    that, saving a copy a machine was given before changes only the copy.
+  - A folder picked for an app in a machine goes back file by file. An
+    empty folder made in the copy reaches the host only once a file is
+    put in it, and a link made in the copy stays in the machine.
+  - Changes made to a picked folder on the host after it was copied do
+    not reach the machine's copy.
+  - Only the files and screenshot portals copy files. A portal that hands
+    an app a file in another way, such as the Account portal's picture,
+    hands a machine's app a path it cannot open.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
@@ -69,8 +83,9 @@
   the 8 GiB `/usr` slot. Giving machines the host's store over virtiofs would
   save it. A machine's disk grows once, to the size it was made with, and
   nothing makes an existing machine's disk larger. Portal dialogs in a
-  machine, such as a Flatpak's file chooser, are GTK's, drawn through the
-  same waypipe, and nobody has tried them.
+  machine, such as a Flatpak's file chooser, are the
+  [portal machine](portal-machine.md)'s now, and nobody has tried them
+  with a real app in a machine.
 - **The Flatpak machine's loose ends.** A `.flatpakref` or `.flatpakrepo`
   file opened on the host has nothing to open it, because Flatpak is in
   [the machine](hypervisor.md#the-flatpak-machine), so it has to be copied

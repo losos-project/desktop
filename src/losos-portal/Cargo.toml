@@ -1,0 +1,30 @@
+[package]
+name = "losos-portal"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_portal"
+path = "src/lib.rs"
+
+[[bin]]
+name = "losos-portal"
+path = "src/main.rs"
+
+[dependencies]
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zbus = { version = "5.19.0", default-features = false, features = ["blocking-api", "async-io"] }
+zvariant = "5.15.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+vsock = "0.5.4"
+libc = "0.2"
+crossbeam-channel = "0.5"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
