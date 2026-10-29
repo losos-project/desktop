@@ -11,7 +11,10 @@
 # in the realm `office`, an administrator of the box becomes one here, a
 # wrong password and a person disabled at the box are refused, the box out
 # of reach falls back to homed for those who logged in before and to
-# nobody else, and a password changed at the box re-keys the home.
+# nobody else, and a password changed at the box re-keys the home. Between
+# logins the box's people list locks those it removed, and the company's
+# Mesh CI jobs (a stand-in for the box's, as lososd relays them) run their
+# fixed steps here and refuse anything else.
 #
 # Not the whole image, only what the bridge needs, so it boots the test
 # driver's kernel quickly and runs without KVM too.
@@ -45,7 +48,12 @@ let
   people =
     pkgs:
     pkgs.runCommand "testbox-people" { nativeBuildInputs = [ pkgs.authelia ]; } ''
-      hash() { authelia crypto hash generate argon2 --password "$1" | sed -n 's/^Digest: //p'; }
+      # Cheap parameters: the default argon2id costs a TCG guest longer
+      # than the bridge waits for an answer.
+      hash() {
+        authelia crypto hash generate argon2 --password "$1" -i 1 -m 8192 -p 1 \
+          | sed -n 's/^Digest: //p'
+      }
       ada=$(hash ${adaPassword}); bob=$(hash ${bobPassword}); bob2=$(hash ${bobNewPassword})
       carol=$(hash ${carolPassword})
       write() {
@@ -72,6 +80,35 @@ let
       write changed.yml "$bob2" false
       write disabled.yml "$bob2" true
     '';
+  # The token lososd's `POST /api/devices/directory` gives the joined
+  # computer, and its people list (`GET /api/directory/people`) as the box
+  # has it when bob is disabled.
+  directoryToken = "losos_dir_0123abcd_${lib.fixedWidthString 40 "0" "f"}";
+  directoryPeople = builtins.toJSON {
+    people = [
+      {
+        name = "ada";
+        displayName = "Ada Lovelace";
+        email = "ada@example.com";
+        groups = [ "losos-admins" ];
+        disabled = false;
+      }
+      {
+        name = "bob";
+        displayName = "Bob Builder";
+        email = "";
+        groups = [ "staff" ];
+        disabled = true;
+      }
+      {
+        name = "carol";
+        displayName = "Carol";
+        email = "";
+        groups = [ "staff" ];
+        disabled = false;
+      }
+    ];
+  };
   # What lososd's `GET /api/edge` says on a box that goes through a gateway
   # of the secondary cluster `office`.
   edge = builtins.toJSON {
@@ -85,6 +122,54 @@ let
       member = "office-1";
     };
   };
+  # A stand-in for the box's Mesh CI as lososd relays it to a joined
+  # computer: a job the test puts in /var/lib/fake-ci/queued.json is handed
+  # out once, and every report is kept, one JSON line each.
+  fakeCi =
+    pkgs:
+    pkgs.writers.writePython3 "fake-mesh-ci" { flakeIgnore = [ "E501" ]; } ''
+      import json
+      import os
+      import time
+      from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+      DIR = "/var/lib/fake-ci"
+      TOKEN = "Bearer ${directoryToken}"
+
+
+      class Handler(BaseHTTPRequestHandler):
+          def answer(self, code, body=None):
+              data = json.dumps(body).encode() if body is not None else b""
+              self.send_response(code)
+              self.send_header("Content-Type", "application/json")
+              self.send_header("Content-Length", str(len(data)))
+              self.end_headers()
+              self.wfile.write(data)
+
+          def do_POST(self):
+              length = int(self.headers.get("Content-Length") or 0)
+              body = self.rfile.read(length)
+              if self.headers.get("Authorization") != TOKEN:
+                  return self.answer(401, {"error": "nobody"})
+              if self.path == "/api/directory/jobs/claim":
+                  queued = os.path.join(DIR, "queued.json")
+                  for _ in range(4):
+                      if os.path.exists(queued):
+                          with open(queued) as f:
+                              job = json.load(f)
+                          os.remove(queued)
+                          return self.answer(200, job)
+                      time.sleep(0.5)
+                  return self.answer(204)
+              if self.path == "/api/directory/jobs/report":
+                  with open(os.path.join(DIR, "reports.jsonl"), "a") as f:
+                      f.write(body.decode() + "\n")
+                  return self.answer(200, {"stop": False})
+              self.answer(404, {"error": "not found"})
+
+
+      ThreadingHTTPServer(("127.0.0.1", 8099), Handler).serve_forever()
+    '';
 in
 {
   name = "losos-desktop-company";
@@ -110,6 +195,8 @@ in
     in
     {
       environment.systemPackages = [ pkgs.curl ];
+      # The box asks itself by its own name, as nothing here answers mDNS.
+      networking.hosts."127.0.0.1" = [ boxName ];
       networking.firewall.allowedTCPPorts = [
         80
         443
@@ -174,6 +261,13 @@ in
           mode = "0644";
         };
       };
+      systemd.services.fake-mesh-ci = {
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          ExecStart = fakeCi pkgs;
+          StateDirectory = "fake-ci";
+        };
+      };
       services.nginx = {
         enable = true;
         virtualHosts.${boxName} = {
@@ -196,6 +290,19 @@ in
             auth_request /internal/authz;
             default_type application/json;
             return 200 '${edge}';
+          '';
+          locations."= /api/devices/directory".extraConfig = ''
+            auth_request /internal/authz;
+            default_type application/json;
+            return 200 '{"token":"${directoryToken}","computer":{"id":"0123abcd","device":"desktop"}}';
+          '';
+          locations."/api/directory/jobs/".proxyPass = "http://127.0.0.1:8099";
+          locations."= /api/directory/people".extraConfig = ''
+            if ($http_authorization != "Bearer ${directoryToken}") {
+              return 401;
+            }
+            default_type application/json;
+            return 200 '${directoryPeople}';
           '';
         };
       };
@@ -222,7 +329,13 @@ in
         isNormalUser = true;
         uid = 1500;
       };
-      # homed's LUKS homes, a few hundred megabytes each.
+      # Plain directories in place of the image's LUKS homes: formatting a
+      # LUKS volume takes a guest without KVM longer than homectl waits.
+      # The password is the record's either way, so the bridge cannot tell.
+      services.homed.settings.Home.DefaultStorage = lib.mkForce "directory";
+      # The people list goes out of step only when a subtest says so, so
+      # the sync runs when that subtest starts it, not on its timer.
+      systemd.timers.losos-login-bridge-sync.wantedBy = lib.mkForce [ ];
       virtualisation.diskSize = 6144;
       virtualisation.memorySize = 2048;
     };
@@ -287,6 +400,9 @@ in
         assert joined["gateway"]["url"] == "http://gateway.local:8443", joined
         assert joined["joinedBy"] == "ada", joined
         desktop.succeed("test $(stat -c %a /var/lib/losos-login-bridge/joined.json) = 644")
+        # The box's token for its people list: root's alone.
+        desktop.succeed("test $(stat -c %a /var/lib/losos-login-bridge/directory-token) = 600")
+        desktop.succeed("grep -qx '${directoryToken}' /var/lib/losos-login-bridge/directory-token")
 
     with subtest("the first login makes the person's home, in the company's realm"):
         ok, out = pam("bob", "${bobPassword}")
@@ -332,10 +448,70 @@ in
         ok, out = pam("bob", "${bobNewPassword}")
         assert not ok, out
 
-    with subtest("local accounts are not the bridge's"):
+    with subtest("between logins, the box's people list locks them out offline too"):
+        desktop.succeed("systemctl start losos-login-bridge-sync.service")
+        assert record("bob").get("locked") is True, record("bob")
+        assert record("ada").get("locked") is not True, record("ada")
+        box.block()
+        ok, out = pam("bob", "${bobNewPassword}")
+        assert not ok, out
+        ok, out = pam("ada", "${adaPassword}")
+        assert ok, out
+        box.unblock()
+
+    def ci_job(job_id, *steps):
+        """Hands the desktop a Mesh CI job and returns its reports once it
+        reported how it ended."""
+        job = {
+            "id": job_id,
+            "name": f"Fleet / {job_id}",
+            "timeoutSecs": 600,
+            "payload": {"desktop": "desktop", "steps": list(steps)},
+        }
+        box.succeed(f"echo {shlex.quote(json.dumps(job))} > /var/lib/fake-ci/queued.json.new")
+        box.succeed("mv /var/lib/fake-ci/queued.json.new /var/lib/fake-ci/queued.json")
+        box.wait_until_succeeds(
+            f"grep -h '\"id\": *\"{job_id}\"' /var/lib/fake-ci/reports.jsonl | grep -q state",
+            timeout=180,
+        )
+        lines = box.succeed("cat /var/lib/fake-ci/reports.jsonl").splitlines()
+        return [r for r in map(json.loads, lines) if r["id"] == job_id]
+
+    with subtest("the company's Mesh CI jobs run fixed steps here, and nothing else"):
+        desktop.wait_for_unit("losos-login-bridge-manage.service")
+        reports = ci_job(
+            "1",
+            {"uses": "losos/desktop-status", "with": {}, "name": "Status"},
+            {"uses": "losos/desktop-lock", "with": {"user": "carol"}, "name": "Lock carol"},
+        )
+        assert reports[-1]["state"] == "success", reports
+        log = "".join(r["log"] for r in reports)
+        assert "Company account ada" in log, log
+        assert "carol is locked" in log, log
+        assert record("carol").get("locked") is True, record("carol")
+
+        # A step outside the list: nothing of the job runs.
+        reports = ci_job(
+            "2",
+            {"uses": "losos/desktop-unlock", "with": {"user": "carol"}},
+            {"uses": "losos/desktop-shell", "with": {}},
+        )
+        assert reports[-1]["state"] == "error", reports
+        assert record("carol").get("locked") is True, record("carol")
+
+        # Nor does it touch an account that is not the company's.
         desktop.succeed(
             "NEWPASSWORD=Local-test-password-1 homectl create local --enforce-password-policy=no --no-ask-password"
         )
+        reports = ci_job("3", {"uses": "losos/desktop-lock", "with": {"user": "local"}})
+        assert reports[-1]["state"] == "failure", reports
+        assert record("local").get("locked") is not True, record("local")
+
+        reports = ci_job("4", {"uses": "losos/desktop-unlock", "with": {"user": "carol"}})
+        assert reports[-1]["state"] == "success", reports
+        assert record("carol").get("locked") is not True, record("carol")
+
+    with subtest("local accounts are not the bridge's"):
         box.block()
         ok, out = pam("local", "Local-test-password-1")
         assert ok, out
@@ -343,6 +519,7 @@ in
 
     with subtest("leaving the company keeps the accounts, logged in by homed"):
         desktop.succeed("losos-login-bridge leave")
+        desktop.fail("test -e /var/lib/losos-login-bridge/directory-token")
         ok, out = pam("ada", "${adaPassword}")
         assert ok, out
         ok, out = pam("carol", "${carolPassword}")

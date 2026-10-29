@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! {"join": {"host", "fingerprint", "user", "password", "code"?, "publicName"?, "adminGroups"?}}
-//!   -> {"joined": {...}} | {"error", "needCode"?}
+//!   -> {"joined": {...}, "directory": bool} | {"error", "needCode"?}
 //! {"leave": {}}
 //!   -> {"left": true} | {"error"}
 //! ```
@@ -16,7 +16,10 @@
 //! Joining signs in to the box's LosOS Login as `user`, who must be one of
 //! its administrators, reads which edge the box goes through (`GET
 //! /api/edge`), and refuses a box that is not behind a gateway on the
-//! company's network: that gateway is what the computer is joined to.
+//! company's network: that gateway is what the computer is joined to. It
+//! then asks the box for a token of the computer's own (`POST
+//! /api/devices/directory`), which [`crate::sync`] reads the people list
+//! with, and keeps it in [`crate::DIRECTORY_TOKEN_FILE`].
 
 use std::{
     io::{BufRead, BufReader, Write},
@@ -31,7 +34,7 @@ use serde_json::{json, Value};
 use crate::{
     join::{self, Joined, Way, BOX_ADMINS},
     login::{Outcome, Session},
-    tls, Error, JOINED_FILE, SOCKET,
+    tls, Error, DIRECTORY_TOKEN_FILE, JOINED_FILE, SOCKET,
 };
 
 /// The polkit action a join or a leave needs.
@@ -67,8 +70,16 @@ pub enum Request {
 /// from the administrator's authenticator app would get further.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Joining {
-    Joined(Box<Joined>),
-    Failed { error: String, need_code: bool },
+    /// Joined; `directory` says whether the box gave this computer a token
+    /// for its people list (an older box has no such route).
+    Joined {
+        joined: Box<Joined>,
+        directory: bool,
+    },
+    Failed {
+        error: String,
+        need_code: bool,
+    },
 }
 
 impl Joining {
@@ -81,7 +92,9 @@ impl Joining {
 
     pub fn to_json(&self) -> Value {
         match self {
-            Joining::Joined(j) => json!({ "joined": j }),
+            Joining::Joined { joined, directory } => {
+                json!({ "joined": joined, "directory": directory })
+            }
             Joining::Failed { error, need_code } => {
                 json!({ "error": error, "needCode": need_code })
             }
@@ -166,10 +179,70 @@ pub fn join(request: &JoinRequest, joined_file: &Path) -> Joining {
         joined_by: person.name,
         joined_at: join::now(),
     };
-    match joined.save(joined_file) {
-        Ok(()) => Joining::Joined(Box::new(joined)),
-        Err(e) => Joining::failed(e.message),
+    // The token the computer reads the people list with between logins
+    // (crate::sync), made by the box for this administrator's request.
+    let device = device_name();
+    let token = match session.post_json("/api/devices/directory", &json!({ "device": device })) {
+        Ok(Some(answer)) => match answer.get("token").and_then(Value::as_str) {
+            Some(token) => Some(token.to_owned()),
+            None => return Joining::failed(format!("{} gave this computer no token", joined.host)),
+        },
+        Ok(None) => None,
+        Err(e) => {
+            return Joining::failed(format!(
+                "{} did not join this computer to its people list: {e}",
+                joined.host
+            ))
+        }
+    };
+    let token_file = joined_file.with_file_name("directory-token");
+    let saved = match &token {
+        Some(token) => write_secret(&token_file, token),
+        None => match std::fs::remove_file(&token_file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        },
+    };
+    if let Err(e) = saved.and_then(|()| joined.save(joined_file)) {
+        return Joining::failed(e.message);
     }
+    Joining::Joined {
+        joined: Box::new(joined),
+        directory: token.is_some(),
+    }
+}
+
+/// This computer's name as the box lists it: the host name, with anything
+/// the box does not take in a device name (`validate_device`) left out.
+fn device_name() -> String {
+    let name: String = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '.' | '-' | '_'))
+        .take(48)
+        .collect();
+    if name.is_empty() {
+        "losos-desktop".to_owned()
+    } else {
+        name
+    }
+}
+
+/// Writes `secret` to `path`, 0600 from the start, and renames it in.
+fn write_secret(path: &Path, secret: &str) -> Result<(), Error> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let partial = path.with_extension("partial");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&partial)?;
+    file.write_all(secret.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&partial, path)?;
+    Ok(())
 }
 
 /// Fingerprints compare without their colons and case.
@@ -246,11 +319,16 @@ pub fn serve(stream: UnixStream) -> Result<(), Error> {
         reader.read_line(&mut line)?;
         match serde_json::from_str::<Request>(&line) {
             Ok(Request::Join(request)) => join(&request, Path::new(JOINED_FILE)).to_json(),
-            Ok(Request::Leave {}) => match std::fs::remove_file(JOINED_FILE) {
-                Ok(()) => json!({ "left": true }),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({ "left": true }),
-                Err(e) => json!({ "error": e.to_string() }),
-            },
+            Ok(Request::Leave {}) => {
+                let gone = |path: &str| match std::fs::remove_file(path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                    _ => Ok(()),
+                };
+                match gone(JOINED_FILE).and_then(|()| gone(DIRECTORY_TOKEN_FILE)) {
+                    Ok(()) => json!({ "left": true }),
+                    Err(e) => json!({ "error": e.to_string() }),
+                }
+            }
             Err(e) => json!({ "error": format!("not a request: {e}") }),
         }
     } else {

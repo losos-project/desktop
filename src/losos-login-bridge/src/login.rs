@@ -141,6 +141,21 @@ impl Session {
             .into_json()?)
     }
 
+    /// `POST` JSON to one of the box's own pages as the signed-in person:
+    /// its answer, or `None` when the box has no such page (404).
+    pub fn post_json(&self, path: &str, body: &Value) -> Result<Option<Value>, crate::Error> {
+        match self
+            .agent
+            .post(&format!("{}{path}", self.base))
+            .set("Cookie", &self.cookie)
+            .send_json(body)
+        {
+            Ok(response) => Ok(Some(response.into_json()?)),
+            Err(ureq::Error::Status(404, _)) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     fn ask(&self) -> Result<Answer, Outcome> {
         let answer = self
             .agent

@@ -23,8 +23,10 @@
 pub mod homed;
 pub mod join;
 pub mod login;
+pub mod manage;
 pub mod pam;
 pub mod service;
+pub mod sync;
 pub mod tls;
 
 use std::fmt;
@@ -33,6 +35,9 @@ use std::fmt;
 pub const STATE_DIR: &str = "/var/lib/losos-login-bridge";
 /// The joined box, in [`STATE_DIR`].
 pub const JOINED_FILE: &str = "/var/lib/losos-login-bridge/joined.json";
+/// The computer's own token for the box's people list
+/// (`GET /api/directory/people`), which joining got: root's alone, 0600.
+pub const DIRECTORY_TOKEN_FILE: &str = "/var/lib/losos-login-bridge/directory-token";
 /// The join service's socket, which any local user may open; the service
 /// asks polkit about each caller.
 pub const SOCKET: &str = "/run/losos-login-bridge/join.sock";

@@ -69,6 +69,74 @@ in
     };
   };
 
+  # Between logins: read the box's people list and lock the accounts of
+  # people it removed or disabled, so a laptop does not keep logging them
+  # in offline (src/losos-login-bridge/src/sync.rs). Only a computer joined
+  # to a box that gave it a token has anything to do.
+  systemd.services.losos-login-bridge-sync = {
+    description = "Locking company accounts the company removed";
+    unitConfig.ConditionPathExists = "/var/lib/losos-login-bridge/directory-token";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    path = [ config.systemd.package ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${lib.getExe bridge} sync";
+      ProtectHome = true;
+      PrivateTmp = true;
+      NoNewPrivileges = true;
+      RestrictAddressFamilies = [
+        "AF_UNIX"
+        "AF_INET"
+        "AF_INET6"
+      ];
+    };
+  };
+  systemd.timers.losos-login-bridge-sync = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "2min";
+      # Often enough that someone let go is locked out within minutes of a
+      # laptop seeing the office network.
+      OnUnitActiveSec = "5min";
+      RandomizedDelaySec = "1min";
+    };
+  };
+
+  # The company's Mesh CI jobs for this computer: `runs-on: [losos-desktop,
+  # <this computer>]` in a workflow of the box's LosOS Git
+  # (src/losos-login-bridge/src/manage.rs). It asks the box for work with
+  # the same token and runs only the fixed losos/desktop-* steps: status,
+  # update, reboot, channel, lock and unlock. It runs while a token exists;
+  # the path unit starts it when a join writes one, and it ends on leave.
+  systemd.services.losos-login-bridge-manage = {
+    description = "Running the company's Mesh CI jobs";
+    unitConfig.ConditionPathExists = "/var/lib/losos-login-bridge/directory-token";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    # systemctl and journalctl for update, channel and reboot, homectl and
+    # userdbctl for status, lock and unlock.
+    path = [ config.systemd.package ];
+    serviceConfig = {
+      ExecStart = "${lib.getExe bridge} manage";
+      Restart = "on-failure";
+      RestartSec = "30s";
+      ProtectHome = true;
+      PrivateTmp = true;
+      NoNewPrivileges = true;
+      RestrictAddressFamilies = [
+        "AF_UNIX"
+        "AF_INET"
+        "AF_INET6"
+      ];
+    };
+  };
+  systemd.paths.losos-login-bridge-manage = {
+    wantedBy = [ "paths.target" ];
+    pathConfig.PathExists = "/var/lib/losos-login-bridge/directory-token";
+  };
+
   systemd.services."losos-login-bridge@" = {
     description = "Joining this computer to a company's LosOS Login";
     # pkcheck, which asks polkit about the caller.

@@ -65,17 +65,14 @@ pub struct Record {
     pub locked: bool,
 }
 
-impl Known {
-    /// A record from `userdbctl user NAME --json=short`.
-    pub fn parse(json: &str) -> Known {
-        let Ok(v) = serde_json::from_str::<Value>(json.trim_start_matches('\u{1e}')) else {
-            return Known::Nobody;
-        };
-        if v.get("service").and_then(Value::as_str) != Some(HOMED_SERVICE) {
-            return Known::Other;
-        }
+impl Record {
+    /// One record from `userdbctl --service=io.systemd.Home user ...
+    /// --json=short`. Which service answered is not in the record itself,
+    /// so the query names homed's.
+    pub fn parse(json: &str) -> Option<Record> {
+        let v = serde_json::from_str::<Value>(json.trim().trim_start_matches('\u{1e}')).ok()?;
         let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
-        Known::Home(Record {
+        Some(Record {
             realm: text("realm"),
             real_name: text("realName"),
             email: text("emailAddress"),
@@ -91,17 +88,36 @@ impl Known {
     }
 }
 
-/// Looks `user` up in userdb.
-pub fn lookup(user: &str) -> Known {
-    let output = tool("userdbctl")
-        .args(["user", user, "--json=short"])
+/// `userdbctl user ARGS --json=short`, asking homed alone when `homed`:
+/// what it printed, if it found anyone.
+pub(crate) fn userdb(homed: bool, args: &[&str]) -> Option<String> {
+    let mut command = tool("userdbctl");
+    if homed {
+        command.arg(format!("--service={HOMED_SERVICE}"));
+    }
+    let output = command
+        .arg("user")
+        .args(args)
+        .arg("--json=short")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output();
-    match output {
-        Ok(o) if o.status.success() => Known::parse(&String::from_utf8_lossy(&o.stdout)),
-        _ => Known::Nobody,
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Looks `user` up in userdb: homed first, then every other service.
+pub fn lookup(user: &str) -> Known {
+    if let Some(json) = userdb(true, &[user]) {
+        return Record::parse(&json).map_or(Known::Nobody, Known::Home);
     }
+    if userdb(false, &[user]).is_some() {
+        return Known::Other;
+    }
+    Known::Nobody
 }
 
 impl Record {
@@ -199,26 +215,123 @@ pub fn device_groups(group_file: &str) -> Vec<String> {
         .collect()
 }
 
+/// What homectl says on stderr just before it asks for a password itself.
+/// `--no-ask-password` only stops polkit's prompt: after homed refuses a
+/// password, homectl asks again through the password agent, which on a
+/// login screen is the console, and waits there with no end (homectl.c's
+/// `handle_generic_user_record_error`). So the bridge stops it on these.
+const ASKS_AGAIN: &[&str] = &[
+    "please try again",
+    "please enter password",
+    "incorrect or not sufficient",
+];
+
+/// Whether homectl's stderr line `line` means it is about to ask.
+pub(crate) fn asks_again(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    ASKS_AGAIN.iter().any(|m| line.contains(m))
+}
+
+/// The longest one homectl call may take: creating a LUKS home on a slow
+/// disk is the slowest thing it does here.
+const HOMECTL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Runs homectl with `args`, the secrets in its environment as homectl
-/// reads them, and never a prompt.
+/// reads them, and never a prompt: if it starts asking ([`asks_again`]),
+/// or runs past [`HOMECTL_TIMEOUT`], it is stopped and the call fails.
 fn homectl(args: &[String], env: &[(&str, &str)]) -> Result<(), Error> {
-    let output = tool("homectl")
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc;
+
+    let verb = args.first().map_or("", String::as_str).to_owned();
+    let mut child = tool("homectl")
         .arg("--no-ask-password")
         .args(args)
         .envs(env.iter().copied())
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| Error::new(format!("cannot run homectl: {e}")))?;
-    if output.status.success() {
+    let stderr = child.stderr.take().expect("stderr is piped");
+    let (lines, seen) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = std::time::Instant::now() + HOMECTL_TIMEOUT;
+    let mut last = String::new();
+    let stopped = loop {
+        match seen.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(line) => {
+                if asks_again(&line) {
+                    break Some(line.trim().to_owned());
+                }
+                if !line.trim().is_empty() {
+                    last = line.trim().to_owned();
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            // stderr closed: homectl is ending.
+            Err(mpsc::RecvTimeoutError::Disconnected) => break None,
+        }
+        if std::time::Instant::now() >= deadline {
+            break Some(format!("no answer in {}s", HOMECTL_TIMEOUT.as_secs()));
+        }
+        if let Ok(Some(_)) = child.try_wait() {
+            break None;
+        }
+    };
+    if let Some(why) = stopped {
+        stop(&mut child);
+        return Err(Error::new(format!("homectl {verb} failed: {why}")));
+    }
+    // Whatever stderr still held after the last line was read.
+    while let Ok(line) = seen.try_recv() {
+        if !line.trim().is_empty() {
+            last = line.trim().to_owned();
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|e| Error::new(format!("homectl {verb}: {e}")))?;
+    if status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let last = stderr.lines().rev().find(|l| !l.trim().is_empty());
     Err(Error::new(format!(
-        "homectl {} failed: {}",
-        args.first().map_or("", String::as_str),
-        last.unwrap_or("no reason given").trim()
+        "homectl {verb} failed: {}",
+        if last.is_empty() {
+            "no reason given"
+        } else {
+            &last
+        }
     )))
+}
+
+/// Ends homectl: SIGTERM, which takes its question back off the console,
+/// then SIGKILL if it lingers.
+fn stop(child: &mut std::process::Child) {
+    let Ok(pid) = libc::pid_t::try_from(child.id()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return;
+    };
+    // SAFETY: the pid is our own child's, not yet waited for, so it cannot
+    // have been reused.
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+    for _ in 0..50 {
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Makes the company account `person`, with `password` as homed's.
@@ -272,9 +385,33 @@ pub fn set_locked(user: &str, locked: bool) -> Result<(), Error> {
     )
 }
 
+/// Sets `user`'s groups to `groups`, through homed's copy of the record.
+pub fn set_groups(user: &str, groups: &[String]) -> Result<(), Error> {
+    homectl(
+        &[
+            "update".to_owned(),
+            user.to_owned(),
+            "--offline".to_owned(),
+            format!("--member-of={}", groups.join(",")),
+        ],
+        &[],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn knows_when_homectl_is_about_to_ask() {
+        assert!(asks_again(
+            "Password incorrect or not sufficient, please try again."
+        ));
+        assert!(asks_again(
+            "Security token not inserted, please enter password."
+        ));
+        assert!(!asks_again("Operation on home bob completed successfully."));
+    }
     use crate::join::{Gateway, BOX_ADMINS};
 
     fn joined() -> Joined {
@@ -308,8 +445,8 @@ mod tests {
         let home = "\u{1e}{\"userName\":\"ada\",\"realm\":\"office\",\"realName\":\"Ada\",\
             \"memberOf\":[\"wheel\",\"networkmanager\"],\"service\":\"io.systemd.Home\"}";
         assert_eq!(
-            Known::parse(home),
-            Known::Home(Record {
+            Record::parse(home),
+            Some(Record {
                 realm: Some("office".into()),
                 real_name: Some("Ada".into()),
                 email: None,
@@ -317,22 +454,13 @@ mod tests {
                 locked: false,
             })
         );
-        assert_eq!(
-            Known::parse(
-                "{\"userName\":\"root\",\"uid\":0,\"service\":\"io.systemd.NameServiceSwitch\"}"
-            ),
-            Known::Other
-        );
-        assert_eq!(Known::parse(""), Known::Nobody);
+        assert_eq!(Record::parse(""), None);
     }
 
     #[test]
     fn tells_company_accounts_from_local_ones() {
-        let Known::Home(mut record) = Known::parse(
-            "{\"userName\":\"ada\",\"realm\":\"office\",\"service\":\"io.systemd.Home\"}",
-        ) else {
-            panic!("a home");
-        };
+        let mut record =
+            Record::parse("{\"userName\":\"ada\",\"realm\":\"office\"}").expect("a home");
         assert!(record.is_company(&joined()));
         record.realm = None;
         assert!(!record.is_company(&joined()));
