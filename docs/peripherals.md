@@ -24,11 +24,13 @@ and stop again afterwards.
 | Network cards, USB Ethernet and Wi-Fi dongles | sys-net, the network machine |
 | Drives, card readers, phones and cameras' photos (PTP, MTP) | sys-files, the files machine, which hands the host their files |
 | Cameras, sound cards, printers, anything else | a disposable machine of its own |
-| Keyboards, mice, touchpads, game pads, security keys | the host |
+| Keyboards, mice, touchpads, game pads, security keys, smart card and eID readers | the host |
 
 The host keeps what it cannot be used without. Sign-in takes a security
 key, the desktop takes a keyboard and a pointer, and the disk's password
-at boot is typed on that keyboard. It also keeps any controller that has
+at boot is typed on that keyboard. Smart card readers (USB class CCID)
+stay too: the host's pcscd drives them, and a security key such as a
+YubiKey is often HID and a smart card at once. It also keeps any controller that has
 the disk it booted from on it.
 
 The router decides by the drivers that would claim a device, not only by

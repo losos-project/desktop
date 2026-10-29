@@ -34,20 +34,6 @@ let
   libvirt = config.virtualisation.libvirtd.package;
   guests = config.losos.busyboxGuests;
 
-  # The host's firmware and kernel modules, for the machines that drive
-  # devices nobody can name at build time: shared read-only rather than
-  # copied into each initrd, which would hold every driver and blob there
-  # is.
-  firmware = {
-    source = "${config.hardware.firmware}/lib/firmware";
-    target = "/lib/firmware";
-    tag = "firmware";
-  };
-  modules = {
-    source = "${config.system.modulesTree}/lib/modules";
-    target = "/lib/modules";
-    tag = "modules";
-  };
   # The system bus BlueZ needs, and nothing else on it.
   busConfig = pkgs.writeText "system.conf" ''
     <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
@@ -123,8 +109,9 @@ let
 
   # The disposable machines' definition, which the router fills in with
   # each one's name, vsock address and the host's acceleration: no disk,
-  # a controller for a device on the host's own ports, the host's modules
-  # and firmware, and memory it gives back as it frees it.
+  # a controller for a device on the host's own ports, the host's store
+  # (service-machines.nix shares it the same way), and memory it gives
+  # back as it frees it.
   disposable =
     let
       g = guests.disposable.build;
@@ -149,19 +136,25 @@ let
           <initrd>${g.initrd}</initrd>
           <cmdline>${g.cmdline}</cmdline>
         </os>
-        @CPU@
+        @CPU@${
+          # As service-machines.nix's: a PC's kernel booted by libvirt has
+          # ACPI only when asked for, and stalls without it.
+          lib.optionalString pkgs.stdenv.hostPlatform.isx86 ''
+            <features>
+              <acpi/>
+              <apic/>
+            </features>''
+        }
         <on_poweroff>destroy</on_poweroff>
         <on_reboot>destroy</on_reboot>
         <on_crash>destroy</on_crash>
         <devices>
           <controller type='usb' model='qemu-xhci'/>
-          ${lib.concatMapStrings (s: ''
-            <filesystem type='mount' accessmode='squash'>
-              <source dir='${s.source}'/>
-              <target dir='${s.tag}'/>
-              <readonly/>
-            </filesystem>
-          '') guests.disposable.shares}
+          <filesystem type='mount' accessmode='squash'>
+            <source dir='/nix/store'/>
+            <target dir='nix-store'/>
+            <readonly/>
+          </filesystem>
           <vsock model='virtio'>
             <cid auto='no' address='@CID@'/>
           </vsock>
@@ -180,6 +173,8 @@ in
     sys-usb = {
       init = "${peripherals} usb-machine";
       packages = [ pkgs.losos-peripherals ];
+      # Its modules from the host's tree, and an initrd of a few MiB.
+      fromHostStore = true;
       modules = [
         "xhci_pci"
         "ehci_pci"
@@ -191,7 +186,7 @@ in
     };
 
     sys-bluetooth = {
-      init = "${peripherals} bluetooth-machine --bus-config ${busConfig}";
+      init = "${peripherals} bluetooth-machine --bus-config /etc/dbus-system.conf";
       packages = [
         pkgs.losos-peripherals
         pkgs.bluez
@@ -203,8 +198,10 @@ in
         "btusb"
         "virtio_balloon"
       ];
+      # Any radio's driver and firmware, from the host's
+      # (busybox-host-kernel.nix).
+      hostKernelTree = true;
       shares = [
-        firmware
         {
           # Pairings, kept on the host across starts.
           source = "/var/lib/losos-peripherals/bluetooth";
@@ -213,8 +210,8 @@ in
           writable = true;
         }
       ];
-      firmwarePath = firmware.target;
       files = {
+        "/etc/dbus-system.conf" = busConfig;
         "/etc/passwd" = passwd;
         "/etc/group" = group;
         "/etc/init.d/10-bus" = busSetup;
@@ -228,13 +225,9 @@ in
         "vhci_hcd"
         "virtio_balloon"
       ];
-      shares = [
-        firmware
-        modules
-      ];
-      firmwarePath = firmware.target;
-      # A device's driver, whichever it is, from the host's modules.
-      moduleDir = modules.target;
+      # A device's driver and firmware, whichever it is, from the host's
+      # (busybox-host-kernel.nix).
+      hostKernelTree = true;
     };
   };
 
@@ -245,7 +238,7 @@ in
       memory = 128;
       cid = 4110;
       # USB controllers: UHCI, OHCI, EHCI and xHCI, and USB4's.
-      passthrough.pciClasses = [ "0c03" ];
+      passthrough.pciClasses = [ "0x0c03" ];
       # The host's while the machine is stopped, ports held by the router;
       # libvirt takes them as it starts.
       passthrough.bindAtBoot = false;
@@ -266,12 +259,15 @@ in
   # list to stop growing, a second at a time, up to ten.
   systemd.services.losos-peripherals-keep = {
     description = "Decide which USB controllers the host keeps";
-    wantedBy = [ "multi-user.target" ];
     after = [ "systemd-udev-trigger.service" ];
-    before = map (name: "losos-passthrough@${name}.service") (
-      lib.attrNames config.losos.serviceMachines
-    );
-    requiredBy = [ "losos-passthrough@sys-usb.service" ];
+    # Early, as the passthrough units are (passthrough.nix).
+    unitConfig.DefaultDependencies = false;
+    wantedBy = [ "sysinit.target" ];
+    before = [
+      "sysinit.target"
+    ]
+    ++ map (name: "losos-passthrough-${name}.service") (lib.attrNames config.losos.serviceMachines);
+    requiredBy = [ "losos-passthrough-sys-usb.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -296,7 +292,7 @@ in
     after = [
       "libvirtd.service"
       "libvirt-defaults.service"
-      "losos-passthrough@sys-usb.service"
+      "losos-passthrough-sys-usb.service"
     ];
     path = [
       libvirt

@@ -84,19 +84,29 @@ pub fn usb_machine() -> io::Result<()> {
             else {
                 continue;
             };
-            let report = match ev.get("ACTION") {
-                "add" => match Device::read(&path) {
-                    Ok(d) => Report::Add(d),
-                    Err(e) => {
-                        warn!(busid, error = %e, "cannot read a new device");
-                        continue;
+            match ev.get("ACTION") {
+                // Read on a thread of its own: the kernel holds a device's
+                // lock while it is being set up, and its name waits for
+                // that, so one device slow to come up must not keep the
+                // ones after it from being seen.
+                "add" => {
+                    let reports = reports.clone();
+                    let busid = busid.to_owned();
+                    s.spawn(move || match Device::read(&path) {
+                        Ok(d) => {
+                            info!(busid, name = %d.name, "plugged in");
+                            let _ = reports.send(Report::Add(d));
+                        }
+                        Err(e) => warn!(busid, error = %e, "cannot read a new device"),
+                    });
+                }
+                "remove" => {
+                    info!(busid, "pulled out");
+                    if reports.send(Report::Remove(busid.to_owned())).is_err() {
+                        return;
                     }
-                },
-                "remove" => Report::Remove(busid.to_owned()),
-                _ => continue,
-            };
-            if reports.send(report).is_err() {
-                return;
+                }
+                _ => {}
             }
         });
 

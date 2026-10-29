@@ -306,6 +306,10 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # USB devices plugged into sys-usb's controller wake it and reach
+          # their machines, over and over, and it sleeps again once they are
+          # gone (peripherals.nix).
+          peripherals = pkgs.testers.runNixOSTest ./nixos/tests/peripherals.nix;
           # The network and files machines under load: connections, downloads
           # and DNS through the network machine, nmcli through losos-vm-call,
           # schizo mode cutting the host off, the machine destroyed and
