@@ -112,7 +112,6 @@ in
   # Errors only, so the kernel and systemd do not write over the splash.
   # Every message is still in the journal and behind Esc.
   boot.consoleLogLevel = lib.mkDefault 3;
-  boot.initrd.verbose = false;
   boot.kernelParams = [
     "udev.log_level=3"
     # systemd's "[  OK  ] Started ..." lines only when a unit fails or the

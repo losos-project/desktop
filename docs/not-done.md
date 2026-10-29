@@ -125,6 +125,18 @@
     is one pick away in the firmware's boot menu.
   - **arm64.** The installer is built for x86_64 only, because Windows on
     arm64 runs on laptops this OS has no kernel configuration for.
+- **[Installer reports](installer.md#reporting-a-failed-install) cover a
+  failed install only.** The backend writes them, so nothing is reported when
+  the backend itself stops, or when derisk crashes. A report needs a GitHub
+  account and a second device, or a browser, to approve the sign-in. The
+  GitHub App and `LOSOS_REPORT_CLIENT_ID` are set up, but no report has
+  reached the real GitHub yet: the tests sign in to a stand-in.
+- **[Desktop reports](reporting.md) see only some problems.** A window is
+  noticed only when its app misses the ping that a click or a key into it
+  sends, so a hung window nobody touches is not. Settings is the only app
+  that reports an action that never finished, and only for Bluetooth
+  pairing, a backup and asking for a factory reset. Nothing is reported when
+  derisk itself crashes.
 - **The two gnome-control-center patches** in `nixos/pkgs/patches/`. Nothing
   upstream has them, so they stay. They are written against
   gnome-control-center 51.0, and nixpkgs carries 50.4, which moved the System
@@ -267,8 +279,9 @@
   to unlock it, so the first `losos` command that stores a key or token asks
   for a keyring password in a window of the machine. Nothing makes the
   machine automatically either, and its owner makes it from the template.
-  Neither half has met a real box on a real LAN yet, only a box that the
-  machines test boots beside the host.
+  The machine itself has not met a real box on a real LAN yet: the machines
+  test boots a stand-in box beside the host, and the real box in
+  `nixos/tests/losos-box.nix` is found by a desktop with no machine.
 - **Backups to a LosOS box keep one copy and need a password sign-in.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A
@@ -280,6 +293,7 @@
   Nextcloud cannot hold, are left out. A box with HTTPS turned off through
   `losos.tls.enable` cannot be backed up to. Only an administrator's run can
   start a stopped LosOS boxes machine. Backups run once a day, with no
-  setting to change that. They have run against Nextcloud and Forgejo laid
-  out the way a box lays them out, not against a real box. See
+  setting to change that. Against a real box only LosOS cloud works so far:
+  LosOS Git takes no passwords, so the repositories go to LosOS cloud as
+  files. See
   [Backups to a LosOS box](backup.md).

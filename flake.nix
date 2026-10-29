@@ -93,6 +93,11 @@
       # Empty outside Actions, where options.nix's default stands.
       releaseRepo = builtins.getEnv "GITHUB_REPOSITORY";
 
+      # The GitHub App the installer signs in with to report a failed
+      # install (docs/installer.md), a repository variable in CI. Empty
+      # outside Actions, where the ISO offers no report.
+      reportClientId = builtins.getEnv "LOSOS_REPORT_CLIENT_ID";
+
       # requireProxy refused to build an image without LOSOS_PROXY_URL, back
       # when the proxy was the only place an image could update from. It
       # went when GitHub Releases became the default source, and is not
@@ -109,6 +114,9 @@
         }
         // lib.optionalAttrs (channel != "") {
           losos.channel = lib.mkDefault channel;
+        }
+        // lib.optionalAttrs (reportClientId != "") {
+          losos.report.clientId = lib.mkDefault reportClientId;
         };
 
       mkSystem =
@@ -238,6 +246,7 @@
         # Each program's own test suite runs as part of its build.
         // lib.genAttrs [
           "losos-installer"
+          "losos-report"
           "losos-hardware"
           "losos-security"
           "losos-swap"
@@ -288,6 +297,10 @@
           # LosOS boxes, one announcing _losos._tcp and one from before
           # that, found over mDNS and offered as applications (losos-boxes.nix).
           losos-boxes = pkgs.testers.runNixOSTest ./nixos/tests/losos-boxes.nix;
+          # A real LosOS box, from the commit the losos client is pinned to,
+          # beside the desktop: found by its announcement, signed in to with
+          # losos, and backed up to (losos-box.nix).
+          losos-box = pkgs.testers.runNixOSTest ./nixos/tests/losos-box.nix;
           # pm makes a machine from the guest template, which boots, lists its
           # apps and sends an app's window to the host over vsock
           # (machines.nix).

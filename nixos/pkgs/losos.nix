@@ -10,6 +10,10 @@
 # client needs only these directories. Its build script reads the admin UI's
 # catalogue, palette, pane keywords and the salmon, and the crate links the
 # envelope crate in backend/access by path, which is why those are here.
+#
+# The pin is losos-pin.nix, which the LosOS repository rewrites in a pull
+# request here when it tags a release (.github/workflows/desktop-pin.yml
+# there).
 {
   lib,
   rustPlatform,
@@ -19,15 +23,17 @@
   gnupg,
 }:
 
+let
+  pin = import ./losos-pin.nix;
+in
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "losos";
-  # The release tag nix/version.nix carried at this commit, which
-  # `losos --version` and its About pane show.
-  version = "0.4.0-unstable-2026-10-16";
+  # The release, or the release this commit follows plus its date.
+  inherit (pin) version;
 
   src = fetchgit {
     url = "https://github.com/dasmatus/losos";
-    rev = "337acc9a66ccced01dd5d5fd3c5b85fa4573b896";
+    inherit (pin) rev hash;
     sparseCheckout = [
       "admin-ui/tui"
       "admin-ui/app/src/i18n"
@@ -36,14 +42,14 @@ rustPlatform.buildRustPackage (finalAttrs: {
       "admin-ui/themes/brand"
       "backend/access"
     ];
-    hash = "sha256-rePTAM66QVyRYxXCqPYb34t8AoH5JgCpvuqydRc3kvc=";
   };
 
   cargoRoot = "admin-ui/tui";
   buildAndTestSubdir = "admin-ui/tui";
-  cargoHash = "sha256-aaKB33odE4FKAVdFNMiXl2jzr25fkglKHT2bR4QZXSM=";
+  inherit (pin) cargoHash;
 
-  env.LOSOS_VERSION = "v0.4.0";
+  # `losos --version` and its About pane show it.
+  env.LOSOS_VERSION = pin.release;
 
   nativeBuildInputs = [ makeWrapper ];
 
@@ -64,6 +70,24 @@ rustPlatform.buildRustPackage (finalAttrs: {
         ]
       }
   '';
+
+  # The box at the same commit, for the test that boots one beside the
+  # desktop (nixos/tests/losos-box.nix): its modules, the crates lososd is
+  # built from, and the colours and themes LosOS Login's pages are drawn
+  # with. Not the handbook, the admin pages or the screenshots, which are
+  # most of the tree.
+  passthru.box = fetchgit {
+    url = "https://github.com/dasmatus/losos";
+    inherit (pin) rev;
+    sparseCheckout = [
+      "modules"
+      "nix"
+      "backend"
+      "admin-ui/themes"
+      "admin-ui/app/src/styles"
+    ];
+    hash = pin.boxHash;
+  };
 
   meta = {
     description = "Manage LosOS boxes and edges from a terminal, without SSH";

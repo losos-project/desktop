@@ -9,24 +9,43 @@
 {
   lib,
   rustPlatform,
+  curl,
 }:
 
 rustPlatform.buildRustPackage {
   pname = "losos-installer";
   version = "0.1.0";
 
-  src = lib.cleanSourceWith {
-    src = ../../src/losos-installer;
-    # A local `cargo build` leaves target/ beside the sources; it is gitignored,
-    # but a path source would still copy all of it into the store.
-    filter = path: _type: baseNameOf path != "target";
+  # losos-report beside it: signing in to GitHub and filing a failed install
+  # is that crate's, which the desktop reports its own problems with.
+  src = lib.fileset.toSource {
+    root = ../../src;
+    # A local `cargo build` leaves target/ beside the sources; it is
+    # gitignored, but a path source would still copy all of it into the store.
+    fileset =
+      lib.fileset.difference
+        (lib.fileset.unions [
+          ../../src/losos-installer
+          ../../src/losos-report
+        ])
+        (
+          lib.fileset.unions [
+            (lib.fileset.maybeMissing ../../src/losos-installer/target)
+            (lib.fileset.maybeMissing ../../src/losos-report/target)
+          ]
+        );
   };
+  cargoRoot = "losos-installer";
+  buildAndTestSubdir = "losos-installer";
 
   cargoLock.lockFile = ../../src/losos-installer/Cargo.lock;
 
   # Fixture trees and the JSON protocol: no disk and no root. The disk filter is what stands between someone and the wrong drive,
   # so it is tested on every build.
   doCheck = true;
+  # A report is sent with curl, and its tests send one to a stand-in for
+  # GitHub on 127.0.0.1.
+  nativeCheckInputs = [ curl ];
 
   meta = {
     description = "Installer backend for LosOS Desktop, driven by derisk installer";

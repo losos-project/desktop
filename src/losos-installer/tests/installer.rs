@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use losos_installer::disks::{self, Disk};
 use losos_installer::github;
 use losos_installer::install;
+use losos_installer::report;
 use losos_installer::serve::{self, Request};
 use losos_installer::stage;
 
@@ -426,6 +427,10 @@ fn an_install_is_refused_for_a_disk_not_offered() {
         release_repo: None,
         release_version: None,
         release_channel: None,
+        report_repo: None,
+        report_client_id: None,
+        report_login: None,
+        report_api: None,
     };
     let input = "{\"method\":\"install\",\"disk\":\"/dev/not-a-disk\"}\nbogus\n";
     let (tx, rx) = std::sync::mpsc::channel();
@@ -477,6 +482,10 @@ fn hello_names_a_release_disk_only_when_it_holds_a_release() {
         release_repo: None,
         release_version: None,
         release_channel: None,
+        report_repo: None,
+        report_client_id: None,
+        report_login: None,
+        report_api: None,
     };
     assert!(serve::hello(&config).get("release").is_none());
     dir.write("release/SHA256SUMS", "");
@@ -693,4 +702,303 @@ fn the_mirror_serves_a_split_file_whole() {
     assert!(whole.contains("Content-Length: 12\r\n"));
     assert!(whole.ends_with("\r\n\r\nhello, world"), "{whole:?}");
     assert!(missing.starts_with("HTTP/1.1 404"));
+}
+
+fn quiet_config() -> serve::Config {
+    serve::Config {
+        name: "LosOS Desktop".into(),
+        repart_definitions: PathBuf::from("/nonexistent"),
+        sysupdate_templates: PathBuf::from("/nonexistent"),
+        esp: PathBuf::from("/nonexistent"),
+        medium: "/nonexistent".into(),
+        work: PathBuf::from("/nonexistent"),
+        source: None,
+        index: None,
+        local_source: None,
+        bios_boot: None,
+        release_repo: Some("losos-project/desktop".into()),
+        release_version: Some("20261027.081500".into()),
+        release_channel: None,
+        report_repo: None,
+        report_client_id: None,
+        report_login: None,
+        report_api: None,
+    }
+}
+
+#[test]
+fn reports_are_offered_only_with_an_app_to_sign_in_with() {
+    let mut config = quiet_config();
+    assert!(serve::hello(&config).get("report").is_none());
+    config.report_client_id = Some("Iv23liExample".into());
+    assert_eq!(serve::hello(&config)["report"], "losos-project/desktop");
+    config.report_repo = Some("someone/fork".into());
+    assert_eq!(serve::hello(&config)["report"], "someone/fork");
+    let target = serve::report_target(&config).unwrap();
+    assert_eq!(target.login, "https://github.com");
+    assert_eq!(target.api, "https://api.github.com");
+}
+
+#[test]
+fn report_requests_parse() {
+    assert_eq!(
+        serve::parse_request(r#"{"method":"report"}"#),
+        Ok(Request::Report)
+    );
+    assert_eq!(
+        serve::parse_request(r#"{"method":"report_send","note":"it froze"}"#),
+        Ok(Request::ReportSend("it froze".into()))
+    );
+    assert_eq!(
+        serve::parse_request(r#"{"method":"report_send"}"#),
+        Ok(Request::ReportSend(String::new()))
+    );
+    assert_eq!(
+        serve::parse_request(r#"{"method":"report_cancel"}"#),
+        Ok(Request::ReportCancel)
+    );
+}
+
+#[test]
+fn nothing_is_reported_before_an_install_fails() {
+    let mut config = quiet_config();
+    config.report_client_id = Some("Iv23liExample".into());
+    let input = "{\"method\":\"report\"}\n{\"method\":\"report_send\"}\n";
+    let out = SharedSink::default();
+    serve::run(&config, input.as_bytes(), out.clone());
+    let events: Vec<serde_json::Value> = String::from_utf8(out.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(events[1]["event"], "report_failed");
+    assert_eq!(events[2]["event"], "report_failed");
+    assert_eq!(events.len(), 3);
+}
+
+/// A writer `serve::run` can own, read through a clone once it returns.
+#[derive(Clone, Default)]
+struct SharedSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// GitHub's login and API on 127.0.0.1, answering each request from
+/// `answer` and keeping what was asked: the request line, whether a token
+/// came with it, and the body.
+fn fake_github(
+    answer: impl Fn(&str, &str) -> (u16, String) + Send + 'static,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<(String, Option<String>, String)>,
+) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            let (mut length, mut token) = (0, None);
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+                let lower = line.to_lowercase();
+                if let Some(n) = lower.strip_prefix("content-length:") {
+                    length = n.trim().parse().unwrap();
+                }
+                if lower.starts_with("authorization:") {
+                    token = Some(line.trim()["authorization:".len()..].trim().to_owned());
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let body = String::from_utf8(body).unwrap();
+            let mut words = request.split_whitespace();
+            let (method, path) = (words.next().unwrap(), words.next().unwrap());
+            let (status, json) = answer(method, path);
+            let _ = tx.send((format!("{method} {path}"), token, body));
+            write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                json.len()
+            )
+            .unwrap();
+        }
+    });
+    (url, rx)
+}
+
+fn a_report() -> report::Report {
+    let failure = report::Failure {
+        step: "Downloading and writing the system".into(),
+        position: (3, 4),
+        message: "oras failed (exit status: 1)".into(),
+        log: ["$ oras pull", "Error: connection reset"]
+            .map(String::from)
+            .into(),
+        disk: "QEMU HARDDISK, 21.5 GB".into(),
+    };
+    report::build(&failure, &report::System::default(), &[])
+}
+
+#[test]
+fn a_report_signs_in_then_files_an_issue() {
+    let polls = std::sync::atomic::AtomicUsize::new(0);
+    let (url, asked) = fake_github(move |method, path| {
+        match (method, path) {
+        ("POST", "/login/device/code") => (
+            200,
+            r#"{"device_code":"dev","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","expires_in":900,"interval":0}"#.into(),
+        ),
+        ("POST", "/login/oauth/access_token") => {
+            if polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                (200, r#"{"error":"authorization_pending"}"#.into())
+            } else {
+                (200, r#"{"access_token":"ghu_secret","token_type":"bearer"}"#.into())
+            }
+        }
+        ("GET", p) if p.starts_with("/search/issues?q=") => (200, r#"{"items":[]}"#.into()),
+        ("POST", "/repos/losos-project/desktop/issues") => (
+            201,
+            r#"{"number":7,"html_url":"https://github.com/losos-project/desktop/issues/7"}"#.into(),
+        ),
+        _ => (404, r#"{"message":"Not Found"}"#.into()),
+    }
+    });
+    let target = report::Target {
+        repo: "losos-project/desktop".into(),
+        client_id: "Iv23liExample".into(),
+        login: url.clone(),
+        api: url,
+    };
+    let scratch = Scratch::new("report");
+    let report = a_report();
+    let said = std::sync::Mutex::new(Vec::new());
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    report::send(
+        &target,
+        &report,
+        &report::with_note(&report, report::NOTE_HEADING, "It stopped at 3%"),
+        &scratch.0,
+        &cancel,
+        |p| said.lock().unwrap().push(p),
+    )
+    .unwrap();
+    assert_eq!(
+        said.into_inner().unwrap(),
+        [
+            report::Progress::SignIn {
+                uri: "https://github.com/login/device".into(),
+                code: "WDJB-MJHT".into(),
+            },
+            report::Progress::Sent {
+                url: "https://github.com/losos-project/desktop/issues/7".into(),
+                existing: false,
+            },
+        ]
+    );
+    let asked: Vec<_> = asked.try_iter().collect();
+    assert_eq!(asked.len(), 5);
+    // The sign-in never carries a token; the API always does.
+    assert_eq!(asked[0].0, "POST /login/device/code");
+    assert_eq!(asked[0].1, None);
+    assert_eq!(asked[0].2, "client_id=Iv23liExample");
+    assert!(asked[2].2.contains("device_code=dev"));
+    assert!(asked[3].0.contains(&report.fingerprint));
+    assert_eq!(asked[3].1.as_deref(), Some("Bearer ghu_secret"));
+    let issue: serde_json::Value = serde_json::from_str(&asked[4].2).unwrap();
+    assert_eq!(issue["title"], report.title);
+    assert!(
+        issue["body"]
+            .as_str()
+            .unwrap()
+            .starts_with("**From the person installing:**\n\n> It stopped at 3%")
+    );
+    assert_eq!(asked[4].1.as_deref(), Some("Bearer ghu_secret"));
+    // Nothing of the request is left behind.
+    assert_eq!(std::fs::read_dir(&scratch.0).unwrap().count(), 0);
+}
+
+#[test]
+fn the_same_failure_again_is_a_comment() {
+    let report = a_report();
+    let title = report.title.clone();
+    let (url, asked) = fake_github(move |method, path| {
+        match (method, path) {
+        ("POST", "/login/device/code") => (
+            200,
+            r#"{"device_code":"dev","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","interval":0}"#.into(),
+        ),
+        ("POST", "/login/oauth/access_token") => (200, r#"{"access_token":"ghu_secret"}"#.into()),
+        ("GET", _) => (
+            200,
+            serde_json::json!({"items": [{"number": 3, "title": title}]}).to_string(),
+        ),
+        ("POST", "/repos/losos-project/desktop/issues/3/comments") => (
+            201,
+            r#"{"html_url":"https://github.com/losos-project/desktop/issues/3#issuecomment-1"}"#.into(),
+        ),
+        _ => (404, r#"{"message":"Not Found"}"#.into()),
+    }
+    });
+    let target = report::Target {
+        repo: "losos-project/desktop".into(),
+        client_id: "Iv23liExample".into(),
+        login: url.clone(),
+        api: url,
+    };
+    let scratch = Scratch::new("report-again");
+    let said = std::sync::Mutex::new(Vec::new());
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    report::send(&target, &report, &report.body, &scratch.0, &cancel, |p| {
+        said.lock().unwrap().push(p)
+    })
+    .unwrap();
+    assert_eq!(
+        said.into_inner().unwrap()[1],
+        report::Progress::Sent {
+            url: "https://github.com/losos-project/desktop/issues/3#issuecomment-1".into(),
+            existing: true,
+        }
+    );
+    assert_eq!(asked.try_iter().count(), 4);
+}
+
+#[test]
+fn a_declined_sign_in_says_so() {
+    let (url, _asked) = fake_github(|method, path| {
+        match (method, path) {
+        ("POST", "/login/device/code") => (
+            200,
+            r#"{"device_code":"dev","user_code":"WDJB-MJHT","verification_uri":"https://github.com/login/device","interval":0}"#.into(),
+        ),
+        _ => (200, r#"{"error":"access_denied"}"#.into()),
+    }
+    });
+    let target = report::Target {
+        repo: "losos-project/desktop".into(),
+        client_id: "Iv23liExample".into(),
+        login: url.clone(),
+        api: url,
+    };
+    let scratch = Scratch::new("report-declined");
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let report = a_report();
+    let error =
+        report::send(&target, &report, &report.body, &scratch.0, &cancel, |_| {}).unwrap_err();
+    assert!(error.contains("declined"), "{error}");
 }

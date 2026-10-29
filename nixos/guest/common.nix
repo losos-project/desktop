@@ -78,7 +78,6 @@ in
     # loader, because a machine never chooses between generations: a new
     # template makes new machines.
     boot.loader.grub.enable = false;
-    boot.initrd.systemd.enable = true;
     fileSystems."/" = {
       device = "/dev/disk/by-partlabel/${name}";
       fsType = "ext4";

@@ -13,7 +13,14 @@
 //! - `install` runs [`crate::install`] on the disk named, reporting `steps`,
 //!   then a `step` and `line`s as it goes, and ends with `installed` or
 //!   `failed`;
-//! - `reboot` and `power_off` ask systemd.
+//! - `reboot` and `power_off` ask systemd;
+//! - after a failed install, `report` writes up the failure
+//!   ([`crate::report`]) and answers it as a `report` event for derisk to
+//!   show; `report_send` signs in to GitHub and files it, saying
+//!   `report_sign_in` with the code to enter, then `reported` or
+//!   `report_failed`; `report_cancel` stops waiting for the code. `hello`
+//!   names the repository as `report` only when the ISO was given a GitHub
+//!   App to sign in with, and derisk offers none of it otherwise.
 //!
 //! Nothing here decides what lands on the disk, any more than the text
 //! interface this replaced did: repart and sysupdate do, from definitions the
@@ -21,13 +28,15 @@
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use serde_json::{Value, json};
 
 use crate::disks::{self, Disk};
 use crate::install::{self, Plan, Step};
+use crate::report::{self, Failure, Progress, Target};
 
 /// What the backend was started with.
 #[derive(Debug, Clone)]
@@ -54,6 +63,35 @@ pub struct Config {
     pub release_version: Option<String>,
     /// The cadence the ISO was built for; `nightly` when not given.
     pub release_channel: Option<String>,
+    /// The repository failed installs are reported to, `owner/name`; the
+    /// release's when not given.
+    pub report_repo: Option<String>,
+    /// The GitHub App reports are signed in with ([`Target::client_id`]).
+    /// Without one, nothing is offered.
+    pub report_client_id: Option<String>,
+    /// [`Target::login`], `https://github.com` when not given.
+    pub report_login: Option<String>,
+    /// [`Target::api`], `https://api.github.com` when not given.
+    pub report_api: Option<String>,
+}
+
+/// Where failed installs are reported, when the ISO says how.
+pub fn report_target(config: &Config) -> Option<Target> {
+    Some(Target {
+        repo: config
+            .report_repo
+            .clone()
+            .or_else(|| config.release_repo.clone())?,
+        client_id: config.report_client_id.clone()?,
+        login: config
+            .report_login
+            .clone()
+            .unwrap_or_else(|| "https://github.com".to_owned()),
+        api: config
+            .report_api
+            .clone()
+            .unwrap_or_else(|| "https://api.github.com".to_owned()),
+    })
 }
 
 /// The GitHub release an install reads, when the ISO was told both halves.
@@ -84,7 +122,30 @@ pub fn hello(config: &Config) -> Value {
     if let Some(dir) = release(config) {
         hello["release"] = json!(dir.to_string_lossy());
     }
+    if let Some(target) = report_target(config) {
+        hello["report"] = json!(target.repo);
+    }
     hello
+}
+
+/// How the disk list names `disk`, for a report.
+fn describe(disk: &Disk) -> String {
+    let size = disk.size as f64 / 1e9;
+    if disk.model.is_empty() {
+        format!("{}, {size:.1} GB", disk.name)
+    } else {
+        format!("{}, {size:.1} GB", disk.model)
+    }
+}
+
+/// The `report` event: what would be sent, to be shown before it is.
+pub fn report_event(target: &Target, report: &report::Report) -> Value {
+    json!({
+        "event": "report",
+        "repository": target.repo,
+        "title": report.title,
+        "body": report.body,
+    })
 }
 
 pub fn disks_event(disks: &[Disk]) -> Value {
@@ -145,6 +206,10 @@ pub enum Request {
     Install(String),
     Reboot,
     PowerOff,
+    Report,
+    /// With the person's own words to add, which may be empty.
+    ReportSend(String),
+    ReportCancel,
 }
 
 pub fn parse_request(line: &str) -> Result<Request, String> {
@@ -158,12 +223,22 @@ pub fn parse_request(line: &str) -> Result<Request, String> {
             .ok_or_else(|| "install needs a disk under /dev".to_owned()),
         Some("reboot") => Ok(Request::Reboot),
         Some("power_off") => Ok(Request::PowerOff),
+        Some("report") => Ok(Request::Report),
+        Some("report_send") => Ok(Request::ReportSend(
+            value["note"].as_str().unwrap_or_default().to_owned(),
+        )),
+        Some("report_cancel") => Ok(Request::ReportCancel),
         other => Err(format!("unknown method {other:?}")),
     }
 }
 
 fn failed(message: impl Into<String>) -> Value {
     json!({"event": "failed", "message": message.into()})
+}
+
+/// Not `failed`: a report that could not be sent is no failed install.
+fn report_failed(message: impl Into<String>) -> Value {
+    json!({"event": "report_failed", "message": message.into()})
 }
 
 /// The disks that can be installed onto, the medium's own left out, and the
@@ -205,6 +280,10 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
     let _ = events.send(said.clone());
 
     let mut installing: Option<thread::JoinHandle<()>> = None;
+    // What the last install that failed left, for a report.
+    let failure: Arc<Mutex<Option<Failure>>> = Arc::default();
+    let mut written: Option<report::Report> = None;
+    let mut sending: Option<(thread::JoinHandle<()>, Arc<AtomicBool>)> = None;
     for line in input.lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
@@ -241,6 +320,11 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
                     )));
                     continue;
                 }
+                let described = current_disks(config)
+                    .find(|d| d.path == Path::new(&disk))
+                    .map(|d| describe(&d))
+                    .unwrap_or_default();
+                *failure.lock().expect("never poisoned") = None;
                 let plan = Plan {
                     disk: PathBuf::from(disk),
                     repart_definitions: config.repart_definitions.clone(),
@@ -254,14 +338,82 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
                     bios_boot: config.bios_boot.clone(),
                 };
                 let events = events.clone();
-                installing = Some(thread::spawn(move || install_reporting(&plan, &events)));
+                let failure = Arc::clone(&failure);
+                installing = Some(thread::spawn(move || {
+                    install_reporting(&plan, &described, &events, &failure)
+                }));
             }
             Request::Reboot | Request::PowerOff if busy => {
                 let _ = events.send(failed("An install is still running."));
             }
             Request::Reboot => power("reboot", &events),
             Request::PowerOff => power("poweroff", &events),
+            Request::Report => {
+                let last = failure.lock().expect("never poisoned").clone();
+                match (report_target(config), last) {
+                    (None, _) => {
+                        let _ =
+                            events.send(report_failed("This installer does not report problems."));
+                    }
+                    (_, None) => {
+                        let _ = events.send(report_failed("There is no failed install to report."));
+                    }
+                    (Some(target), Some(last)) => {
+                        // The ISO's version is its os-release's: the backend
+                        // is told one only when it installs that exact release.
+                        let os_release =
+                            std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+                        let version = report::os_release_version(&os_release)
+                            .or_else(|| config.release_version.clone())
+                            .unwrap_or_else(|| "unknown version".to_owned());
+                        let release = format!("{version}, {}", std::env::consts::ARCH);
+                        let system = report::System::read(release);
+                        let built = report::build(&last, &system, &report::journal());
+                        let _ = events.send(report_event(&target, &built));
+                        written = Some(built);
+                    }
+                }
+            }
+            Request::ReportSend(_) if sending.as_ref().is_some_and(|(t, _)| !t.is_finished()) => {
+                let _ = events.send(report_failed("The report is already being sent."));
+            }
+            Request::ReportSend(note) => {
+                let (Some(target), Some(built)) = (report_target(config), written.clone()) else {
+                    let _ = events.send(report_failed("Write the report before sending it."));
+                    continue;
+                };
+                let cancel = Arc::new(AtomicBool::new(false));
+                let events = events.clone();
+                let scratch = config.work.join("report");
+                let stop = Arc::clone(&cancel);
+                let thread = thread::spawn(move || {
+                    let tell = |progress| {
+                        let _ = events.send(match progress {
+                            Progress::SignIn { uri, code } => {
+                                json!({"event": "report_sign_in", "uri": uri, "code": code})
+                            }
+                            Progress::Sent { url, existing } => {
+                                json!({"event": "reported", "url": url, "existing": existing})
+                            }
+                        });
+                    };
+                    let body = report::with_note(&built, report::NOTE_HEADING, &note);
+                    if let Err(e) = report::send(&target, &built, &body, &scratch, &stop, tell) {
+                        let _ = events.send(report_failed(e));
+                    }
+                });
+                sending = Some((thread, cancel));
+            }
+            Request::ReportCancel => {
+                if let Some((_, cancel)) = &sending {
+                    cancel.store(true, Ordering::Release);
+                }
+            }
         }
+    }
+    if let Some((t, cancel)) = sending {
+        cancel.store(true, Ordering::Release);
+        let _ = t.join();
     }
     if let Some(t) = installing {
         let _ = t.join();
@@ -270,13 +422,20 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
     let _ = writer.join();
 }
 
-/// Runs the install and turns its events into the protocol's.
-fn install_reporting(plan: &Plan, events: &mpsc::Sender<Value>) {
+/// Runs the install and turns its events into the protocol's, keeping what
+/// a report of a failure would need in `failure`.
+fn install_reporting(
+    plan: &Plan,
+    disk: &str,
+    events: &mpsc::Sender<Value>,
+    failure: &Mutex<Option<Failure>>,
+) {
     let _ = events.send(steps_event());
     let (tx, rx) = mpsc::channel();
     let plan = plan.clone();
     let worker = thread::spawn(move || install::run(&plan, &tx));
     let mut step = Step::Partition;
+    let mut log = std::collections::VecDeque::with_capacity(report::LOG_LINES);
     for event in rx {
         let out = match event {
             install::Event::Step(s) => {
@@ -289,10 +448,28 @@ fn install_reporting(plan: &Plan, events: &mpsc::Sender<Value>) {
                 {
                     let _ = events.send(step_event(step, Some(fraction)));
                 }
+                // A download's progress lines would push out everything
+                // that says why it stopped.
+                if percent(&text).is_none() {
+                    if log.len() == report::LOG_LINES {
+                        log.pop_front();
+                    }
+                    log.push_back(text.clone());
+                }
                 json!({"event": "line", "text": text})
             }
             install::Event::Finished(Ok(())) => json!({"event": "installed"}),
-            install::Event::Finished(Err(e)) => failed(e),
+            install::Event::Finished(Err(e)) => {
+                let index = Step::ALL.iter().position(|s| *s == step).unwrap_or(0);
+                *failure.lock().expect("never poisoned") = Some(Failure {
+                    step: step.title().to_owned(),
+                    position: (index + 1, Step::ALL.len()),
+                    message: e.clone(),
+                    log: std::mem::take(&mut log),
+                    disk: disk.to_owned(),
+                });
+                failed(e)
+            }
         };
         let _ = events.send(out);
     }
