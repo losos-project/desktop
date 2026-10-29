@@ -37,7 +37,8 @@ the gateway in `nixos/guest/tor-gateway.nix`.
   address, `10.152.152.10`.
 - **Names through Tor.** Every DNS query goes to the gateway, where Tor
   resolves it. With the [ad blocker](adblock.md) on, its forwarder still
-  answers blocked names itself and sends the rest to the gateway.
+  answers blocked names itself and sends the rest to the gateway, never to
+  its encrypted DNS resolvers, whatever that setting says.
 - **No identity on the network.** NetworkManager gives every network card a
   random MAC address and sends no host name to the DHCP server. It
   reconnects each link when the mode changes, so the new address takes

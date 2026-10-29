@@ -189,12 +189,17 @@ let
   '';
   nmConf = "/run/NetworkManager/conf.d/90-losos-schizo.conf";
 
-  # The ad blocker's forwarder asks only these servers while the file is
-  # there (losos-adblock's serve.rs). Without it, resolved asks the gateway
-  # itself on its bridge, and its other links' servers are past the kill
-  # switch.
+  # The ad blocker's forwarder asks these servers while the file is there,
+  # and only these, without its encrypted DNS, while `forced` is there too
+  # (losos-adblock's serve.rs): DNS over TLS or HTTPS to one resolver would
+  # leave through the TransPort as one stream, without the DNSPort's
+  # isolation or its .onion names. Both on tmpfs, so a restart clears them
+  # with the person's own encrypted DNS setting untouched. Without the ad
+  # blocker, resolved asks the gateway itself on its bridge, and its other
+  # links' servers are past the kill switch.
   adblock = config.losos.adblock.enable;
   upstreams = "/run/losos-adblock/upstreams";
+  forced = "/run/losos-adblock/upstreams-forced";
 
   # Port 53 on the gateway's address is redirected to Tor's DNSPort there.
   dnsOn =
@@ -202,6 +207,7 @@ let
       ''
         mkdir -p "$(dirname ${upstreams})"
         echo "nameserver ${inside.gateway}" > ${upstreams}
+        touch ${forced}
         systemctl try-restart losos-adblock.service
       ''
     else
@@ -214,7 +220,7 @@ let
   dnsOff =
     if adblock then
       ''
-        rm -f ${upstreams}
+        rm -f ${upstreams} ${forced}
         systemctl try-restart losos-adblock.service
       ''
     else
