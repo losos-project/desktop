@@ -361,10 +361,13 @@ in
         # Authelia watches the file and reads it again on its own.
         box.sleep(3)
 
-    start_all()
+    # One after the other: two machines booting at once without KVM can
+    # take longer than the driver waits for a machine's shell.
+    box.start()
     box.wait_for_unit("nginx.service")
     box.wait_for_unit("authelia-losos.service")
     box.wait_until_succeeds("curl -skf https://${boxName}/auth/api/health")
+    desktop.start()
     desktop.wait_for_unit("multi-user.target")
     desktop.wait_for_unit("systemd-homed.service")
     desktop.wait_for_unit("losos-login-bridge.socket")
@@ -438,7 +441,13 @@ in
         assert ok, out
         assert "previous password" in out, out
         desktop.succeed("PASSWORD=${bobNewPassword} homectl authenticate --no-ask-password bob")
-        desktop.fail("PASSWORD=${bobPassword} homectl authenticate --no-ask-password bob")
+        # homectl asks again on its terminal after a refused password, even
+        # with --no-ask-password, and that prompt would land in the test's
+        # own shell; so the old one runs with no terminal and a time limit.
+        desktop.fail(
+            "PASSWORD=${bobPassword} setsid -w timeout 60"
+            " homectl authenticate --no-ask-password bob </dev/null >/dev/null 2>&1"
+        )
         # And the next login goes straight through.
         ok, out = pam("bob", "${bobNewPassword}")
         assert ok and "previous password" not in out, out
@@ -482,22 +491,22 @@ in
         reports = ci_job(
             "1",
             {"uses": "losos/desktop-status", "with": {}, "name": "Status"},
-            {"uses": "losos/desktop-lock", "with": {"user": "carol"}, "name": "Lock carol"},
+            {"uses": "losos/desktop-lock", "with": {"user": "ada"}, "name": "Lock ada"},
         )
         assert reports[-1]["state"] == "success", reports
         log = "".join(r["log"] for r in reports)
         assert "Company account ada" in log, log
-        assert "carol is locked" in log, log
-        assert record("carol").get("locked") is True, record("carol")
+        assert "ada is locked" in log, log
+        assert record("ada").get("locked") is True, record("ada")
 
         # A step outside the list: nothing of the job runs.
         reports = ci_job(
             "2",
-            {"uses": "losos/desktop-unlock", "with": {"user": "carol"}},
+            {"uses": "losos/desktop-unlock", "with": {"user": "ada"}},
             {"uses": "losos/desktop-shell", "with": {}},
         )
         assert reports[-1]["state"] == "error", reports
-        assert record("carol").get("locked") is True, record("carol")
+        assert record("ada").get("locked") is True, record("ada")
 
         # Nor does it touch an account that is not the company's.
         desktop.succeed(
@@ -507,9 +516,9 @@ in
         assert reports[-1]["state"] == "failure", reports
         assert record("local").get("locked") is not True, record("local")
 
-        reports = ci_job("4", {"uses": "losos/desktop-unlock", "with": {"user": "carol"}})
+        reports = ci_job("4", {"uses": "losos/desktop-unlock", "with": {"user": "ada"}})
         assert reports[-1]["state"] == "success", reports
-        assert record("carol").get("locked") is not True, record("carol")
+        assert record("ada").get("locked") is not True, record("ada")
 
     with subtest("local accounts are not the bridge's"):
         box.block()

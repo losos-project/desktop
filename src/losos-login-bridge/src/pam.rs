@@ -143,6 +143,19 @@ pub fn decide(
         ask(joined, &user, &password, &mut code)
     };
     match (outcome, record) {
+        // Locked between logins because the box no longer lists them
+        // (`crate::sync`). homed checks the lock only in PAM's account
+        // step, which not every program runs, so it is refused here too.
+        (Outcome::Unreachable(_), Some(record)) if record.locked => {
+            conv.tell(
+                &format!(
+                    "{user} is locked on this computer. LosOS Login at {} has to let them in again.",
+                    joined.host
+                ),
+                true,
+            );
+            Decision::Refused
+        }
         (Outcome::Unreachable(why), Some(_)) => {
             tracing::info!(%user, %why, "LosOS Login is out of reach; homed decides");
             Decision::StepAside
@@ -532,6 +545,33 @@ mod tests {
             Decision::Unavailable
         );
         assert!(screen.told[0].contains("cannot reach LosOS Login at mattbox.local"));
+    }
+
+    #[test]
+    fn someone_locked_between_logins_stays_out_while_the_box_is_away() {
+        let j = joined();
+        let mut screen = Screen {
+            user: "ada",
+            ..Screen::default()
+        };
+        let Known::Home(mut record) = home(Some("office")) else {
+            unreachable!()
+        };
+        record.locked = true;
+        let locked = FakeHomes {
+            known: Some(Known::Home(record)),
+            password: "new-secret",
+            ..FakeHomes::default()
+        };
+        let away = Outcome::Unreachable("no route to host".into());
+        assert_eq!(run(Some(&j), &mut screen, &locked, away), Decision::Refused);
+        assert!(screen.told[0].contains("ada is locked on this computer"));
+        // Back in reach, the box decides, and updating the record unlocks it.
+        assert_eq!(
+            run(Some(&j), &mut screen, &locked, Outcome::Accepted(ada())),
+            Decision::Ready
+        );
+        assert_eq!(*locked.done.borrow(), ["update ada"]);
     }
 
     #[test]
