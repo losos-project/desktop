@@ -86,6 +86,8 @@ in
   pm-plugins = callWithMold ./pm-plugins.nix { };
   derisk = callWithMold ./derisk.nix { };
   losos-installer = callWithMold ./losos-installer.nix { };
+  # Reports a problem on the desktop as a GitHub issue (docs/reporting.md).
+  losos-report = callWithMold ./losos-report.nix { };
   losos-security = callWithMold ./losos-security.nix { };
   losos-hardware = callWithMold ./losos-hardware.nix { };
   # The Windows installer's Linux build, for its tests and for installing
