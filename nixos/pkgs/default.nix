@@ -166,6 +166,25 @@ in
   # and failed there in test-collection when the test's D-Bus service
   # dropped off the bus. nixpkgs' library is the same and substitutes.
   libsecret = plain.libsecret;
+  # xdg-desktop-portal links flatpak and geoclue, which reach the patched
+  # GTK, so it compiles wherever the release builds and runs its tests
+  # there. Its icon and sound tests run the validators inside bwrap, which
+  # needs the build user to make user namespaces, and a host that refuses
+  # them (Ubuntu 24.04's AppArmor, a kernel without them) fails eight
+  # notification tests and the dynamic launcher's. Upstream's own switches
+  # for builds where bwrap cannot work turn the sandbox off for the tests
+  # alone (tests/README.md, XDP_VALIDATE_ICON_INSECURE); they are set only
+  # when bwrap cannot make the validators' namespaces here, so CI, which
+  # allows them, still tests the sandboxed validators the image runs.
+  xdg-desktop-portal = prev.xdg-desktop-portal.overrideAttrs (old: {
+    preCheck = old.preCheck + ''
+      if ! ${final.lib.getExe final.bubblewrap} --unshare-ipc --unshare-net \
+        --unshare-pid --dev-bind / / true; then
+        echo "bwrap cannot sandbox in this build: testing the validators unsandboxed"
+        export XDP_VALIDATE_ICON_INSECURE=1 XDP_VALIDATE_SOUND_INSECURE=1
+      fi
+    '';
+  });
   danube = callWithMold ./danube.nix { };
   # The system-wide ad blocker (docs/adblock.md).
   losos-adblock = callWithMold ./losos-adblock.nix { };
