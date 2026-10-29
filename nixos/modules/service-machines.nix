@@ -53,7 +53,13 @@ let
         guest = system name machine;
       in
       {
-        kernel = "${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}";
+        # The image's kernel image, which carries the certificate of every
+        # module (kernel-hardening.nix); the plain build would load none.
+        # The guest's kernel package is the host's, so its modules are ones
+        # that image trusts.
+        kernel =
+          config.system.build.kernelImage
+            or "${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}";
         initrd = "${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}";
         cmdline = "init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}";
       };
