@@ -279,8 +279,9 @@
   to unlock it, so the first `losos` command that stores a key or token asks
   for a keyring password in a window of the machine. Nothing makes the
   machine automatically either, and its owner makes it from the template.
-  Neither half has met a real box on a real LAN yet, only a box that the
-  machines test boots beside the host.
+  The machine itself has not met a real box on a real LAN yet: the machines
+  test boots a stand-in box beside the host, and the real box in
+  `nixos/tests/losos-box.nix` is found by a desktop with no machine.
 - **Backups to a LosOS box keep one copy and need a password sign-in.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A
@@ -292,6 +293,7 @@
   Nextcloud cannot hold, are left out. A box with HTTPS turned off through
   `losos.tls.enable` cannot be backed up to. Only an administrator's run can
   start a stopped LosOS boxes machine. Backups run once a day, with no
-  setting to change that. They have run against Nextcloud and Forgejo laid
-  out the way a box lays them out, not against a real box. See
+  setting to change that. Against a real box only LosOS cloud works so far:
+  LosOS Git takes no passwords, so the repositories go to LosOS cloud as
+  files. See
   [Backups to a LosOS box](backup.md).

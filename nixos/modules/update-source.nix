@@ -188,7 +188,7 @@ in
     index = mkOption {
       type = types.nullOr types.str;
       default = null;
-      example = "https://losos-project.github.io/losos-desktop/updates/{channel}/x86_64/index";
+      example = "https://losos-project.github.io/desktop/updates/{channel}/x86_64/index";
       description = ''
         Each channel's index on the documentation site, which names the
         GitHub release assets each file is made of, with `{channel}` where
