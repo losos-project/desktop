@@ -141,6 +141,9 @@ in
       inherit cid;
       # No network card: nothing it reads can reach anything but the host.
       interfaces = [ ];
+      # A drive on one of the host's own ports, which the router hands it
+      # as it is (peripherals.nix).
+      xhci = true;
       # Off when idle, until the next drive (the machine's own choice).
       whenStopped = "stop";
       passthrough.pciClasses = [ "0x0805" ];

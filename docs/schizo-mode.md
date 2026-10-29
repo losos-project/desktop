@@ -37,7 +37,8 @@ the gateway in `nixos/guest/tor-gateway.nix`.
   address, `10.152.152.10`.
 - **Names through Tor.** Every DNS query goes to the gateway, where Tor
   resolves it. With the [ad blocker](adblock.md) on, its forwarder still
-  answers blocked names itself and sends the rest to the gateway.
+  answers blocked names itself and sends the rest to the gateway, never to
+  its encrypted DNS resolvers, whatever that setting says.
 - **No identity on the network.** NetworkManager gives every network card a
   random MAC address and sends no host name to the DHCP server. It
   reconnects each link when the mode changes, so the new address takes
@@ -162,7 +163,9 @@ verified image:
 - Its disabled kernel modules: rare network protocols and file systems,
   network file systems, FireWire, Thunderbolt and GPS. A machine that needs
   one back lists it in `losos.service.kicksecure.allowModules`.
-- No SUID programs and no sudo, and root is locked.
+- No SUID programs but `unix_chkpwd`, which PAM needs to start a person's
+  session, no sudo, and root is locked. A machine that needs another SUID
+  program lists it in `losos.service.kicksecure.wrappers`.
 
 The gateway is therefore what Whonix's Gateway is: Kicksecure with Tor.
 The settings are kept as data in `nixos/guest/kicksecure-settings.nix`, so

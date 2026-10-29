@@ -231,6 +231,7 @@ let
     run losos-vm-call serve ${toString addresses.ports.edgeStatus} losos-netd edge status
     run losos-vm-call serve ${toString addresses.ports.edgeChain} losos-netd edge chain
     run losos-adblock --state /var/lib/losos-adblock serve --listen ${up.machine}:53
+    run losos-peripherals receiver
   '';
 in
 {
@@ -259,6 +260,8 @@ in
         pkgs.iproute2
         # The edge's tunnel (edge-exit.nix): its key and its peer.
         pkgs.wireguard-tools
+        # USB network cards from sys-usb, over USB/IP (peripherals.nix).
+        pkgs.losos-peripherals
       ];
       # The rest load from the host's tree as they are needed.
       modules = [
@@ -266,6 +269,7 @@ in
         "virtio_blk"
         "virtio_balloon"
         "ext4"
+        "vhci_hcd"
       ];
       shares = [
         # The ad blocker's compiled list, which the host keeps fetching

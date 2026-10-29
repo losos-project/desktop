@@ -28,6 +28,16 @@
 let
   libvirt = config.virtualisation.libvirtd.package;
   stateDir = name: "/var/lib/losos-service-machines/${name}";
+  # The same UUID at every definition: libvirt takes a definition without
+  # one as a new domain, and refuses it while the old one of that name
+  # exists, so a machine that stopped could never be defined again.
+  uuid =
+    name:
+    let
+      h = builtins.hashString "sha256" "losos-service-machine-${name}";
+      p = start: len: builtins.substring start len h;
+    in
+    "${p 0 8}-${p 8 4}-${p 12 4}-${p 16 4}-${p 20 12}";
   runDir = name: "/run/losos-service-machines/${name}";
 
   system =
@@ -79,6 +89,7 @@ let
     pkgs.writeText "${name}.xml" ''
       <domain type='@TYPE@'>
         <name>${name}</name>
+        <uuid>${uuid name}</uuid>
         <title>${machine.title}</title>
         <metadata>
           <pm:machine xmlns:pm='https://losos-project.github.io/xmlns/pm-machine/1'>
@@ -87,7 +98,13 @@ let
           </pm:machine>
         </metadata>
         <memory unit='MiB'>${toString machine.memory}</memory>
-        <vcpu>${toString machine.cpus}</vcpu>
+        <vcpu>${toString machine.cpus}</vcpu>${lib.optionalString machine.sharedMemory ''
+
+          <!-- virtiofs' daemon reads and writes the machine's memory. -->
+          <memoryBacking>
+            <source type='memfd'/>
+            <access mode='shared'/>
+          </memoryBacking>''}
         <os>
           <type arch='${pkgs.stdenv.hostPlatform.qemuArch}' machine='${
             if pkgs.stdenv.hostPlatform.isx86 then "q35" else "virt"
@@ -151,10 +168,8 @@ let
             <!-- Kept after the machine is gone, to read why it went. -->
             <log file='/var/log/libvirt/qemu/${name}-console.log' append='off'/>
             <target port='0'/>
-            <log file='/var/log/libvirt/qemu/${name}-console.log' append='off'/>
           </serial>
           <console type='pty'/>
-          <memballoon model='virtio' freePageReporting='on'/>
           <rng model='virtio'>
             <backend model='random'>/dev/urandom</backend>
           </rng>
@@ -283,6 +298,15 @@ in
             description = ''
               The losos.busyboxGuests machine it boots instead of a NixOS
               system, whose shares it is given; `module` is unused then.
+            '';
+          };
+          sharedMemory = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Whether its memory is shared with the host's processes, which
+              virtiofs needs: for a machine handed host directories over
+              virtiofs among the devices its unit is started with.
             '';
           };
           xhci = lib.mkOption {
