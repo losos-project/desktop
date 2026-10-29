@@ -25,7 +25,13 @@
 }:
 
 let
-  kernelFile = "${config.boot.kernelPackages.kernel}/${config.system.boot.loader.kernelFile}";
+  # The image with every module's certificate in it (kernel-hardening.nix),
+  # since the plain build trusts none and a machine's /init would load no
+  # module from the host's tree. The plain build only where nothing makes
+  # that image.
+  kernelFile =
+    config.system.build.kernelImage
+      or "${config.boot.kernelPackages.kernel}/${config.system.boot.loader.kernelFile}";
 
   # The console QEMU's machine type has as its first serial port.
   console = if pkgs.stdenv.hostPlatform.isx86 then "ttyS0" else "ttyAMA0";
