@@ -67,6 +67,12 @@
     ];
     boot.kernelParams = [
       (if pkgs.stdenv.hostPlatform.isAarch64 then "console=ttyAMA0" else "console=ttyS0")
+      # A machine emulated without KVM, as in a host that is itself a VM or
+      # in the VM tests, boots many times slower with Kicksecure's
+      # mitigations (kicksecure.nix), and its state disk can take longer
+      # than systemd's 90 seconds to appear; giving up then leaves it in
+      # emergency mode for good. Under KVM it appears in moments.
+      "systemd.default_device_timeout_sec=900"
     ];
 
     fileSystems = {

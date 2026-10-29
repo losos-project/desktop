@@ -263,6 +263,7 @@
           "losos-filesd"
           "losos-portal"
           "losos-agent-machine"
+          "losos-edge-chain"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {

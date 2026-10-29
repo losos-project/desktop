@@ -349,3 +349,8 @@
   setting to change that. They have run against Nextcloud and Forgejo laid
   out the way a box lays them out, not against a real box. See
   [Backups to a LosOS box](backup.md).
+- **Names through the edge in schizo mode.** With an edge set, schizo mode
+  sends its connections out from the edge, but Tor's exits still look up
+  the names. The edge's SOCKS exit could take the name itself, but the
+  chain only sees the address a program connected to, not the name it
+  looked up ([Schizo mode](schizo-mode.md), "Through an edge").

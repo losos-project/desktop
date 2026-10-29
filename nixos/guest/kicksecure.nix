@@ -4,12 +4,13 @@
 # updates with the OS. Whonix's Gateway is Kicksecure with Tor, and so is
 # schizo mode's (tor-gateway.nix).
 #
-# Kicksecure's other half is about people signing in, which nobody does
-# here: no SUID programs (its permission-hardener), a locked root and a
-# 027 umask. Each is set below as far as a NixOS machine has it.
+# Kicksecure's other half is about people's sessions, which few service
+# machines have: no SUID programs but PAM's (its permission-hardener), a locked
+# root and a 027 umask. Each is set below as far as a NixOS machine has it.
 #
-# Every setting gives way to a machine's own module, which sets it plainly;
-# one that needs a disabled kernel module back lists it in allowModules.
+# Every setting gives way to a machine's own module, which sets it plainly,
+# except two lists: a machine that needs a disabled kernel module back
+# names it in allowModules, and one that needs a SUID program in wrappers.
 {
   config,
   lib,
@@ -39,6 +40,18 @@ in
       example = [ "udf" ];
       description = "Kernel modules Kicksecure disables that this machine needs.";
     };
+    wrappers = lib.mkOption {
+      type = lib.types.attrsOf lib.types.attrs;
+      default = { };
+      example = lib.literalExpression ''
+        { fusermount3 = { setuid = true; owner = "root"; group = "root"; source = "''${pkgs.fuse3}/bin/fusermount3"; }; }
+      '';
+      description = ''
+        SUID or SGID programs this machine needs besides unix_chkpwd, in
+        security.wrappers' form; every other wrapper NixOS would make is
+        left out.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -60,10 +73,23 @@ in
     ) disabled;
     boot.blacklistedKernelModules = lib.subtractLists cfg.allowModules settings.blacklistedModules;
 
-    # No SUID or SGID program at all, where Kicksecure's permission-hardener
-    # strips the bit from a list of them: nothing here runs as a person who
-    # would need one.
-    security.enableWrappers = lib.mkDefault false;
+    # No SUID or SGID program but unix_chkpwd, as Kicksecure's
+    # permission-hardener strips the bit from everything outside its list.
+    # unix_chkpwd stays, as on Kicksecure, because PAM's account check
+    # needs it to start a lingering user's systemd, which a machine with a
+    # person's session (agent.nix) has. Forced, so the wrappers other
+    # NixOS modules add are dropped; a machine adds its own in `wrappers`.
+    security.wrappers = lib.mkForce (
+      {
+        unix_chkpwd = {
+          setuid = true;
+          owner = "root";
+          group = "root";
+          source = "${config.security.pam.package}/bin/unix_chkpwd";
+        };
+      }
+      // cfg.wrappers
+    );
     security.sudo.enable = lib.mkDefault false;
     # Root has no password already: sysusers (service.nix) makes it locked.
     security.loginDefs.settings.UMASK = lib.mkDefault "027";
