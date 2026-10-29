@@ -125,12 +125,14 @@ in
               echo "no driver for $id" >&2
               exit 1
             fi
-            lpadmin -p printer -E -v "$uri" -m "$model"
+            # Its maker and model, as the host shows it.
+            field() { printf '%s' "$id" | tr ';' '\n' | sed -n "s/^$1://p" | head -n 1; }
+            lpadmin -p printer -D "$(field MFG) $(field MDL)" -E -v "$uri" -m "$model"
             echo "$id, with $model"
             exit 0
           fi
         fi
-        sleep 1
+        sleep 2
       done
     '';
   };

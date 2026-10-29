@@ -460,7 +460,7 @@ in
         name=''${sock##*/}
         lpstat -p "$name" >/dev/null 2>&1 && continue
         desc=$(lpoptions -h "$sock" -p printer 2>/dev/null |
-          grep -o "printer-make-and-model='[^']*'" | cut -d "'" -f 2 |
+          grep -o "printer-info='[^']*'" | cut -d "'" -f 2 |
           tr -cd '[:alnum:] ._()-' | cut -c 1-60)
         lpadmin -p "$name" -D "''${desc:-USB printer}" -E \
           -v "ipp://$(printf %s "$sock" | sed 's|/|%2F|g')/printers/printer" -m everywhere

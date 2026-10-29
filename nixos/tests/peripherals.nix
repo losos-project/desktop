@@ -285,7 +285,7 @@ in
           # of the host's, saying it takes PostScript; what it is sent comes
           # out of /dev/g_printer0.
           machine.succeed("modprobe dummy_hcd")
-          machine.succeed("modprobe g_printer pnp_string='MFG:LosOS;MDL:Test Printer;CMD:POSTSCRIPT;CLS:PRINTER;'")
+          machine.succeed("modprobe g_printer iPNPstring='MFG:LosOS;MDL:Test Printer;CMD:POSTSCRIPT;CLS:PRINTER;'")
           wait(lambda ds: any(d["route"] == "printer" and d["attached"] for d in ds), "the printer")
           dom = f"$({virsh} list --name | grep '^disposable-')"
           machine.succeed(f"{virsh} dumpxml {dom} | grep -q \"<title>A printer's disposable machine</title>\"")
@@ -299,6 +299,8 @@ in
           queue = machine.succeed("lpstat -v | sed -n 's/^device for \\([^:]*\\): .*/\\1/p'").strip()
           machine.succeed(f"su - alice -c 'lp -d {queue} /etc/os-release'")
           retry(lambda _: machine.execute("head -c 2 /tmp/printed | grep -q '%!'")[0] == 0, 900)
+          # Named for the printer, from the machine.
+          machine.succeed(f"lpstat -l -p {queue} | grep -q 'Description: LosOS Test Printer'")
           show("printer-in-disposable")
           machine.succeed("rmmod g_printer")
           retry(lambda _: machine.execute(f"{virsh} list --name | grep -q '^disposable-'")[0] != 0, 300)
