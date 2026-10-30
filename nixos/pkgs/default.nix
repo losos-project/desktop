@@ -90,6 +90,15 @@ in
   losos-report = callWithMold ./losos-report.nix { };
   losos-security = callWithMold ./losos-security.nix { };
   losos-hardware = callWithMold ./losos-hardware.nix { };
+  # Peripherals in machines of their own: the host's router and the
+  # machines' halves (docs/peripherals.md).
+  losos-peripherals = callWithMold ./losos-peripherals.nix { };
+  # The gaming machine: a Windows machine with a graphics card of its own
+  # (docs/gaming-machine.md).
+  losos-gaming = callWithMold ./losos-gaming.nix { };
+  # Focus mode: background work waits while a game or an editor runs
+  # (docs/focus-mode.md).
+  losos-focus = callWithMold ./losos-focus.nix { };
   # The Windows installer's Linux build, for its tests and for installing
   # into a disk image; the .exe is windows-installer.nix's.
   losos-windows-installer = callWithMold ./losos-windows-installer.nix { };
@@ -99,6 +108,22 @@ in
   losos = callWithMold ./losos.nix { };
   # Finds those boxes over mDNS and offers each one as an application.
   losos-boxes = callWithMold ./losos-boxes.nix { };
+  # The Agent's machine's channels to the desktop, both ends (docs/agent.md).
+  losos-agent-machine = callWithMold ./losos-agent-machine.nix { };
+  # The host's way into its service machines: `nmcli` on the host runs in
+  # the network machine (docs/network-machine.md).
+  losos-vm-call = callWithMold ./losos-vm-call.nix { };
+  # The network machine's init and daemon, in place of NetworkManager there.
+  losos-netd = callWithMold ./losos-netd.nix { };
+  # The files machine's init and daemon: the storage it is given, mounted
+  # there and served to the host (docs/files-machine.md).
+  losos-filesd = callWithMold ./losos-filesd.nix { };
+  # sys-vpn's program (docs/vpn.md): the providers, the check of their
+  # WireGuard files on the host, and the tunnel in the machine.
+  losos-vpn = callWithMold ./losos-vpn.nix { };
+  # The portals' dialogs in a machine of their own, sys-portal, for the
+  # host's apps and every machine's (docs/portal-machine.md).
+  losos-portal = callWithMold ./losos-portal.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.
@@ -106,6 +131,9 @@ in
   # A guest's apps and windows on the desktop, from macOS's app server or
   # any other that speaks its protocol (docs/app-windows.md).
   app-windows = callWithMold ./app-windows.nix { };
+  # Schizo mode's way out through the person's LosOS edge: in the Tor
+  # gateway, each connection over Tor to the edge's onion exit.
+  losos-edge-chain = callWithMold ./losos-edge-chain.nix { };
   # macOS app support (macos-apps.nix): macOS in dockur/macos on a Mac, and
   # its windows through app-windows.
   macos-app-support = final.callPackage ./macos-app-support.nix { };

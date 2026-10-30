@@ -15,6 +15,10 @@ module.exports = {
       items: [
         'systemd',
         'hypervisor',
+        'peripherals',
+        'network-machine',
+        'files-machine',
+        'portal-machine',
         'layout',
         'hibernation',
         'drivers',
@@ -30,6 +34,7 @@ module.exports = {
         'security-report',
         'kernel-hardening',
         'schizo-mode',
+        'vpn',
       ],
     },
     {
@@ -48,6 +53,8 @@ module.exports = {
         'choice-screens',
         'losos-boxes',
         'windows-apps',
+        'gaming-machine',
+        'focus-mode',
         'android-apps',
         'macos-apps',
         'macos-arm64',

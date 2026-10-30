@@ -248,6 +248,9 @@
           "losos-installer"
           "losos-report"
           "losos-hardware"
+          "losos-peripherals"
+          "losos-gaming"
+          "losos-focus"
           "losos-security"
           "losos-swap"
           "losos-windows-installer"
@@ -257,6 +260,12 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-vm-call"
+          "losos-netd"
+          "losos-filesd"
+          "losos-portal"
+          "losos-agent-machine"
+          "losos-edge-chain"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -297,10 +306,33 @@
           # LosOS boxes, one announcing _losos._tcp and one from before
           # that, found over mDNS and offered as applications (losos-boxes.nix).
           losos-boxes = pkgs.testers.runNixOSTest ./nixos/tests/losos-boxes.nix;
+          # A real LosOS box, from the commit the losos client is pinned to,
+          # beside the desktop: found by its announcement, signed in to with
+          # losos, and backed up to (losos-box.nix).
+          losos-box = pkgs.testers.runNixOSTest ./nixos/tests/losos-box.nix;
           # pm makes a machine from the guest template, which boots, lists its
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # USB devices plugged into sys-usb's controller wake it and reach
+          # their machines, over and over, and it sleeps again once they are
+          # gone (peripherals.nix).
+          peripherals = pkgs.testers.runNixOSTest ./nixos/tests/peripherals.nix;
+          # The network and files machines under load: connections, downloads
+          # and DNS through the network machine, nmcli through losos-vm-call,
+          # schizo mode cutting the host off, the machine destroyed and
+          # started again; drives copied to and ejected from the files
+          # machine, which powers off when idle (service-machines.nix).
+          service-machines = pkgs.testers.runNixOSTest ./nixos/tests/service-machines.nix;
+          # The portal machine: a host app's request starts it, an app in
+          # another machine gets a copy of the file picked for it and saves
+          # it back to the host, and it stops when idle (portal-machine.nix).
+          portal-machine = pkgs.testers.runNixOSTest ./nixos/tests/portal-machine.nix;
+          # Opening the Agent starts the person's own machine, whose window
+          # reaches the host from its address, whose home is its own
+          # encrypted disk, kept across starts, and whose tools channel their
+          # session answers (agent.nix).
+          agent-machine = pkgs.testers.runNixOSTest ./nixos/tests/agent-machine.nix;
           # Schizo mode: the kill switch before the network, the host's,
           # its names' and a machine's connections through the Tor gateway
           # to a Tor network of the test's own, and nothing out with the
@@ -318,6 +350,15 @@
           # pm and its podman plugin, and none of either for root
           # (windows-apps.nix).
           windows-apps = pkgs.testers.runNixOSTest ./nixos/tests/windows-apps.nix;
+          # The gaming machine without a card to give it: the card refused
+          # for want of an IOMMU, a boot that carries on, and a definition
+          # libvirt's schema accepts with nothing on it that says virtual
+          # machine (gaming.nix).
+          gaming = pkgs.testers.runNixOSTest ./nixos/tests/gaming.nix;
+          # Focus mode as a game turns it on: gamemoderun in a session freezes
+          # the background slices and stops what focus stops, and the game
+          # exiting or its player logging out undoes it (focus.nix).
+          focus = pkgs.testers.runNixOSTest ./nixos/tests/focus.nix;
           installer-boot = pkgs.testers.runNixOSTest (
             import ./nixos/tests/installer-boot.nix { inherit self; }
           );

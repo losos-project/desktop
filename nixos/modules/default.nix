@@ -17,6 +17,19 @@
     ./machines.nix
     ./service-machines.nix
     ./schizo.nix
+    ./busybox-guests.nix
+    ./busybox-host-kernel.nix
+    ./passthrough.nix
+    ./gaming.nix
+    ./vm-call.nix
+    ./network-machine.nix
+    ./edge-exit.nix
+    ./vpn.nix
+    ./files-machine.nix
+    ./shares-machine.nix
+    ./peripherals.nix
+    ./portal-backend.nix
+    ./portal-machine.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix

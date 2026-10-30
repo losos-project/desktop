@@ -37,7 +37,8 @@ the gateway in `nixos/guest/tor-gateway.nix`.
   address, `10.152.152.10`.
 - **Names through Tor.** Every DNS query goes to the gateway, where Tor
   resolves it. With the [ad blocker](adblock.md) on, its forwarder still
-  answers blocked names itself and sends the rest to the gateway.
+  answers blocked names itself and sends the rest to the gateway, never to
+  its encrypted DNS resolvers, whatever that setting says.
 - **No identity on the network.** NetworkManager gives every network card a
   random MAC address and sends no host name to the DHCP server. It
   reconnects each link when the mode changes, so the new address takes
@@ -80,6 +81,49 @@ The gateway's state is a 256 MiB disk under
 `/var/lib/losos-service-machines/losos-tor-gateway`. It keeps Tor's guards,
 which Tor picks once and keeps for months, so a person is not handed a new,
 maybe hostile, entry relay on every boot.
+
+## Through an edge
+
+When the PC has a LosOS edge, schizo mode sends its connections out from
+that edge instead of from a Tor exit. The edge is chosen the same way as
+everywhere else in LosOS, and sites see the edge's address rather than a
+Tor exit's. The edge is reached over Tor, at its onion address, so the
+network the PC is on still sees only Tor. The edge sees connections coming
+out of Tor, never the PC's own address.
+
+```
+apps → gateway → Tor → the edge's onion service → edge → the internet
+```
+
+The edge's onion address and the credentials it accepts come with the
+PC's enrolment, so the PC never has to ask the edge for them in the clear.
+While an edge is set, the host keeps them in
+`/run/losos-schizo/edge/edge.json`, readable only by root. The gateway
+sees that one directory of the host's, read-only, at `/run/losos-edge`.
+Every two seconds it checks whether the file is there:
+
+- **The file is there.** Every TCP connection from the inside goes to
+  `losos-edge-chain` on `10.152.152.10:9041` instead of Tor's TransPort.
+  The chain dials Tor's SOCKS port and reaches the edge's onion. It then
+  asks the edge to open the connection the program meant to make.
+- **The file is gone.** TCP goes to the TransPort as before.
+
+The chain reads the file for every connection. A connection to an onion
+always stays on Tor's TransPort and never goes through the edge.
+
+Streams stay as separate as Tor's own ports keep them. The chain gives Tor
+a SOCKS username for each client and destination port, so different
+programs and different services do not share a circuit.
+
+It fails closed in the same way as the rest of the mode. Once an edge was
+set, or one was found on the local network while the mode was on, the file
+stays even when the edge cannot be reached. Connections then fail rather
+than leaving through a Tor exit. Only a PC that never had an edge goes
+straight out through Tor. `losos-schizo status` prints `edge=set` or
+`edge=none`.
+
+Names are still looked up through Tor's DNSPort, by Tor's exits, not by
+the edge.
 
 ## Service machines
 
