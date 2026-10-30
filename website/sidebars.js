@@ -52,6 +52,7 @@ module.exports = {
         'macos-arm64',
         'app-windows',
         'backup',
+        'screenshots',
       ],
     },
     {
