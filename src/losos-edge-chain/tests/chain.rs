@@ -1,6 +1,7 @@
 //! The two handshakes against a stand-in for Tor and the edge's exit on one
 //! stream, as they meet over a real onion circuit, and the bytes after them.
 
+use std::env;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::thread;
@@ -43,8 +44,11 @@ fn accept(s: &mut TcpStream) -> (String, String, Vec<u8>) {
 
 #[test]
 fn a_connection_reaches_its_address_through_tor_and_the_edge() {
+    let edge_password =
+        env::var("LOSOS_TEST_EDGE_PASSWORD").unwrap_or_else(|_| "test-password".to_string());
     let tor = TcpListener::bind("127.0.0.1:0").unwrap();
     let tor_addr = tor.local_addr().unwrap();
+    let expected_edge_password = edge_password.clone();
     let server = thread::spawn(move || {
         let (mut s, _) = tor.accept().unwrap();
         // Tor: isolated by the client and the port, asked for the onion.
@@ -54,7 +58,7 @@ fn a_connection_reaches_its_address_through_tor_and_the_edge() {
         // The edge's exit, at the far end of the circuit: its own
         // credentials, asked for the real address.
         let (user, pass, addr) = accept(&mut s);
-        assert_eq!((user.as_str(), pass.as_str()), ("desk-1", "s3cret"));
+        assert_eq!((user.as_str(), pass.as_str()), ("desk-1", expected_edge_password.as_str()));
         assert_eq!(addr, [93, 184, 215, 14, 1, 187]);
         // The site: echoes what it gets, upper-cased.
         let mut got = [0u8; 5];
@@ -66,7 +70,7 @@ fn a_connection_reaches_its_address_through_tor_and_the_edge() {
         onion: ONION.into(),
         port: 1080,
         username: "desk-1".into(),
-        password: "s3cret".into(),
+        password: edge_password,
     };
     let client: IpAddr = "10.152.152.11".parse().unwrap();
     let dst: SocketAddr = "93.184.215.14:443".parse().unwrap();
