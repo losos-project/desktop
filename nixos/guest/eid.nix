@@ -54,6 +54,16 @@ let
       losos-eid-fetch "$dir"
       exec losos-eid-env "$dir/app/AppRun" "$@"
     '';
+      pkgs.curl
+      pkgs.gnutar
+      pkgs.gzip
+      pkgs.squashfsTools
+      pkgs.binutils
+      pkgs.gawk
+      pkgs.findutils
+      pkgs.coreutils
+    ];
+    text = builtins.readFile ./losos-eid.sh;
   };
 in
 lib.mkIf pkgs.stdenv.hostPlatform.isx86_64 {

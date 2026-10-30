@@ -162,18 +162,17 @@ fn guest_options(args: &[String]) -> Result<GuestOptions> {
         host_cid: VMADDR_CID_HOST,
         serve: Vec::new(),
         localhost: Ipv4Addr::LOCALHOST,
-        cards_only: false,
     };
     let mut args = args.iter();
     while let Some(flag) = args.next() {
-        if flag == "--cards-only" {
-            options.cards_only = true;
-            continue;
-        }
         let value = args.next().ok_or_else(|| miette!("{flag} needs a value"))?;
         match flag.as_str() {
             "--pcsc-socket" => options.pcsc_socket = PathBuf::from(value),
-            "--host-cid" => options.host_cid = cid(flag, value)?,
+            "--host-cid" => {
+                options.host_cid = value
+                    .parse()
+                    .map_err(|_| miette!("--host-cid takes a number"))?
+            }
             "--serve" => options.serve.push(port(value)?),
             "--localhost" => {
                 options.localhost = value
@@ -237,6 +236,11 @@ fn host(options: HostOptions) -> Result<()> {
         smart_cards = SMART_CARDS_PORT,
         "relaying security keys and smart card readers to the machines"
     );
+    let (events, heard) = bounded::<Event>(QUEUE);
+    let lease = Mutex::new(Lease::default());
+    let options = &options;
+    std::thread::scope(|scope| {
+        scope.spawn(move || route(heard));
     let forwards = options
         .forward
         .iter()

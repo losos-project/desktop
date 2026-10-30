@@ -334,6 +334,14 @@ before, and the machine keeps all of them apart from the host.
   because the disk is added to its definition. A move that finds the machine
   running waits for the next boot or sign-in.
 
+## Peripherals
+
+USB controllers, Bluetooth radios and the devices plugged into them are not
+the host's either. sys-usb, sys-bluetooth and a disposable machine for each
+other device drive them, and the host keeps its keyboard, pointer and
+security keys. These machines are the OS's, so the Machines app does not
+show them. [Peripherals](peripherals.md) describes them.
+
 ## Machines from an installer CD
 
 A machine can also start empty and install a system from its own CD, as a
