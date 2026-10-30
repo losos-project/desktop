@@ -7,8 +7,9 @@
 # the image and updated with it, hidden from Machines, and Kicksecure, as
 # every machine too large for BusyBox is (kicksecure.nix): its hardening
 # holds here, so the Agent's programs cannot trace or read one another's
-# memory, and nothing is SUID but PAM's account check (below): Claude
-# Code's sandbox needs no SUID bubblewrap, making do with user namespaces.
+# memory, and nothing is SUID but PAM's account check, which the template
+# keeps for this machine's lingering user: Claude Code's sandbox needs no
+# SUID bubblewrap, making do with user namespaces.
 # Unlike the others it has a screen's worth of userland, the Agent's window
 # drawn in software and carried to the desktop by waypipe as any machine's
 # are (common.nix, "The guest's display"), and a home of its own, on the
@@ -57,20 +58,6 @@ in
   systemd.tmpfiles.rules = [ "d /home/${user} 0700 ${user} users -" ];
   # vsock, for the window, the launch port and the tools channel.
   boot.kernelModules = [ "vmw_vsock_virtio_transport" ];
-
-  # The one SUID program, which Kicksecure keeps too (security-misc's
-  # permission-hardener whitelists it): pam_unix, run by systemd as the
-  # account it starts the user manager for, checks that account through it,
-  # and without it the manager, and so everything below, never starts.
-  security.enableWrappers = true;
-  security.wrappers = lib.mkForce {
-    unix_chkpwd = {
-      setuid = true;
-      owner = "root";
-      group = "root";
-      source = "${config.security.pam.package}/bin/unix_chkpwd";
-    };
-  };
 
   # A system account to sysusers, which makes no others, with the uid and
   # group a person's first account has elsewhere.

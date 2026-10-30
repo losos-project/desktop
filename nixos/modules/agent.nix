@@ -88,7 +88,12 @@ let
         <type arch='${pkgs.stdenv.hostPlatform.qemuArch}' machine='${
           if pkgs.stdenv.hostPlatform.isx86 then "q35" else "virt"
         }'>hvm</type>
-        <kernel>${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}</kernel>
+        <kernel>${
+          # The image's kernel image, which carries every module's
+          # certificate (kernel-hardening.nix), as service-machines.nix boots.
+          config.system.build.kernelImage
+            or "${guest.system.build.kernel}/${guest.system.boot.loader.kernelFile}"
+        }</kernel>
         <initrd>${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}</initrd>
         <cmdline>init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}</cmdline>
       </os>
