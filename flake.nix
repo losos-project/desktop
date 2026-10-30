@@ -309,6 +309,9 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # Encrypted DNS: names over HTTPS and no plain query leaving while
+          # it is on, failing closed when the server is gone (adblock.nix).
+          encrypted-dns = pkgs.testers.runNixOSTest ./nixos/tests/encrypted-dns.nix;
           # A security key and a smart card reader on the host, used from a
           # machine's half of the relay over vsock's loopback (tokens.nix).
           tokens = pkgs.testers.runNixOSTest ./nixos/tests/tokens.nix;

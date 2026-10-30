@@ -10,6 +10,12 @@
 # but only whole domains. The rules that need a URL or a page (a path, a
 # hidden element) are compiled into WebKit content blockers, which Danube
 # loads into every page.
+#
+# The forwarder is also where DNS leaves the machine, so it is where it is
+# encrypted: with encrypted DNS on, as it is unless someone turns it off,
+# it asks the servers in `encryptedDns.servers` over HTTPS or TLS instead
+# of the network's in plain DNS, and fails a query rather than fall back
+# (docs/adblock.md).
 {
   config,
   lib,
@@ -78,6 +84,49 @@ in
       '';
     };
 
+    encryptedDns = {
+      mode = lib.mkOption {
+        type = lib.types.enum [
+          "on"
+          "strict"
+          "off"
+        ];
+        default = "on";
+        description = ''
+          Encrypted DNS until someone chooses otherwise
+          (`losos-adblock encrypted-dns on|strict|off`, or Settings),
+          which /var/lib/losos-adblock/encrypted-dns records. `on` asks
+          the network's server while a captive portal is in the way, as
+          Android's Private DNS does; `strict` never does.
+        '';
+      };
+
+      servers = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        # Two operators, so one being down or blocked is not the end of
+        # name resolution, both non-profit or no-logging and outside the
+        # five-eyes jurisdictions: Quad9 (Switzerland) and Mullvad
+        # (Sweden). Neither filters here: the blocking is this machine's
+        # own. Over HTTPS first, which on 443 looks like any web page, and
+        # over TLS after, for a network that breaks the other; one that
+        # blocks 853 costs a single timeout before it rests (encrypted.rs).
+        default = [
+          "https://dns.quad9.net/dns-query 9.9.9.9 149.112.112.112 2620:fe::fe 2620:fe::9"
+          "https://dns.mullvad.net/dns-query 194.242.2.2 2a07:e340::2"
+          "tls://dns.quad9.net 9.9.9.9 149.112.112.112 2620:fe::fe 2620:fe::9"
+          "tls://dns.mullvad.net 194.242.2.2 2a07:e340::2"
+        ];
+        description = ''
+          The servers the forwarder asks while encrypted DNS is on, in
+          order, each as its URL, `https://` for DNS over HTTPS or
+          `tls://` for DNS over TLS, followed by the addresses to reach it
+          at: the addresses are never looked up, since that lookup would
+          be a plain query of its own. Servers listed after the first line
+          of /var/lib/losos-adblock/encrypted-dns replace these.
+        '';
+      };
+    };
+
     allow = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -95,6 +144,8 @@ in
 
     environment.etc."losos-adblock/lists".text = lib.concatLines cfg.lists;
     environment.etc."losos-adblock/allow".text = lib.concatLines cfg.allow;
+    environment.etc."losos-adblock/encrypted-dns".text = lib.concatLines cfg.encryptedDns.servers;
+    environment.etc."losos-adblock/encrypted-dns-default".text = "${cfg.encryptedDns.mode}\n";
 
     # Its own user, static rather than DynamicUser, so the state directory
     # it owns can stay readable by everyone: Danube reads the compiled
@@ -112,9 +163,11 @@ in
     # servers and sends each query there (serve.rs). A local network's own
     # names still resolve, through its server, but a bare name no longer
     # gets the network's search domain appended. DNS over TLS cannot reach
-    # a forwarder that speaks plain DNS, so it is off; the forwarder's own
-    # queries are plain DNS too, which is what "opportunistic" fell back
-    # to on most networks anyway.
+    # a forwarder that speaks plain DNS, so resolved's is off: the
+    # forwarder encrypts instead, on the way out, with DNS over HTTPS or
+    # TLS to servers it can verify, where resolved's "opportunistic" mode
+    # took whatever the network's server offered and fell back to plain on
+    # most networks.
     #
     # networkd ran the links before (network.nix), and this took the
     # default route from each of them and made the forwarder resolved's
@@ -185,6 +238,25 @@ in
         StateDirectory = "losos-adblock";
         StateDirectoryMode = "0755";
         UMask = "0022";
+      };
+    };
+
+    # `losos-adblock encrypted-dns on|strict|off`, which Settings runs
+    # through losos-adblock-encrypted-dns@on.service and its siblings, so
+    # polkit asks an administrator, as for any unit started by hand. As the
+    # forwarder's own user, the one that owns the switch in its state
+    # directory; the forwarder sees it within a second.
+    systemd.services."losos-adblock-encrypted-dns@" = {
+      description = "Turn encrypted DNS %i";
+      serviceConfig = hardening // {
+        Type = "oneshot";
+        ExecStart = "${lib.getExe pkgs.losos-adblock} encrypted-dns %i";
+        StateDirectory = "losos-adblock";
+        StateDirectoryMode = "0755";
+        UMask = "0022";
+        # It changes one file and talks to nobody.
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        PrivateNetwork = true;
       };
     };
 
