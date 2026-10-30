@@ -131,6 +131,12 @@ them, as on a BIOS. An aarch64 PC hands them to the UKI itself.
 > its UKI then ignores any it is given. Turn Secure Boot off in the
 > firmware's settings for that one boot.
 
+> [!IMPORTANT]
+> With Secure Boot on, GRUB ignores `losos_extra` and says so, because the
+> kernel beside the UKI is not signed. Turn Secure Boot off in the
+> firmware's settings first. The enrolled key stays, so turning it back on
+> afterwards needs no new enrollment ([Secure Boot](secure-boot.md)).
+
 The shell does not open anyone's home. Each home is its own encrypted image,
 which only its owner's password unlocks. [The rest of the disk](layout.md),
 the system and its state, is not encrypted. So the shell gives someone at the

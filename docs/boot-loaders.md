@@ -180,9 +180,10 @@ kernel beside them. It then offers:
 
 > [!TIP]
 > Kernel arguments typed at GRUB's prompt into `losos_extra`, and exported,
-> are added to whichever entry starts next, under UEFI as on a BIOS. That is
-> the recovery shell ([When something goes
-> wrong](troubleshooting.md#no-one-can-administer-the-machine)).
+> are added to whichever entry starts next, on x86_64 under UEFI as on a BIOS.
+> That is the recovery shell ([When something goes
+> wrong](troubleshooting.md#no-one-can-administer-the-machine)). With Secure
+> Boot on, GRUB ignores them ([Secure Boot](secure-boot.md#while-secure-boot-is-on)).
 
 A UKI takes kernel arguments only in place of its whole command line, so on
 UEFI, GRUB puts the UKI's own command line from the `.grub` file in front of
@@ -239,10 +240,15 @@ starting" until the installer takes the screen.
 
 ## Secure Boot
 
+A release signed with LosOS's key starts with Secure Boot on. Microsoft-signed
+shim goes in front of GRUB on the ESP, GRUB and every UKI are signed, and
+the key is enrolled once in shim's MokManager. [Secure Boot](secure-boot.md)
+has the details, and how to enroll the key. Secure Boot is UEFI's and does
+not apply to a BIOS boot.
+
 > [!IMPORTANT]
-> Secure Boot is UEFI's and does not apply to a BIOS boot. On UEFI neither
-> GRUB nor the UKIs are signed, so Secure Boot must be off
-> ([What is not done](not-done.md)).
+> An image built without the key, such as a fork's or a local build's, has
+> GRUB alone on the ESP, unsigned, and starts only with Secure Boot off.
 
 ## Tested
 
@@ -265,3 +271,5 @@ SeaBIOS, from a disk holding two versions, one of them on trial. Each drew
 the themed menu, counted the trial down in `grubenv` and honoured a one-shot
 request. On UEFI each left `LoaderInfo` as "GRUB 2.14" and
 `LoaderDevicePartUUID` as the ESP's for the UKI it chainloaded.
+`secure-boot` boots the image with Secure Boot on ([Secure
+Boot](secure-boot.md#tested)).

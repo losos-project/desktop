@@ -216,21 +216,47 @@ in
           # losos-grub-update runs once the bless has, and records what it
           # installed. A GRUB that is not this version's, and the
           # systemd-boot older installs started with, are both replaced,
-          # and the reboot below starts the result.
+          # each by shim with the signed GRUB beside it (image.nix gives the
+          # node a Secure Boot key), and the reboot below starts the result.
           machine.wait_for_unit("losos-grub-update.service")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
           grub = "${nodes.machine.system.build.grub.efi}/grub.efi"
-          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/BOOTX64.EFI")
-          machine.succeed(f"printf older >> {esp}/EFI/BOOT/BOOTX64.EFI")
+          shim = "${nodes.machine.system.build.secureBoot.shimFile}"
+          machine.succeed(f"cmp {shim} {esp}/EFI/BOOT/BOOTX64.EFI")
+          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/grubx64.efi")
+          machine.succeed(f"test -f {esp}/EFI/BOOT/mmx64.efi")
+          machine.succeed(f"test -f {esp}/ENROLL_THIS_KEY_IN_MOKMANAGER.cer")
+          machine.succeed(f"printf older >> {esp}/EFI/BOOT/grubx64.efi")
           machine.succeed(f"mkdir -p {esp}/EFI/systemd")
           machine.succeed(
               f"cp ${nodes.machine.systemd.package}/lib/systemd/boot/efi/systemd-bootx64.efi {esp}/EFI/systemd/"
           )
           machine.succeed(f"rm {esp}/EFI/losos/installed")
           machine.succeed("systemctl restart losos-grub-update.service")
-          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/BOOTX64.EFI")
-          machine.succeed(f"cmp {grub} {esp}/EFI/systemd/systemd-bootx64.efi")
+          machine.succeed(f"cmp {shim} {esp}/EFI/BOOT/BOOTX64.EFI")
+          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/grubx64.efi")
+          machine.succeed(f"cmp {shim} {esp}/EFI/systemd/systemd-bootx64.efi")
+          machine.succeed(f"cmp {grub} {esp}/EFI/systemd/grubx64.efi")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
+
+      with subtest("Settings can ask shim to enroll LosOS's key at the next start"):
+          # What derisk's System page reads and starts (secure-boot.nix).
+          # Taken back at the end, or MokManager would wait at the
+          # reboots below for someone to type the code.
+          import json
+          status = json.loads(machine.succeed("losos-secure-boot"))
+          assert status == {"secure_boot": False, "key": "missing", "code": None}, status
+          machine.succeed("systemctl start losos-secure-boot-enroll.service")
+          status = json.loads(machine.succeed("losos-secure-boot"))
+          assert status["key"] == "requested", status
+          assert len(status["code"]) == 8 and status["code"].isdigit(), status
+          shim_guid = "605dab50-e046-4300-abb6-3dd810dd8b23"
+          machine.succeed(f"test -f /sys/firmware/efi/efivars/MokNew-{shim_guid}")
+          machine.succeed(f"test -f /sys/firmware/efi/efivars/MokAuth-{shim_guid}")
+          machine.succeed("systemctl start losos-secure-boot-cancel.service")
+          status = json.loads(machine.succeed("losos-secure-boot"))
+          assert status == {"secure_boot": False, "key": "missing", "code": None}, status
+          machine.fail(f"test -f /sys/firmware/efi/efivars/MokNew-{shim_guid}")
 
       with subtest("LosOS's firmware entry goes back to the front of the boot order"):
           # The entry the Windows installer adds, and Windows putting its

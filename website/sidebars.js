@@ -23,6 +23,7 @@ module.exports = {
         'hibernation',
         'drivers',
         'boot-loaders',
+        'secure-boot',
         'installer',
         'windows-installer',
         'quickemu',
