@@ -258,6 +258,7 @@
           "losos-backup"
           "losos-boxes"
           "losos-tokens"
+          "losos-edge-chain"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
