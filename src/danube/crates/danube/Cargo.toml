@@ -30,6 +30,15 @@ eframe = { version = "0.36.2", default-features = false, features = ["default_fo
 # Only for its platform traits: the window's event loop runs off the main
 # thread, which WebKit has.
 winit = { version = "0.30", default-features = false, features = ["wayland", "x11"] }
+# Security keys for sites that ask for one (webauthn.rs): Mozilla's
+# authenticator crate, Firefox's own CTAP1/CTAP2 over USB HID, with its
+# RustCrypto backend rather than NSS or OpenSSL. It finds keys through
+# libudev. serde_cbor writes the attestation object its types serialise
+# to, and psl knows which domains are public suffixes, which no site may
+# claim as its relying party.
+authenticator = { version = "0.5", default-features = false, features = ["crypto_rust"] }
+serde_cbor = "0.11"
+psl = "2"
 mcsapi-components = { path = "../../../../components/mcsapi/crates/mcsapi-components" }
 mcsapi-theme = { path = "../../../../components/mcsapi/crates/mcsapi-theme" }
 

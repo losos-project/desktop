@@ -23,6 +23,10 @@ crossbeam-channel = "0.5"
 # reads the system's CA bundle (SSL_CERT_FILE on NixOS).
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 libc = "0.2"
+# DNS over HTTPS (doh.rs) speaks TLS itself, with the same rustls, ring and
+# platform verifier ureq already brings, so no crate is added.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
 
 [profile.release]
 opt-level = 3
