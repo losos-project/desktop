@@ -9,7 +9,12 @@
 //!     losos-boxes route               pass the other machines' connections
 //!                                     to a box on (the LosOS boxes machine)
 //!     losos-boxes relay               let the LosOS boxes machine use this
-//!                                     host's resolved and name its boxes
+//!                                     host's resolved, name its boxes and
+//!                                     have its keyring's password
+//!     losos-boxes wake <machine>      start the LosOS boxes machine when a
+//!                                     box shows up
+//!     losos-boxes keyring-password    print the keyring's password the
+//!                                     host keeps for this machine
 //!
 //! `watch` is a user service in the LosOS boxes machine
 //! (nixos/guest/boxes.nix). It browses `_losos._tcp` and `_workstation._tcp`
@@ -27,6 +32,9 @@
 //! answer those names with the LosOS boxes machine's address. `route` then
 //! passes each connection on ports 80 and 443 to the box its `Host` header
 //! or TLS server name asks for, and refuses any other name.
+
+mod keyring;
+mod wake;
 
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
@@ -83,6 +91,11 @@ fn main() -> ExitCode {
             Some(_) => Err(miette!("usage: losos-boxes watch [--terminal]")),
         },
         Some("relay") => relay(),
+        Some("wake") => match args.get(1) {
+            Some(machine) => wake::wake(machine),
+            None => Err(miette!("usage: losos-boxes wake <machine>")),
+        },
+        Some("keyring-password") => keyring::print(),
         Some("route") => route(),
         Some("list") => list(),
         Some("clear") => entries_dir().and_then(|dir| clear(&dir)),
@@ -95,7 +108,7 @@ fn main() -> ExitCode {
             _ => Err(miette!("usage: losos-boxes search <text>")),
         },
         _ => Err(miette!(
-            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | search <text> | route | relay"
+            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | search <text> | route | relay | wake <machine> | keyring-password"
         )),
     };
     match result {
@@ -530,22 +543,30 @@ fn keyring_unlocked() -> bool {
 /// writes them into a hosts file for libvirt's dnsmasq at that machine's
 /// address, so the other machines' connections to a box go to it. The file
 /// goes when the machine hangs up: a stopped machine routes nothing.
+///
+/// On a third it hands the machine its keyring's password (keyring.rs).
 fn relay() -> Result<()> {
     let listen = |port: u32| {
         vsock::VsockListener::bind(&vsock::VsockAddr::new(vsock::VMADDR_CID_ANY, port))
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot listen on vsock port {port}"))
     };
-    let (lookups, names) = (listen(RELAY_PORT)?, listen(NAMES_PORT)?);
+    let (lookups, names, keyrings) = (
+        listen(RELAY_PORT)?,
+        listen(NAMES_PORT)?,
+        listen(keyring::KEYRING_PORT)?,
+    );
     info!(
         lookups = RELAY_PORT,
         names = NAMES_PORT,
+        keyrings = keyring::KEYRING_PORT,
         "relaying resolved to the LosOS boxes machine"
     );
     std::thread::scope(|scope| {
         for (listener, serve) in [
             (&lookups, relay_one as fn(vsock::VsockStream) -> Result<()>),
             (&names, name_boxes),
+            (&keyrings, keyring::serve),
         ] {
             scope.spawn(move || {
                 std::thread::scope(|connections| {
