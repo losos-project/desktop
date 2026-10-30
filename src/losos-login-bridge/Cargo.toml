@@ -1,0 +1,51 @@
+[package]
+name = "losos-login-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_login_bridge"
+path = "src/lib.rs"
+# The rlib is what the command links; the cdylib is the PAM module,
+# installed as lib/security/pam_losos_login.so.
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "losos-login-bridge"
+path = "src/main.rs"
+
+[dependencies]
+# Logs go through tracing to stderr, `RUST_LOG` choosing the level, and
+# failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# The joined box, LosOS Login's answers, userdb's records and the join
+# service's requests are JSON.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# HTTP with no C dependencies, as in losos-backup, for the same reason: the
+# box's certificate is self-signed with CA:TRUE, which webpki refuses as a
+# server certificate, so a connection on the LAN checks it against the
+# pinned one instead (tls.rs). The box's public name has a real certificate
+# and uses ureq's own roots.
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# The pinned certificate's fingerprint, spelled as the box's wizard shows it.
+sha2 = "0.10"
+base64 = "0.22"
+# The PAM module frees what pam_prompt allocates, and the join service reads
+# its caller's credentials off the socket (SO_PEERCRED).
+libc = "0.2"
+
+[build-dependencies]
+# Linux-PAM's module API, generated from its headers (build.rs).
+bindgen = "0.72"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+# A panic must never unwind into the login screen through PAM's C frames;
+# the module catches it at its edge, so unwinding stays on.

@@ -19,6 +19,12 @@
 # the root disk and the ESP as before, and chainloading leaves systemd-stub
 # to measure the UKI into the TPM as before.
 #
+# With LosOS's Secure Boot key (secure-boot.nix), Microsoft-signed shim is
+# what firmware starts, and it starts this GRUB signed (shim.nix):
+#
+#   UEFI  firmware -> ESP: shim -> GRUB -> chainloads the UKI, through
+#         shim's LoadImage, which checks it against the MOK list
+#
 # NixOS's own GRUB module stays off (boot.nix): it installs GRUB into a
 # running system and regenerates its menu on every rebuild, and this OS is
 # an image that is never rebuilt in place. The image and the installer put
@@ -37,6 +43,7 @@ let
   inherit (cfg) arch;
   inherit (config.image.repart.verityStore) partitionIds;
   id = config.system.image.id;
+  sb = config.system.build.secureBoot;
 
   art = import ../branding {
     inherit pkgs;
@@ -58,7 +65,7 @@ let
   # systemd-gpt-auto-generator finds root and the ESP by, and LoaderInfo,
   # which says GRUB started this boot. It sets them when it loads, as every
   # module built into the image does when GRUB starts.
-  efi = import ./grub-image.nix {
+  unsigned = import ./grub-image.nix {
     inherit pkgs menu art;
     format = "efi";
     output = "grub.efi";
@@ -74,15 +81,38 @@ let
       "reboot"
       "halt"
       "sleep"
-    ]
-    # The recovery shell's boot, which starts the kernel bios.nix puts beside
-    # the UKI as a BIOS boot does (grub.cfg's losos_extra). There is no such
-    # kernel on aarch64.
-    ++ lib.optionals (arch.name == "x86_64") [
-      "linux"
+      # losos_esp, for the recovery shell's boot (grub.cfg's losos_extra).
       "probe"
-    ];
+    ]
+    # The recovery shell's boot on x86_64, which starts the kernel
+    # uki-files.nix puts beside the UKI, as a BIOS boot does. An aarch64 PC
+    # has no such kernel and chainloads its UKI with arguments instead.
+    ++ lib.optional (arch.name == "x86_64") "linux";
   };
+
+  # The same GRUB signed with LosOS's key, for shim to start, when there is
+  # a key; signed or not, it is $efi/grub.efi.
+  efi =
+    if sb.enable then
+      pkgs.runCommand "losos-grub-${arch.efi}-signed" { } ''
+        mkdir $out
+        cp ${sb.sign "grub${arch.efi}.efi" "${unsigned}/grub.efi"} $out/grub.efi
+      ''
+    else
+      unsigned;
+
+  # Everything on the ESP that starts GRUB: shim and MokManager beside it
+  # with Secure Boot's key, at the removable-media path and at a path of
+  # its own; and the certificate MokManager enrolls (shim.nix).
+  starters =
+    sb.removable "${efi}/grub.efi"
+    // {
+      "/EFI/losos/grub${arch.efi}.efi" = "${efi}/grub.efi";
+    }
+    // lib.optionalAttrs sb.enable {
+      "/EFI/losos/shim${arch.efi}.efi" = sb.shimFile;
+      "/EFI/losos/mm${arch.efi}.efi" = sb.mokManagerFile;
+    };
 
   # grubenv as grub-editenv creates it: a signature line padded with # to
   # 1024 bytes. GRUB writes it in place and never creates it, so the ESP has
@@ -253,7 +283,7 @@ let
     ];
     text = ''
       version=${lib.escapeShellArg cfg.version}
-      stamp="version=$version efi=${efi} bios=${toString biosInstall}"
+      stamp="version=$version efi=${efi} bios=${toString biosInstall}${lib.optionalString sb.enable " shim=${sb.shimFile}"}"
 
       esp=$(bootctl --print-esp-path)
       # /efi can be an automount; looking inside mounts it.
@@ -293,16 +323,44 @@ let
         mv -f "$2.new" "$2"
         echo "Wrote ''${2#"$esp"/}."
       }
+      # LosOS's GRUB or the systemd-boot older installs started with; or
+      # shim, with LosOS's GRUB beside it to start (shim.nix). shim's own
+      # SBAT line names its repository.
       ours() {
-        [ -f "$1" ] && grep -aq -e losos_disk -e '#### LoaderInfo: systemd-boot' "$1"
+        [ -f "$1" ] || return 1
+        grep -aq -e losos_disk -e '#### LoaderInfo: systemd-boot' "$1" && return 0
+        grep -aq 'github.com/rhboot/shim' "$1" \
+          && grep -aq losos_disk "$(dirname "$1")/grub${arch.efi}.efi" 2> /dev/null
+      }
+
+      # What firmware starts under DIR/NAME: shim, and GRUB and MokManager
+      # beside it, with Secure Boot's key; GRUB itself without.
+      start_from() {
+        ${
+          if sb.enable then
+            ''
+              put ${sb.shimFile} "$1/$2"
+              put ${efi}/grub.efi "$1/grub${arch.efi}.efi"
+              put ${sb.mokManagerFile} "$1/mm${arch.efi}.efi"
+            ''
+          else
+            ''
+              put ${efi}/grub.efi "$1/$2"
+            ''
+        }
       }
 
       for file in "BOOT/BOOT${lib.toUpper arch.efi}.EFI" "systemd/systemd-boot${arch.efi}.efi"; do
         if ours "$esp/EFI/$file"; then
-          put ${efi}/grub.efi "$esp/EFI/$file"
+          start_from "$(dirname "$esp/EFI/$file")" "$(basename "$file")"
         fi
       done
       put ${efi}/grub.efi "$dir/grub${arch.efi}.efi"
+      ${lib.optionalString sb.enable ''
+        put ${sb.shimFile} "$dir/shim${arch.efi}.efi"
+        put ${sb.mokManagerFile} "$dir/mm${arch.efi}.efi"
+        put ${sb.certificateDer} "$esp${sb.enrolPath}"
+      ''}
       [ -f "$dir/grubenv" ] || put ${env} "$dir/grubenv"
       ${lib.optionalString (biosInstall != null) ''
         source=$(findmnt --noheadings --raw --output SOURCE --types vfat --mountpoint "$esp")
@@ -325,9 +383,10 @@ let
   # the boot order, and Windows' own updates and some firmware put Windows
   # Boot Manager back in front of it (docs/windows-installer.md). GRUB's
   # menu offers Windows anyway, so each LosOS boot that gets as far as
-  # boot-complete.target puts LosOS's entry first again. A disk the image
-  # or the installer laid out starts from the removable-media path and has
-  # no entry, and this does nothing there.
+  # boot-complete.target puts LosOS's entry first again, whether it names
+  # GRUB or the shim beside it (shim.nix). A disk the image or the
+  # installer laid out starts from the removable-media path and has no
+  # entry, and this does nothing there.
   bootOrder = pkgs.writeShellApplication {
     name = "losos-boot-order";
     runtimeInputs = [
@@ -340,7 +399,7 @@ let
       [ -d /sys/firmware/efi ] || exit 0
       entries=$(efibootmgr --verbose)
       ours=$(printf '%s\n' "$entries" \
-        | grep -iF '\EFI\losos\grub' \
+        | grep -iF -e '\EFI\losos\grub' -e '\EFI\losos\shim' \
         | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\).*/\1/p' \
         | head -n 1 || true)
       [ -n "$ours" ] || exit 0
@@ -358,6 +417,7 @@ in
       art
       menu
       efi
+      starters
       env
       grubenv
       update
@@ -372,11 +432,11 @@ in
   # registered, so this image needs no efibootmgr and no install step; and
   # a copy at the path of its own that the Windows installer registers with
   # the firmware, where Windows' fallback owns the first one.
-  image.repart.partitions.${partitionIds.esp}.contents = {
-    "/EFI/BOOT/BOOT${lib.toUpper arch.efi}.EFI".source = "${efi}/grub.efi";
-    "/EFI/losos/grub${arch.efi}.efi".source = "${efi}/grub.efi";
-    "/EFI/losos/grubenv".source = env;
-  };
+  image.repart.partitions.${partitionIds.esp}.contents =
+    lib.mapAttrs (_: source: { inherit source; }) starters
+    // {
+      "/EFI/losos/grubenv".source = env;
+    };
 
   # As systemd-bless-boot.service is wired: after boot-complete.target,
   # which systemd-boot-check-no-failures gates (boot.nix), pulled in early

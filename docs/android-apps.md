@@ -167,6 +167,12 @@ the desktop's windows. The setup downloads from Google, so the test runs
 outside the Nix sandbox, and it is in the flake's `networkTests` rather
 than `checks`. Its screenshots are the job's `android-desktop` artifact.
 
+Both jobs take a runner for an hour or more, so a pull request runs them
+only when it changes Android app support, its test, the overlay or the
+flake's inputs (`tools/ci-changes` lists the paths). A push to main runs
+them whenever the image changes, so a change that breaks Android from
+elsewhere shows on main at the latest.
+
 ## The Pixel's units
 
 Three of each person's user units, from `nixos/modules/android-apps.nix`:

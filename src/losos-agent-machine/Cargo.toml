@@ -1,0 +1,33 @@
+[package]
+name = "losos-agent-machine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_agent_machine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "losos-agent-machine"
+path = "src/main.rs"
+
+[dependencies]
+# Logs go through tracing to stderr, `RUST_LOG` choosing the level, and
+# failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# derisk's agent protocol is JSON lines.
+serde_json = "1"
+# Both ends of the machine's channels, as derisk-machines listens for
+# machines' windows.
+vsock = "0.5.4"
+# SO_PEERCRED on the socket people open the Agent through, and a reserved
+# source port for the host's root end, which the vsock crate cannot bind.
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

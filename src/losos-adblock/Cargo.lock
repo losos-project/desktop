@@ -517,6 +517,8 @@ dependencies = [
  "crossbeam-channel",
  "libc",
  "miette",
+ "rustls",
+ "rustls-platform-verifier",
  "serde_json",
  "thiserror 2.0.21",
  "tracing",

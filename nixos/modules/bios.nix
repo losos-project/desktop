@@ -10,9 +10,9 @@
 #     menu and theme built in -> kernel + initrd + command line of the
 #     newest UKI's version -> the same initrd and system as under UEFI
 #
-# BIOS GRUB cannot run a UKI, which is an EFI program, so every release
-# also carries each UKI's kernel, initrd and command line as files of their
-# own, which sysupdate installs beside the UKI (transfers below). GRUB still
+# BIOS GRUB cannot run a UKI, which is an EFI program, so it starts each
+# UKI's kernel, initrd and command line, which every release carries as
+# files of their own beside the UKI (uki-files.nix). GRUB still
 # reads versions and tries from the UKIs' names, and counts tries in
 # grubenv, as it does on UEFI; losos-grub-bless (grub.nix) writes the
 # outcome back into those names, where sysupdate reads it.
@@ -25,9 +25,7 @@
 
 let
   cfg = config.losos;
-  inherit (cfg) arch version;
-  id = config.system.image.id;
-  inherit (config.system.boot.loader) ukiFile;
+  inherit (cfg) arch;
   inherit (config.system.build) grub;
 
   # core.img for the BIOS boot partition, with grub.cfg, the theme and
@@ -75,106 +73,6 @@ let
     + builtins.readFile ./grub-bios-install.sh;
   };
 
-  # The root partition on the disk whose ESP GRUB started the kernel from,
-  # which the initrd's udev rule below links here.
-  loaderRoot = "/dev/disk/by-loader/root";
-
-  partx = "${pkgs.util-linux}/bin/partx";
-
-  # Succeeds when the disk $1 has a partition whose UUID is $2: the udev
-  # rule's test that a root partition sits on the same disk as the ESP GRUB
-  # named. It reads the disk's partition table itself rather than asking
-  # udev, which may not have seen the ESP yet.
-  onLoaderDisk = pkgs.writeScript "losos-on-loader-disk" ''
-    #!/bin/sh
-    tr=${pkgs.coreutils}/bin/tr
-    want=$(printf '%s' "$2" | $tr A-F a-f)
-    for uuid in $(${partx} --show --noheadings --output UUID "$1" | $tr A-F a-f); do
-      [ "$uuid" = "$want" ] && exit 0
-    done
-    exit 1
-  '';
-
-  # Two lines, because udev sorts a line's keys by kind before it runs them:
-  # an ENV match and PROGRAM come before IMPORT{cmdline}, so on one line they
-  # saw losos.esp still unset, the link was never made, and every BIOS boot
-  # since the rule waited out root and stopped in emergency mode. $parent is
-  # the disk's name without /dev/, which partx cannot open from udev's /.
-  loaderRootRule = ''
-    SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_PART_ENTRY_NAME}=="${arch.root}", IMPORT{cmdline}="losos.esp"
-    SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_PART_ENTRY_NAME}=="${arch.root}", ENV{losos.esp}=="?*", PROGRAM="${onLoaderDisk} /dev/$parent $env{losos.esp}", SYMLINK+="${lib.removePrefix "/dev/" loaderRoot}"
-  '';
-
-  # The UKI's kernel, initrd and command line, for GRUB to start what the
-  # UKI would. Cut from the finished UKI rather than taken from the
-  # configuration, because only the finished UKI's command line carries the
-  # usrhash= of the /usr it belongs to.
-  #
-  # root=gpt-auto is replaced: systemd finds the root partition by type on
-  # the disk the boot loader names in LoaderDevicePartUUID, an EFI variable,
-  # and a BIOS has none to set. In its place GRUB names the ESP it started
-  # the kernel from, as losos_esp, and the initrd's rule below finds root on
-  # that ESP's disk. A GRUB from before losos_esp sets nothing, and the line
-  # falls back to the root partition's label, which repart gives it from its
-  # type (disk.nix gives it none of its own): right with one LosOS disk in
-  # the machine, a coin toss with two.
-  files =
-    pkgs.runCommand "${id}_${version}-bios"
-      {
-        nativeBuildInputs = with pkgs.buildPackages; [
-          jq
-          systemdUkify
-        ];
-      }
-      ''
-        cmdline=$(ukify --json=short inspect ${config.system.build.uki}/${ukiFile} \
-          | jq -er '.".cmdline".text' | tr -d '\0\n')
-        case " $cmdline " in
-          *" usrhash="*" root=gpt-auto "* | *" root=gpt-auto "*" usrhash="*) ;;
-          *) echo "unexpected UKI command line: $cmdline" >&2; exit 1 ;;
-        esac
-        # It goes into a double-quoted GRUB string, where these would mean
-        # something.
-        case "$cmdline" in
-          *[\"\$\\\']*) echo "UKI command line needs quoting: $cmdline" >&2; exit 1 ;;
-        esac
-        cmdline=''${cmdline/root=gpt-auto/root=\$losos_root}
-
-        mkdir $out
-        cp ${config.boot.uki.settings.UKI.Linux} $out/${id}_${version}.linux
-        cp ${config.boot.uki.settings.UKI.Initrd} $out/${id}_${version}.initrd
-        {
-          echo 'if [ -n "$losos_esp" ]; then'
-          echo '  set losos_root="${loaderRoot} losos.esp=$losos_esp"'
-          echo 'else'
-          echo '  set losos_root="PARTLABEL=${arch.root}"'
-          echo 'fi'
-          printf 'set losos_cmdline="%s"\n' "$cmdline"
-        } > $out/${id}_${version}.grub
-      '';
-
-  # Each of those three as a sysupdate transfer, installed beside the UKI in
-  # $BOOT/EFI/Linux, where grub.cfg reads only *.efi names and finds these
-  # by the UKI's.
-  # They belong to the same version set as the UKI and the /usr slot
-  # (update.nix), so a version is installed with all of them or not at all.
-  transfer = suffix: {
-    Transfer.ProtectVersion = "%A";
-    Source = {
-      Type = "url-file";
-      Path = cfg.update.baseUrl;
-      MatchPattern = "${id}_@v.${suffix}";
-    };
-    Target = {
-      Type = "regular-file";
-      Path = "/EFI/Linux";
-      PathRelativeTo = "boot";
-      MatchPattern = "${id}_@v.${suffix}";
-      Mode = "0444";
-      InstancesMax = 2;
-    };
-  };
-
   # systemd-gpt-auto-generator mounts the ESP only on an EFI boot: without
   # LoaderDevicePartUUID it cannot tell which ESP the boot came from. A BIOS
   # boot came from the disk root is on, so this mounts that disk's ESP at
@@ -212,10 +110,7 @@ let
   '';
 in
 lib.mkIf (arch.name == "x86_64") {
-  system.build = {
-    grubBiosInstall = install;
-    biosBootFiles = files;
-  };
+  system.build.grubBiosInstall = install;
 
   # Where core.img goes: 1M, the size grub-install asks for, and far more
   # than the ~300K core.img is with the theme inside. Before slot A's /usr, which grows into the
@@ -229,26 +124,5 @@ lib.mkIf (arch.name == "x86_64") {
     SizeMaxBytes = "1M";
   };
 
-  systemd.sysupdate.transfers = {
-    "40-bios-linux" = transfer "linux";
-    "41-bios-initrd" = transfer "initrd";
-    "42-bios-grub" = transfer "grub";
-  };
-
   systemd.generators.losos-bios-esp = espGenerator;
-
-  # What LoaderDevicePartUUID gives gpt-auto under UEFI: root on the disk
-  # the boot came from, so another LosOS disk in the same machine is never
-  # mounted in its place. losos.esp= is on the command line only when BIOS
-  # GRUB put it there.
-  # The rule is in the running system too, so the link the command line
-  # names is still there after the switch to it.
-  boot.initrd.services.udev.rules = loaderRootRule;
-  services.udev.extraRules = loaderRootRule;
-  boot.initrd.systemd = {
-    # The script, and the store paths it names: coreutils is in every
-    # initrd, partx is not.
-    storePaths = [ onLoaderDisk ];
-    extraBin.partx = partx;
-  };
 }

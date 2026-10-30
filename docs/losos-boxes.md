@@ -15,7 +15,13 @@ has no machines, so there the session does the work itself, as described
 
 ## The LosOS boxes machine
 
-Make it in the Machines app from the **losos-boxes** template, or with
+The computer makes it at its first boot, as `boxes`, framed in green, with
+1.5 GB of memory. It does not start then. The first time a box answers on
+one of the computer's networks, `losos-boxes-wake`, a service on the host,
+starts it, and stops watching. A machine you stop after that stays stopped
+until the next boot, and you can start it in the Machines app at any time.
+If you remove it, the computer does not make it again. Make it again in the
+Machines app from the **losos-boxes** template, or with
 
 ```sh
 pm machine create boxes --image /run/current-system/sw/share/losos/machines/losos-boxes.qcow2 --label green
@@ -164,8 +170,15 @@ losos
 `secret-tool`, and never writes them to a file. GNOME Keyring answers the
 Secret Service in the LosOS boxes machine, and in a phone's session. Nobody
 signs in to the machine, so no sign-in password unlocks its keyring. The
-first time `losos` stores something, the keyring opens a window in the
-machine and asks for a password for itself. `key import --gpg` reads the key
+host keeps a password for it instead, made at random the first time the
+machine asks and kept in `/var/lib/losos-boxes/keyrings/`, readable only by
+the relay's own account. At every boot the machine asks the relay for it on
+vsock port 7353, and its keyring starts unlocked with it, so nothing asks
+you for a password. A copy of the machine's disk alone does not open its
+keyring. A keyring made before the host kept a password has the password
+you chose for it then, and keeps asking for that one. To move it over,
+remove the machine and make it again, then sign `losos` in again.
+`key import --gpg` reads the key
 from gpg. Both tools are on `losos`'s `PATH`, after the user's own, so a gpg
 installed with [pm](pm.md) is the one it uses.
 

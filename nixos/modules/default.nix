@@ -8,6 +8,7 @@
     ./base.nix
     ./boot.nix
     ./grub.nix
+    ./secure-boot.nix
     ./bios.nix
     ./splash.nix
     ./boot-sound.nix
@@ -17,10 +18,28 @@
     ./machines.nix
     ./service-machines.nix
     ./schizo.nix
+    ./schizo-reboot.nix
+    ./busybox-guests.nix
+    ./busybox-host-kernel.nix
+    ./passthrough.nix
+    ./gaming.nix
+    ./vm-call.nix
+    ./network-machine.nix
+    ./edge-exit.nix
+    ./vpn.nix
+    ./files-machine.nix
+    ./shares-machine.nix
+    ./peripherals.nix
+    ./portal-backend.nix
+    ./portal-machine.nix
     ./windows-apps.nix
     ./macos-apps.nix
     ./android-apps.nix
     ./flatpak-machine.nix
+    # Security keys and smart card readers, lent to the machines.
+    ./tokens.nix
+    # Signing in with the Slovak eID card, through the eID machine.
+    ./eid-signin.nix
     ./allocator.nix
     ./image.nix
     ./disk.nix

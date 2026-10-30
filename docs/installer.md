@@ -72,7 +72,8 @@ and install" button. Then:
    BIOS boot partition, so the disk starts on a legacy BIOS as well.
 4. The machine reboots into the installed system. Its first boot creates
    root, `/home` and swap from `disk.nix`, the same way an image written with
-   `dd` does.
+   `dd` does. With a [PIN at startup](#asking-for-a-pin-at-startup), the
+   installer has made them already, root encrypted.
 
 ![derisk installer talks JSON lines to losos-installer serve, which runs systemd-repart, then systemd-sysupdate from the channel or a LOSOS-RELEASE disk, then reboots; the disk ends with the ESP, BIOS boot and slot A written, slot B laid out empty, and root, home and swap left to the first boot](images/installer.svg)
 
@@ -135,6 +136,49 @@ network that re-signs TLS with its own authority, where the channel's
 certificate never verifies. With the disk attached, the installer does not
 need the network at all. The backend's `hello` names the disk as `release`,
 and derisk then skips its Network page.
+
+## Asking for a PIN at startup
+
+Without a PIN, root is plain ext4. A person's home is encrypted by
+systemd-homed, but `/var` is not, and the machines' disks live in it, so a
+stolen PC gives up every machine's disk and the journal. A PC with a TPM 2.0
+that starts from UEFI is offered more: the installer's PIN page, after the
+disk, has a box to encrypt the system's data and ask for a PIN at every
+start. It is off unless ticked. A legacy BIOS PC, or one without a TPM, is
+not offered it, because its boot measures nothing the TPM could unlock
+against; the backend's `hello` says `"encryption": true` only where it can.
+
+With the box ticked, the PIN goes in the install request, never on a
+command line, and the install gets one more step after the download. The
+scratch partition is gone by then, so the installer makes root, `/home` and
+swap itself, from `disk.nix`'s own definitions plus one drop-in,
+`30-root.conf.d/encrypt.conf`, that makes root LUKS2 locked to the TPM, and
+swap from the same `losos-swap` the first boot runs. repart can lock a
+volume to the TPM but cannot give it a PIN, so its slot is only a step.
+`systemd-cryptenroll` adds a recovery key, then a TPM slot that needs the
+PIN, then removes repart's. The first boot finds every partition it would
+have made already there and leaves them be, and
+`systemd-gpt-auto-generator` unlocks root through the TPM, which asks for the
+PIN on the boot splash. `boot.initrd.luks.forceLuksSupportInInitrd` puts
+dm-crypt in the initrd for that, since no `fileSystems` entry names root.
+
+> [!IMPORTANT]
+> The installer shows the recovery key once, with a QR code, and the
+> Restart button waits until the box saying it was kept is ticked. A
+> forgotten PIN with no key is a lost root: `/var`, the machines and
+> everything else on it.
+
+The TPM slot is bound to no PCRs. The PIN is what stands between a stolen PC
+and root, and the TPM's lockout limits how often it can be guessed. Binding
+to PCRs would also refuse a changed boot chain, but the installer's own boot
+measures different values from the installed system's, and until the UKIs
+are signed there is no signed policy to bind to instead.
+
+`nixos/tests/installer-boot.nix` runs this step against a disk with a
+software TPM: the key it prints is a recovery key, neither the PIN nor the
+key reaches the log, root holds exactly one TPM slot and it needs the PIN,
+the right PIN unlocks root through the TPM, a wrong one or none does not,
+and the recovery key opens it as well.
 
 ## Reporting a failed install
 

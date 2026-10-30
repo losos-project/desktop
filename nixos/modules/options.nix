@@ -178,17 +178,62 @@ in
         type = types.path;
         # The release key's public half is committed armored, so a change to
         # it reads as text in review. gpg's --keyring, which systemd-pull
-        # verifies with, takes only binary keys, hence the dearmor.
+        # verifies with, takes only binary keys, hence the export.
+        #
+        # update-signing-next.asc is there only while the key is being
+        # replaced (docs/binary-cache.md, "Replacing the update key"): the
+        # releases signed by the old key carry the new one too, so a machine
+        # that installed one of them takes the first release the new key
+        # signs. gpg --import fails the build on a file that is not a key.
         default =
-          pkgs.runCommand "import-pubring.gpg" { nativeBuildInputs = [ pkgs.buildPackages.gnupg ]; }
-            ''
-              export GNUPGHOME=$(mktemp -d)
-              gpg --batch --dearmor < ${../keys/update-signing.asc} > $out
-            '';
-        defaultText = lib.literalMD "`nixos/keys/update-signing.asc`, dearmored";
+          let
+            keys = [
+              ../keys/update-signing.asc
+            ]
+            ++ lib.optional (builtins.pathExists ../keys/update-signing-next.asc) ../keys/update-signing-next.asc;
+          in
+          pkgs.runCommand "import-pubring.gpg" { nativeBuildInputs = [ pkgs.buildPackages.gnupg ]; } ''
+            export GNUPGHOME=$(mktemp -d)
+            gpg --batch --import ${lib.escapeShellArgs keys}
+            gpg --batch --export > $out
+          '';
+        defaultText = lib.literalMD "`nixos/keys/update-signing.asc`, and `nixos/keys/update-signing-next.asc` while there is one";
         description = ''
           The GPG public keyring SHA256SUMS.gpg is verified against. CI signs
           each release's SHA256SUMS with the secret half (docs/binary-cache.md says how the two are made).
+        '';
+      };
+    };
+
+    secureBoot = {
+      certificate = mkOption {
+        type = types.nullOr types.path;
+        # The key's public half is committed, as the update key's is, so a
+        # change to it shows in review; a tree without it builds images
+        # that start only with Secure Boot off.
+        default = if builtins.pathExists ../keys/secure-boot.crt then ../keys/secure-boot.crt else null;
+        defaultText = lib.literalMD "`nixos/keys/secure-boot.crt`, when it is there";
+        description = ''
+          The X.509 certificate, in PEM, of the key that signs GRUB and the
+          UKIs for Secure Boot (secure-boot.nix). It goes on the ESP for
+          MokManager to enroll, and the firmware starts nothing it did not
+          sign once that is done.
+        '';
+      };
+      privateKey = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/var/lib/losos-secure-boot/key.pem";
+        description = ''
+          Where the build finds the certificate's private key, in PEM. A
+          string, not a path, so the key is never copied into the Nix
+          store, which anyone can read and the binary cache publishes. The
+          signing steps read it with no sandbox around them, so the builder
+          needs `sandbox = relaxed` and the file readable by its build
+          users (the nixbld group). The flake sets it from
+          LOSOS_SECURE_BOOT_KEY, which CI points at the repository secret
+          SECURE_BOOT_KEY (docs/secure-boot.md). Without it GRUB and the
+          UKIs are not signed and no shim is installed.
         '';
       };
     };
