@@ -288,12 +288,12 @@
     earlier run 4.x or 5.4 kernels, which systemd does not support at all.
     The flasher reads the kernel's version and refuses them. Supporting them
     would need an older systemd or a kernel built per device.
-  - **hardened_malloc.** The PC build preloads it into every process, and the
-    GSI does not. Its default configuration reserves 32 GiB per size class
-    per arena and needs a 48-bit address space, but Android kernels are
-    usually built with 39-bit virtual addresses. The GSI needs a
-    hardened_malloc with a smaller `CONFIG_CLASS_REGION_SIZE`, and derisk
-    built against it.
+  - **hardened_malloc.** The GSI's [allocator](allocator.md) is built for a
+    39-bit address space and tried by the initrd before it is preloaded,
+    but no phone's kernel has run that trial yet. A phone with 16 KiB pages
+    fails it, and its processes keep glibc's malloc. derisk gets it only
+    through the preload there, without the length check on Rust's frees
+    that a PC's derisk has.
   - **Telephony, audio, sensors, camera.** There is no ofono, no
     PulseAudio or PipeWire droid modules, and no sensorfw. Android's init
     starts the HALs, but nothing on the Linux side talks to them yet beyond

@@ -400,7 +400,7 @@ longer make the browser write and run machine code, which most WebKit
 exploits rely on. `javascript.jit = true` in the user's settings turns the
 JIT back on. WebKit keeps its own allocator, libpas with its Gigacage, for
 JavaScript and DOM objects. Everything else it allocates through `malloc`,
-which is hardened_malloc on a PC, as [the allocator](allocator.md)
+which is hardened_malloc wherever it runs, as [the allocator](allocator.md)
 describes. Tracking prevention, WebKit's ITP, is on, and there is no keyring
 for WebKit to save passwords in.
 
