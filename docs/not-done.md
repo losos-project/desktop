@@ -1,5 +1,12 @@
 # What is not done
 
+- **Slovak eID beyond signing in.** The eID klient runs in a machine and
+  signs in to slovensko.sk ([the Slovak eID](tokens.md#the-slovak-eid)),
+  but D.Signer, which the same download carries for qualified signatures
+  on documents, is not set up anywhere, and the eID klient is x86_64 only,
+  so an arm64 PC has neither. Nobody has signed in with a real card through
+  a machine yet. Signing in to the computer itself with the eID card is not
+  done either.
 - **arm64 macOS.** `qemu-vmapple` runs `vmapple` under TCG with an M1 CPU
   on a PC, or under KVM on an arm64 host, with a GPU from Reims. Nobody has
   booted macOS on it yet, no guest has drawn through Reims, and nothing in

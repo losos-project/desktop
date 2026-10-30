@@ -1,9 +1,9 @@
 //! Security keys and smart card readers stay plugged into the host, and
 //! the machines use them through it (docs/tokens.md).
 //!
-//!     losos-tokens host [--pcscd PATH] [--loopback-machine NAME]
+//!     losos-tokens host [--pcscd PATH] [--loopback-machine NAME] [--forward PORT]...
 //!         relay the host's keys and pcscd to the machines (the host)
-//!     losos-tokens guest [--pcsc-socket PATH] [--host-cid CID]
+//!     losos-tokens guest [--pcsc-socket PATH] [--host-cid CID] [--serve PORT]... [--localhost ADDR]
 //!         make the host's keys and readers this machine's (a machine)
 //!
 //! A FIDO key reaches a machine as a copy: `guest` makes a uhid device for
@@ -18,6 +18,12 @@
 //! which passes it on to pcscd. One machine holds the readers at a time
 //! (`Lease`).
 //!
+//! A program on a machine's localhost that a page hands work to, such as
+//! the eID client a sign-in page redirects to, is reachable from the
+//! host's localhost too: `guest --serve PORT` tells the host while
+//! something listens on PORT, and `host --forward PORT` listens there and
+//! passes each connection to the machine that serves it (`Services`).
+//!
 //! The host knows which machine a connection is from by the vsock address
 //! the kernel stamps on it, never by anything the machine says, and asks
 //! libvirt which running machine has that address.
@@ -25,7 +31,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
-use std::net::Shutdown;
+use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -40,8 +46,8 @@ use tracing_subscriber::EnvFilter;
 use vsock::{VsockAddr, VsockListener, VsockStream, VMADDR_CID_ANY, VMADDR_CID_HOST};
 
 use losos_tokens::{
-    domain_cid, free_key, is_fido_descriptor, parse_hid_uevent, uhid, Frame, Lease, Router,
-    KEYS_PORT, RELAYED_PHYS, REPORT_LEN, SMART_CARDS_PORT,
+    domain_cid, free_key, is_fido_descriptor, listening, parse_hid_uevent, uhid, Frame, Lease,
+    Router, Services, KEYS_PORT, LOCALHOST_PORT, RELAYED_PHYS, REPORT_LEN, SMART_CARDS_PORT,
 };
 
 /// Where pcscd listens, on the host and, for programs, in a machine.
@@ -56,6 +62,9 @@ const VMADDR_CID_LOCAL: u32 = 1;
 /// Reports the router keeps for one machine before it drops them: a slow
 /// machine loses its own conversation and nobody else's.
 const QUEUE: usize = 256;
+/// How often a machine looks at what listens on the ports it serves. An
+/// app takes longer than that to start and be clicked through.
+const LOOK_EVERY: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     // stderr, which is the journal for a service.
@@ -73,7 +82,7 @@ fn main() -> ExitCode {
         Some("host") => host_options(&args[1..]).and_then(host),
         Some("guest") => guest_options(&args[1..]).and_then(|o| guest(&o)),
         _ => Err(miette!(
-            "usage: losos-tokens host [--pcscd PATH] [--loopback-machine NAME] | guest [--pcsc-socket PATH] [--host-cid CID]"
+            "usage: losos-tokens host [--pcscd PATH] [--loopback-machine NAME] [--forward PORT]... | guest [--pcsc-socket PATH] [--host-cid CID] [--serve PORT]... [--localhost ADDR]"
         )),
     };
     match result {
@@ -90,12 +99,15 @@ struct HostOptions {
     /// A name for connections from this kernel itself, which only
     /// nixos/tests/tokens.nix gives: it runs both ends on one machine.
     loopback: Option<String>,
+    /// Localhost ports passed on to the machine that serves each.
+    forward: Vec<u16>,
 }
 
 fn host_options(args: &[String]) -> Result<HostOptions> {
     let mut options = HostOptions {
         pcscd: PathBuf::from(PCSCD_SOCKET),
         loopback: None,
+        forward: Vec::new(),
     };
     let mut args = args.iter();
     while let Some(flag) = args.next() {
@@ -103,6 +115,7 @@ fn host_options(args: &[String]) -> Result<HostOptions> {
         match flag.as_str() {
             "--pcscd" => options.pcscd = PathBuf::from(value),
             "--loopback-machine" => options.loopback = Some(value.clone()),
+            "--forward" => options.forward.push(port(value)?),
             _ => bail!("unknown option {flag}"),
         }
     }
@@ -114,12 +127,20 @@ struct GuestOptions {
     /// The host's vsock address: VMADDR_CID_HOST, or this kernel's own
     /// when nixos/tests/tokens.nix runs both ends on one machine.
     host_cid: u32,
+    /// Localhost ports the host may reach while something here listens.
+    serve: Vec<u16>,
+    /// The address those ports are reached on: 127.0.0.1, or another
+    /// loopback address where nixos/tests/tokens.nix runs the host's end,
+    /// with its own listener on 127.0.0.1, on the same kernel.
+    localhost: Ipv4Addr,
 }
 
 fn guest_options(args: &[String]) -> Result<GuestOptions> {
     let mut options = GuestOptions {
         pcsc_socket: PathBuf::from(PCSCD_SOCKET),
         host_cid: VMADDR_CID_HOST,
+        serve: Vec::new(),
+        localhost: Ipv4Addr::LOCALHOST,
     };
     let mut args = args.iter();
     while let Some(flag) = args.next() {
@@ -131,10 +152,33 @@ fn guest_options(args: &[String]) -> Result<GuestOptions> {
                     .parse()
                     .map_err(|_| miette!("--host-cid takes a number"))?
             }
+            "--serve" => options.serve.push(port(value)?),
+            "--localhost" => {
+                options.localhost = value
+                    .parse()
+                    .ok()
+                    .filter(Ipv4Addr::is_loopback)
+                    .ok_or_else(|| miette!("--localhost takes a loopback address"))?
+            }
             _ => bail!("unknown option {flag}"),
         }
     }
     Ok(options)
+}
+
+fn port(value: &str) -> Result<u16> {
+    value
+        .parse()
+        .ok()
+        .filter(|&p| p != 0)
+        .ok_or_else(|| miette!("{value} is not a port"))
+}
+
+/// A machine, as the host reaches it: its name and vsock address.
+#[derive(Clone, Debug)]
+struct Machine {
+    name: String,
+    cid: u32,
 }
 
 // The host.
@@ -172,6 +216,29 @@ fn host(options: HostOptions) -> Result<()> {
     let options = &options;
     std::thread::scope(|scope| {
         scope.spawn(move || route(heard));
+    let forwards = options
+        .forward
+        .iter()
+        .map(|&port| {
+            TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+                .into_diagnostic()
+                .wrap_err_with(|| format!("cannot listen on localhost port {port}"))
+                .map(|listener| (port, listener))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let (events, heard) = bounded::<Event>(QUEUE);
+    let lease = Mutex::new(Lease::default());
+    let services = Mutex::new(Services::<Machine>::default());
+    let (options, services) = (&options, &services);
+    std::thread::scope(|scope| {
+        scope.spawn(move || route(heard));
+        for (port, listener) in forwards {
+            info!(
+                port,
+                "passing localhost connections to the machine that serves them"
+            );
+            scope.spawn(move || forward(scope, port, listener, services));
+        }
         scope.spawn({
             let events = events.clone();
             move || watch_keys(scope, events)
@@ -189,7 +256,7 @@ fn host(options: HostOptions) -> Result<()> {
                 next += 1;
                 let (id, events) = (next, events.clone());
                 scope.spawn(move || {
-                    if let Err(e) = serve_keys(id, stream, events, options) {
+                    if let Err(e) = serve_keys(id, stream, events, options, services) {
                         warn!("{e:?}");
                     }
                 });
@@ -457,6 +524,7 @@ fn serve_keys(
     stream: VsockStream,
     events: Sender<Event>,
     options: &HostOptions,
+    services: &Mutex<Services<Machine>>,
 ) -> Result<()> {
     let cid = stream.peer_addr().into_diagnostic()?.cid();
     let Some(name) = machine_at(cid, options)? else {
@@ -483,6 +551,18 @@ fn serve_keys(
                 Ok(Some(Frame::Report { key, report })) => {
                     let _ = events.send(Event::FromMachine(id, key, report));
                 }
+                Ok(Some(Frame::Serves { port })) => {
+                    info!(machine = %name, port, "the machine serves a localhost port");
+                    let machine = Machine {
+                        name: name.clone(),
+                        cid,
+                    };
+                    services.lock().unwrap().serve(id, machine, port);
+                }
+                Ok(Some(Frame::Stopped { port })) => {
+                    info!(machine = %name, port, "the machine no longer serves a localhost port");
+                    services.lock().unwrap().stop(id, port);
+                }
                 Ok(Some(other)) => {
                     warn!(machine = %name, frame = ?other, "a machine cannot say that");
                     break;
@@ -496,8 +576,39 @@ fn serve_keys(
         }
         // Dropping the router's sender ends the writer.
         let _ = events.send(Event::MachineGone(id));
+        services.lock().unwrap().gone(id);
     });
     Ok(())
+}
+
+/// Passes each connection to the host's localhost `port` to the machine
+/// that serves it, which hears the port first and then the connection.
+fn forward<'scope>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    port: u16,
+    listener: TcpListener,
+    services: &'scope Mutex<Services<Machine>>,
+) {
+    for client in listener.incoming() {
+        let Ok(client) = client else { continue };
+        let Some(machine) = services.lock().unwrap().who(port) else {
+            info!(port, "nothing in a machine serves this localhost port");
+            continue;
+        };
+        scope.spawn(move || {
+            let reached = VsockStream::connect(&VsockAddr::new(machine.cid, LOCALHOST_PORT))
+                .and_then(|mut stream| stream.write_all(&port.to_le_bytes()).map(|()| stream));
+            match reached {
+                Ok(stream) => {
+                    debug!(machine = %machine.name, port, "passing a localhost connection");
+                    let _ = splice(client, stream);
+                }
+                Err(e) => {
+                    warn!(machine = %machine.name, port, error = %e, "cannot reach the machine")
+                }
+            }
+        });
+    }
 }
 
 /// One program's connection to pcscd from a machine, passed on if that
@@ -568,23 +679,41 @@ impl Stream for UnixStream {
     }
 }
 
+impl Stream for TcpStream {
+    fn dup(&self) -> Result<Self> {
+        self.try_clone().into_diagnostic()
+    }
+    fn end(&self) {
+        let _ = self.shutdown(Shutdown::Both);
+    }
+}
+
 // A machine.
 
 fn guest(options: &GuestOptions) -> Result<()> {
     std::thread::scope(|scope| {
         scope.spawn(|| loop {
-            if let Err(e) = keys_from_host(options.host_cid) {
+            if let Err(e) = keys_from_host(options) {
                 debug!("{e:?}");
             }
             std::thread::sleep(RETRY_AFTER);
         });
+        if !options.serve.is_empty() {
+            scope.spawn(|| {
+                if let Err(e) = localhost_for_host(options) {
+                    warn!("{e:?}");
+                }
+            });
+        }
         cards_from_host(&options.pcsc_socket, options.host_cid)
     })
 }
 
 /// Holds a connection to the host's keys, and a copy of each key while it
-/// lasts. Every copy goes when the connection does.
-fn keys_from_host(host_cid: u32) -> Result<()> {
+/// lasts. Every copy goes when the connection does. The same connection
+/// tells the host which of the served ports something listens on.
+fn keys_from_host(options: &GuestOptions) -> Result<()> {
+    let host_cid = options.host_cid;
     let stream = VsockStream::connect(&VsockAddr::new(host_cid, KEYS_PORT))
         .into_diagnostic()
         .wrap_err("cannot reach the host's security keys")?;
@@ -593,7 +722,13 @@ fn keys_from_host(host_cid: u32) -> Result<()> {
     let mut from_host = stream;
     let mut copies: BTreeMap<u8, File> = BTreeMap::new();
     let to_host = &to_host;
+    // Nothing is ever sent: dropping it stops the thread that looks at
+    // the served ports.
+    let (_looking, stop) = bounded::<()>(0);
     let result = std::thread::scope(|scope| -> Result<()> {
+        if !options.serve.is_empty() {
+            scope.spawn(move || announce(options, to_host, stop));
+        }
         let result = (|| -> Result<()> {
             while let Some(frame) = Frame::read(&mut from_host).into_diagnostic()? {
                 match frame {
@@ -622,6 +757,9 @@ fn keys_from_host(host_cid: u32) -> Result<()> {
                             copy.write_all(&uhid::input(&report)).into_diagnostic()?;
                         }
                     }
+                    Frame::Serves { .. } | Frame::Stopped { .. } => {
+                        bail!("the host cannot say that")
+                    }
                 }
             }
             Ok(())
@@ -631,10 +769,80 @@ fn keys_from_host(host_cid: u32) -> Result<()> {
             destroy(copy);
         }
         let _ = to_host.lock().unwrap().shutdown(Shutdown::Both);
+        drop(_looking);
         result
     });
     info!("lost the host's security keys");
     result
+}
+
+/// Tells the host whenever something starts or stops listening on one of
+/// the served ports, until `stop` disconnects.
+fn announce(options: &GuestOptions, to_host: &Mutex<VsockStream>, stop: Receiver<()>) {
+    let mut served = BTreeSet::new();
+    loop {
+        let tables = ["/proc/net/tcp", "/proc/net/tcp6"]
+            .map(|t| std::fs::read_to_string(t).unwrap_or_default());
+        for &port in &options.serve {
+            let now = tables.iter().any(|t| listening(t, options.localhost, port));
+            let frame = match (now, served.contains(&port)) {
+                (true, false) => Frame::Serves { port },
+                (false, true) => Frame::Stopped { port },
+                _ => continue,
+            };
+            if to_host.lock().unwrap().write_all(&frame.encode()).is_err() {
+                return;
+            }
+            if now {
+                info!(port, "serving a localhost port to the host");
+                served.insert(port);
+            } else {
+                info!(port, "no longer serving a localhost port");
+                served.remove(&port);
+            }
+        }
+        if stop.recv_timeout(LOOK_EVERY) != Err(crossbeam_channel::RecvTimeoutError::Timeout) {
+            return;
+        }
+    }
+}
+
+/// Takes the host's connections for this machine's localhost: each names
+/// its port first, and only a port this machine serves is reached.
+fn localhost_for_host(options: &GuestOptions) -> Result<()> {
+    let listener = VsockListener::bind(&VsockAddr::new(VMADDR_CID_ANY, LOCALHOST_PORT))
+        .into_diagnostic()
+        .wrap_err_with(|| format!("cannot listen on vsock port {LOCALHOST_PORT}"))?;
+    std::thread::scope(|scope| {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            // Only the host forwards: no other address may reach in.
+            if stream.peer_addr().map(|a| a.cid()).ok() != Some(options.host_cid) {
+                continue;
+            }
+            scope.spawn(move || {
+                let mut port = [0u8; 2];
+                if stream.read_exact(&mut port).is_err() {
+                    return;
+                }
+                let port = u16::from_le_bytes(port);
+                if !options.serve.contains(&port) {
+                    warn!(
+                        port,
+                        "the host asked for a port this machine does not serve"
+                    );
+                    return;
+                }
+                match TcpStream::connect((options.localhost, port)) {
+                    Ok(local) => {
+                        let _ = splice(stream, local);
+                    }
+                    Err(e) => warn!(port, error = %e, "nothing answers on the served port"),
+                }
+            });
+        }
+    });
+    Ok(())
 }
 
 fn make_copy(name: &str, vendor: u32, product: u32) -> Result<File> {

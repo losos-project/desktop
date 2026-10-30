@@ -30,7 +30,11 @@
     path = [ config.virtualisation.libvirtd.package ];
     environment.LIBVIRT_DEFAULT_URI = "qemu:///system";
     serviceConfig = {
-      ExecStart = "${lib.getExe pkgs.losos-tokens} host";
+      # 24727 is where an eID client listens for the page that hands it a
+      # sign-in (BSI TR-03124), as slovensko.sk does: Danube on the host
+      # reaches the eID klient in whichever machine runs it
+      # (docs/tokens.md, "Hand-offs between apps").
+      ExecStart = "${lib.getExe pkgs.losos-tokens} host --forward 24727";
       # A user of its own: the udev rule below lets it open FIDO keys, the
       # polkit rule lets it reach pcscd, and libvirt's read-only socket is
       # open to every account. A vsock port above 1023 needs nothing.
@@ -46,6 +50,8 @@
       RestrictAddressFamilies = [
         "AF_UNIX"
         "AF_VSOCK"
+        # The forwarded localhost ports.
+        "AF_INET"
       ];
       NoNewPrivileges = true;
       CapabilityBoundingSet = "";
