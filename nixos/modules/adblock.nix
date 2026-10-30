@@ -25,6 +25,11 @@
 
 let
   cfg = config.losos.adblock;
+  # With the network machine (network-machine.nix), the forwarder runs
+  # there, for the host and every machine alike, and the host asks it as
+  # its one DNS server; the host keeps fetching and compiling the lists,
+  # which the machine reads from a share.
+  inMachine = config.losos.machines.network.enable or false;
   # On the dummy link below, not loopback: resolved asks a link's server
   # through that link, so the forwarder listens on an address the link
   # itself holds. Link-local, so nothing past this machine routes to it.
@@ -169,7 +174,7 @@ in
     # global server. The forwarder read the networks' servers from
     # resolved's resolv.conf, which leaves out a link that is not a default
     # route, so it forwarded to nothing and every name failed.
-    networking.networkmanager.ensureProfiles.profiles.losos-adblock = {
+    networking.networkmanager.ensureProfiles.profiles.losos-adblock = lib.mkIf (!inMachine) {
       connection = {
         id = "losos-adblock";
         type = "dummy";
@@ -186,7 +191,7 @@ in
     };
     services.resolved.settings.Resolve.DNSOverTLS = lib.mkForce "no";
 
-    systemd.sockets.losos-adblock = {
+    systemd.sockets.losos-adblock = lib.mkIf (!inMachine) {
       description = "losos-adblock DNS forwarder";
       wantedBy = [ "sockets.target" ];
       # resolved starts before sysinit.target, and a socket's default
@@ -206,7 +211,7 @@ in
       socketConfig.FreeBind = true;
     };
 
-    systemd.services.losos-adblock = {
+    systemd.services.losos-adblock = lib.mkIf (!inMachine) {
       description = "losos-adblock DNS forwarder";
       requires = [ "losos-adblock.socket" ];
       # nmcli, which the forwarder asks for the networks' servers.

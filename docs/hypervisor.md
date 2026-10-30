@@ -242,6 +242,11 @@ left out. The guest has:
   stream to the host's desktop on port 7350. A machine has no GPU, so apps
   draw with Mesa's llvmpipe and lavapipe into shared memory, which waypipe
   carries;
+- **xwayland-satellite** beside it, an X server at `DISPLAY=:0` that turns
+  each X11 window into a Wayland one on that socket, for the apps built
+  only for X11, such as [the Slovak eID klient](tokens.md#the-slovak-eid);
+- **the host's security keys and smart card readers**, which
+  [losos-tokens](tokens.md) lends the machine;
 - **apps**: derisk's Terminal, `derisk-terminal`, which draws in software
   because there is no GPU, Danube, and derisk's Calculator. The Calculator is
   the one derisk core app that is its own window, `derisk-gpui`, and the host's
@@ -328,6 +333,14 @@ before, and the machine keeps all of them apart from the host.
   the machine down and deletes the disk. The machine must be off for this,
   because the disk is added to its definition. A move that finds the machine
   running waits for the next boot or sign-in.
+
+## Peripherals
+
+USB controllers, Bluetooth radios and the devices plugged into them are not
+the host's either. sys-usb, sys-bluetooth and a disposable machine for each
+other device drive them, and the host keeps its keyboard, pointer and
+security keys. These machines are the OS's, so the Machines app does not
+show them. [Peripherals](peripherals.md) describes them.
 
 ## Machines from an installer CD
 
