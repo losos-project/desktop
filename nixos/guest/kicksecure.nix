@@ -8,9 +8,11 @@
 # machines have: no SUID programs but PAM's (its permission-hardener), a locked
 # root and a 027 umask. Each is set below as far as a NixOS machine has it.
 #
-# Every setting gives way to a machine's own module, which sets it plainly,
-# except two lists: a machine that needs a disabled kernel module back
-# names it in allowModules, and one that needs a SUID program in wrappers.
+# A sysctl gives way to a machine's own module, which sets it plainly. The
+# rest are lists, which merge rather than give way: a machine adds kernel
+# parameters after these and takes one away only with mkForce, names a
+# disabled kernel module it needs in allowModules, and a SUID program it
+# needs in wrappers.
 {
   config,
   lib,
@@ -22,6 +24,7 @@ let
   cfg = config.losos.service.kicksecure;
   settings = import ./kicksecure-settings.nix {
     inherit (pkgs.stdenv.hostPlatform) isx86;
+    falseProgram = "${pkgs.coreutils}/bin/false";
   };
   disabled = lib.subtractLists cfg.allowModules (
     lib.concatLists (lib.attrValues settings.disabledModules)
@@ -58,10 +61,9 @@ in
     boot.kernelParams = settings.kernelParams;
     # Above NixOS's own defaults (mkDefault), below any machine's setting.
     boot.kernel.sysctl = lib.mapAttrs (_: lib.mkOverride 900) settings.sysctl // {
-      # The store's false, which /bin does not have. Forced over the
-      # "core" NixOS sets when systemd-coredump is off, as it is here, since
-      # it would otherwise put its own handler back.
-      "kernel.core_pattern" = lib.mkForce "|${pkgs.coreutils}/bin/false";
+      # Forced over the "core" NixOS sets when systemd-coredump is off, as
+      # it is here, since it would otherwise put its own handler back.
+      "kernel.core_pattern" = lib.mkForce settings.sysctl."kernel.core_pattern";
     };
     systemd.coredump.enable = false;
     systemd.settings.Manager.DefaultLimitCORE = "0";

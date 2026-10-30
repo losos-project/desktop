@@ -4,14 +4,15 @@
 # etc/modprobe.d/30_security-misc_disable.conf as of 2026-09-30), for the
 # machines the OS runs parts of itself in. kicksecure.nix applies it to a
 # NixOS service machine; a BusyBox one, which has no sysctl.d or modprobe,
-# takes the command line and sets the sysctls from its init.
+# takes the command line and sets the sysctls from its init. Each passes the
+# false(1) its core dumps are piped to, since a NixOS machine has no /bin.
 #
 # Left out, because a service machine has no use for them: the IOMMU and EFI
 # settings (it has neither an IOMMU of its own nor EFI, and the host's
 # IOMMU is what keeps it from the rest of memory, kernel-hardening.nix) and
 # lockdown and module signatures (it boots the host's kernel, which forces
 # both).
-{ isx86 }:
+{ isx86, falseProgram }:
 
 {
   kernelParams = [
@@ -91,7 +92,7 @@
     "fs.protected_fifos" = 2;
     "fs.protected_regular" = 2;
     # No core dumps, which hold whatever secrets the process had.
-    "kernel.core_pattern" = "|/bin/false";
+    "kernel.core_pattern" = "|${falseProgram}";
     "fs.suid_dumpable" = 0;
     "kernel.core_uses_pid" = 1;
     "vm.swappiness" = 1;
