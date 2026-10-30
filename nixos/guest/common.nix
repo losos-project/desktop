@@ -54,6 +54,10 @@ in
     ../modules/home-folders.nix
     # uutils, sudo-rs's su and Sequoia's gpg, as on the host.
     ../modules/userland.nix
+    # The host's security keys and smart card readers.
+    ./tokens.nix
+    # The Slovak eID klient, downloaded on its first start.
+    ./eid.nix
   ];
 
   options.losos.guest.name = lib.mkOption {
@@ -201,10 +205,24 @@ in
         Restart = "always";
       };
     };
-    # Every unit of the user's manager draws on that socket: the apps
+    # X11 for the apps built only for it, such as the eID klient (eid.nix):
+    # xwayland-satellite is an X server that makes each X11 window a
+    # Wayland one, which waypipe then carries like any other.
+    systemd.user.services.xwayland-satellite = {
+      description = "Show this machine's X11 apps through its waypipe";
+      wantedBy = [ "default.target" ];
+      after = [ "waypipe.service" ];
+      bindsTo = [ "waypipe.service" ];
+      serviceConfig = {
+        ExecStart = "${lib.getExe pkgs.xwayland-satellite} :0";
+        Restart = "always";
+        RestartSec = 1;
+      };
+    };
+    # Every unit of the user's manager draws on those sockets: the apps
     # losos-guest-run starts and the portal's dialogs alike.
     systemd.user.settings.Manager.DefaultEnvironment =
-      "WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland";
+      "WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XDG_SESSION_TYPE=wayland";
 
     # Mesa's software renderers, OpenGL and Vulkan: the guest has no GPU, and
     # derisk's GPUI apps need Vulkan.
