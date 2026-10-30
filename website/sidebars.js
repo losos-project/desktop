@@ -30,6 +30,7 @@ module.exports = {
         'sign-in',
         'tokens',
         'users',
+        'company',
         'releases',
         'allocator',
         'security-report',

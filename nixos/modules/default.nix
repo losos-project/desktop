@@ -18,6 +18,7 @@
     ./machines.nix
     ./service-machines.nix
     ./schizo.nix
+    ./schizo-reboot.nix
     ./busybox-guests.nix
     ./busybox-host-kernel.nix
     ./passthrough.nix

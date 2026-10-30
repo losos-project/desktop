@@ -260,6 +260,7 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-login-bridge"
           "losos-tokens"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
@@ -353,6 +354,11 @@
           # LosOS box lays them out, files to one and a repository to the
           # other, then again after changes (backup.nix).
           backup = pkgs.testers.runNixOSTest ./nixos/tests/backup.nix;
+          # Company accounts: a computer joined to a LosOS box's LosOS Login
+          # (Authelia), the first login making each person's homed record,
+          # refusals, the offline fallback to homed and a password changed
+          # at the box (company.nix).
+          company = pkgs.testers.runNixOSTest ./nixos/tests/company.nix;
           # Windows app support's containers: a person's rootless Podman from
           # the image's subordinate IDs, a container run through WinBoat's
           # pm and its podman plugin, and none of either for root

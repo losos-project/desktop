@@ -388,6 +388,15 @@
   LosOS Git takes no passwords, so the repositories go to LosOS cloud as
   files. See
   [Backups to a LosOS box](backup.md).
+- **Company accounts are half done.** The bridge logs people in with their
+  LosOS Login password, keeps their homed records in step at each login,
+  and locks people the box removed whenever the computer is on the office
+  network. Mesh CI manages a computer with six fixed steps only (status,
+  update, reboot, channel, lock, unlock): no Flatpaks, no settings, no
+  scripts. Joining is a command, with no Settings page. An account whose only second factor is a passkey cannot log in,
+  because PAM cannot ask for one. The bridge has logged in against Authelia
+  set up as LosOS Login sets it up, not against a real box behind a real
+  gateway. See [Company accounts](company.md).
 - **Names through the edge in schizo mode.** With an edge set, schizo mode
   sends its connections out from the edge, but Tor's exits still look up
   the names. The edge's SOCKS exit could take the name itself, but the
