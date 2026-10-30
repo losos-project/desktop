@@ -34,6 +34,8 @@
     ./macos-apps.nix
     ./android-apps.nix
     ./flatpak-machine.nix
+    # Security keys and smart card readers, lent to the machines.
+    ./tokens.nix
     ./allocator.nix
     ./image.nix
     ./disk.nix

@@ -9,9 +9,11 @@
 # to the host over vsock from the address libvirt gave that machine, which
 # is how the desktop tells whose window it is. The machine looks .local
 # names up through the host, so it finds a box on the host's network that
-# its own multicast could never reach past libvirt's NAT. A LosOS boxes
-# machine finds that box through the host's resolved and offers it as an
-# app, and the first machine's connections to the box go through it. Then
+# its own multicast could never reach past libvirt's NAT. The LosOS boxes
+# machine, made at boot and started once the box answers, finds that box
+# through the host's resolved and offers it as an app, its keyring opens
+# with the password the host keeps for it, and the first machine's
+# connections to the box go through it. Then
 # a Windows machine, as
 # far as libvirt goes without Windows: defined with the image's drivers CD
 # and started with its TPM.
@@ -154,6 +156,11 @@
       '';
 
       environment.systemPackages = [ pkgs.python3 ];
+
+      # The host makes the LosOS boxes machine at boot and starts it once a
+      # box answers, and the LAN's box answers from the start. Started by
+      # hand here instead, so it does not boot beside `work` under TCG.
+      systemd.services.losos-boxes-wake.wantedBy = lib.mkForce [ ];
     };
 
   testScript = ''
@@ -318,12 +325,16 @@
         machine.wait_for_unit("losos-boxes-relay.service")
         machine.wait_for_unit("losos-boxes-dns.service")
         machine.succeed(f"{virsh} net-dumpxml default | grep -q hostsdir=/run/losos-boxes/hosts")
-        machine.succeed(
-            "LIBVIRT_DEFAULT_URI=qemu:///system pm machine create boxes"
-            " --image /run/current-system/sw/share/losos/machines/losos-boxes.qcow2"
-            " --label green --memory 1536 --cpus 2 --disk 8",
-            "LIBVIRT_DEFAULT_URI=qemu:///system pm machine start boxes",
+        # Made at boot, as the system makes its machines, and not started.
+        machine.wait_for_unit("losos-system-machines.service")
+        assert machine.succeed(f"{virsh} domstate boxes").strip() == "shut off"
+        # Started by the first box that answers, which lanbox does.
+        machine.succeed("systemctl start losos-boxes-wake.service")
+        machine.wait_until_succeeds(f"{virsh} domstate boxes | grep -qx running", timeout=120)
+        machine.wait_until_succeeds(
+            "systemctl show -P ActiveState losos-boxes-wake.service | grep -qx inactive", timeout=60
         )
+        machine.succeed("journalctl -u losos-boxes-wake --no-pager | grep -q 'a box is here'")
         machine.wait_until_succeeds(
             f"{virsh} qemu-agent-command boxes '{{\"execute\":\"guest-ping\"}}'", timeout=900
         )
@@ -352,6 +363,23 @@
         # through the host's.
         status = in_guest("/run/current-system/sw/bin/resolvectl", "status", domain="boxes")
         assert "+mDNS" not in status, status
+
+    with subtest("the LosOS boxes machine's keyring opens with the password the host keeps"):
+        uuid = machine.succeed(f"{virsh} domuuid boxes").strip()
+        machine.wait_until_succeeds(f"test -s /var/lib/losos-boxes/keyrings/{uuid}", timeout=300)
+        machine.succeed(f"stat -c %U:%a /var/lib/losos-boxes/keyrings/{uuid} | grep -qx losos-boxes:600")
+        # The login keyring was made with it, with nobody asked.
+        for _ in range(60):
+            made = in_guest(
+                "/run/current-system/sw/bin/sh", "-c",
+                "test -s /home/user/.local/share/keyrings/login.keyring && echo made || true",
+                domain="boxes",
+            )
+            if "made" in made:
+                break
+            time.sleep(2)
+        else:
+            raise Exception("the LosOS boxes machine made no login keyring")
 
     with subtest("the other machines reach the box through the LosOS boxes machine"):
         machine.wait_until_succeeds(

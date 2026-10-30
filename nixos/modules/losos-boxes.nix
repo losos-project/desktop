@@ -10,6 +10,11 @@
 # its resolved, which does the mDNS a machine behind libvirt's NAT cannot.
 # A phone has no machines (the GSI does not import libvirt.nix), so there
 # the session runs them itself.
+#
+# The host makes the machine, `boxes`, at the first boot, and starts it the
+# first time a box answers on one of its networks (`losos-boxes wake`).
+# It keeps the machine's keyring password, which the machine asks the
+# relay for at every boot, so nobody is asked for one.
 {
   config,
   options,
@@ -20,6 +25,9 @@
 
 let
   machines = config.virtualisation.libvirtd.enable;
+  # The LosOS boxes machine the host makes, and the name it has on the
+  # desktop: "mattbox in boxes".
+  boxesMachine = "boxes";
 in
 {
   config = lib.mkMerge [
@@ -60,6 +68,17 @@ in
     # without machines.nix has no such option to set.
     (lib.optionalAttrs (options.losos ? machines) {
       losos.machines.guests.losos-boxes = ../guest/boxes.nix;
+
+      # Made once, as machines.nix makes every machine the system needs; one
+      # its owner removed in the Machines app is not made again.
+      losos.machines.system = lib.mkIf machines {
+        ${boxesMachine} = {
+          template = "losos-boxes";
+          label = "green";
+          # It browses, routes and runs a terminal; Danube at most.
+          memory = 1536;
+        };
+      };
     })
 
     (lib.mkIf machines {
@@ -70,7 +89,9 @@ in
       # lookups only, which change nothing on the host. On port 7352 it
       # names the boxes it found, and the relay writes those names at its
       # address into a hosts file of HOSTS_DIR, below, so the other machines'
-      # connections to a box go to it.
+      # connections to a box go to it. On port 7353 it is handed its
+      # keyring's password, made the first time and kept in the relay's state
+      # directory, which only the relay's user reads.
       systemd.services.losos-boxes-relay = {
         description = "Lend the LosOS boxes machine this host's resolved";
         wantedBy = [ "multi-user.target" ];
@@ -93,6 +114,9 @@ in
           Restart = "on-failure";
           ProtectSystem = "strict";
           ReadWritePaths = [ "/run/losos-boxes" ];
+          StateDirectory = "losos-boxes";
+          StateDirectoryMode = "0700";
+          UMask = "0077";
           ProtectHome = true;
           PrivateTmp = true;
           RestrictAddressFamilies = [
@@ -101,6 +125,46 @@ in
           ];
         };
       };
+
+      # Starts the LosOS boxes machine the first time a box answers on one of
+      # the host's networks, browsing through the host's resolved as the
+      # machine does through the relay, and ends there: a machine its owner
+      # stops stays stopped until the next boot. Root's, as starting a
+      # machine takes libvirt's read-write socket; it reads nothing of
+      # anyone's.
+      systemd.services.losos-boxes-wake = {
+        description = "Start the LosOS boxes machine when a box shows up";
+        wantedBy = [ "multi-user.target" ];
+        after = [
+          "losos-system-machines.service"
+          "libvirtd.service"
+          "systemd-resolved.service"
+        ];
+        path = [ config.virtualisation.libvirtd.package ];
+        environment = {
+          LIBVIRT_DEFAULT_URI = "qemu:///system";
+          # virsh keeps its own files under HOME, which is not root's here.
+          HOME = "/run/losos-boxes-wake";
+        };
+        serviceConfig = {
+          ExecStart = "${lib.getExe pkgs.losos-boxes} wake ${boxesMachine}";
+          # resolved restarting ends a browse; the next run starts over.
+          Restart = "on-failure";
+          RestartSec = "10s";
+          RuntimeDirectory = "losos-boxes-wake";
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          PrivateTmp = true;
+          # libvirt's and resolved's sockets, and a box from before
+          # `_losos._tcp`, which is asked over HTTP whether it is one.
+          RestrictAddressFamilies = [
+            "AF_UNIX"
+            "AF_INET"
+            "AF_INET6"
+          ];
+        };
+      };
+
       users.users.losos-boxes = {
         isSystemUser = true;
         group = "losos-boxes";

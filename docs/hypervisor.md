@@ -242,6 +242,11 @@ left out. The guest has:
   stream to the host's desktop on port 7350. A machine has no GPU, so apps
   draw with Mesa's llvmpipe and lavapipe into shared memory, which waypipe
   carries;
+- **xwayland-satellite** beside it, an X server at `DISPLAY=:0` that turns
+  each X11 window into a Wayland one on that socket, for the apps built
+  only for X11, such as [the Slovak eID klient](tokens.md#the-slovak-eid);
+- **the host's security keys and smart card readers**, which
+  [losos-tokens](tokens.md) lends the machine;
 - **apps**: derisk's Terminal, `derisk-terminal`, which draws in software
   because there is no GPU, Danube, and derisk's Calculator. The Calculator is
   the one derisk core app that is its own window, `derisk-gpui`, and the host's

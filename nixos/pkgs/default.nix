@@ -124,6 +124,9 @@ in
   # The portals' dialogs in a machine of their own, sys-portal, for the
   # host's apps and every machine's (docs/portal-machine.md).
   losos-portal = callWithMold ./losos-portal.nix { };
+  # The host's security keys and smart card readers, lent to its machines
+  # (docs/tokens.md).
+  losos-tokens = callWithMold ./losos-tokens.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.
