@@ -9,6 +9,9 @@ losos-desktop_<v>_usr-x86-64-verity_<uuid>.raw.xz   its hash tree
 losos-desktop_<v>.linux, .initrd, .grub             the UKI's kernel, initrd and
                                                     command line, for GRUB on a
                                                     BIOS PC, x86_64 only
+losos-desktop_<v>_aarch64.grub                      the UKI's command line, for
+                                                    the recovery shell, aarch64
+                                                    only
 losos-desktop_<v>_x86_64.raw.xz                     the disk image
 losos-desktop_<v>_x86_64-installer.iso              the installer
 losos-desktop_<v>_x86_64-windows-installer.exe      the installer for Windows, x86_64 only
