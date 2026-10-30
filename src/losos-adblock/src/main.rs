@@ -14,17 +14,21 @@
 //!     losos-adblock compile          # compile from the lists already fetched
 //!     losos-adblock serve            # the DNS forwarder (socket-activated)
 //!     losos-adblock check NAME...    # whether each name is blocked, and by what
+//!     losos-adblock encrypted-dns on|strict|off|status
+//!                                    # DNS over HTTPS or TLS to the forwarder's upstreams
 //!
 //! `--config DIR` and `--state DIR` replace /etc/losos-adblock and
 //! /var/lib/losos-adblock, and `--listen ADDR` makes `serve` bind its own
 //! sockets instead of taking systemd's.
 
 mod dns;
+mod encrypted;
 mod lists;
+mod portal;
 mod rules;
 mod serve;
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -59,7 +63,7 @@ pub enum Error {
     Listen(#[source] std::io::Error),
 }
 
-const USAGE: &str = "usage: losos-adblock [--config DIR] [--state DIR] update|compile|serve [--listen ADDR]|check NAME...";
+const USAGE: &str = "usage: losos-adblock [--config DIR] [--state DIR] update|compile|serve [--listen ADDR]|check NAME...|encrypted-dns on|strict|off|status";
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -127,7 +131,7 @@ fn run() -> miette::Result<ExitCode> {
                     Error::Listen(std::io::Error::other("no sockets from systemd"))
                 })?,
             };
-            serve::run(sockets, paths.dns());
+            serve::run(sockets, &paths);
             Ok(ExitCode::SUCCESS)
         }
         Some("check") if words.len() > 1 => {
@@ -150,6 +154,40 @@ fn run() -> miette::Result<ExitCode> {
                 ExitCode::from(1)
             })
         }
+        Some("encrypted-dns") => encrypted_dns(&paths, words.get(1).map(String::as_str)),
         _ => Err(miette::miette!(USAGE)),
     }
+}
+
+/// Turns encrypted DNS on or off, or says which it is and through what.
+/// The running forwarder sees the switch within a second (serve.rs).
+fn encrypted_dns(paths: &Paths, verb: Option<&str>) -> miette::Result<ExitCode> {
+    let switch = serve::Switch::new(paths);
+    match verb {
+        Some("status") => {}
+        Some(word) => {
+            let mode = serve::Mode::from_word(word).ok_or_else(|| miette::miette!(USAGE))?;
+            switch
+                .set(mode)
+                .map_err(|e| Error::Write(switch.own.clone(), e))?;
+        }
+        None => return Err(miette::miette!(USAGE)),
+    }
+    // Written rather than printed: `status | head -n1` closes the pipe
+    // early, and println! panics on that.
+    let mut out = std::io::stdout().lock();
+    let _ = match switch.read() {
+        Some(encrypted) => {
+            let mut text = format!("{}\n", if encrypted.strict { "strict" } else { "on" });
+            for server in encrypted.servers {
+                text.push_str(&format!("{server:?}\n"));
+            }
+            out.write_all(text.as_bytes())
+        }
+        None if switch.overridden() => {
+            out.write_all(b"off\nforced to /run/losos-adblock/upstreams\n")
+        }
+        None => out.write_all(b"off\n"),
+    };
+    Ok(ExitCode::SUCCESS)
 }

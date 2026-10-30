@@ -237,6 +237,15 @@ in
             default = null;
             description = "Its disk in GiB, or pm's default.";
           };
+          service = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              Whether it is the OS's rather than its owner's to manage: kept
+              out of the Machines app, its apps still in the palette
+              (`<pm:service>` in its pm metadata, which derisk reads).
+            '';
+          };
         };
       }
     );
@@ -292,6 +301,7 @@ in
             pkgs.pm
             config.virtualisation.libvirtd.package
             pkgs.coreutils
+            pkgs.gnused
           ];
           environment = {
             LIBVIRT_DEFAULT_URI = "qemu:///system";
@@ -323,6 +333,22 @@ in
               touch "$STATE_DIRECTORY/made/$name"
             }
             ${lib.concatMapStrings (args: "make_machine ${args}\n") systemMachines}
+
+            # pm's metadata, with <service> added: every start, since a
+            # machine made before it was the OS's has none.
+            mark_service() {
+              local ns=https://losos-project.github.io/xmlns/pm-machine/1 xml prefix
+              xml=$(virsh -q metadata "$1" "$ns" 2>/dev/null) || return 0
+              case $xml in *":service>"* | *"<service>"*) return 0 ;; esac
+              prefix=$(printf '%s' "$xml" | sed -n '1s|^<\([A-Za-z0-9_-]*:\)\{0,1\}machine[ >].*|\1|p')
+              xml=$(printf '%s\n' "$xml" | sed "s|</''${prefix}machine>|<''${prefix}service>true</''${prefix}service></''${prefix}machine>|")
+              virsh -q metadata "$1" "$ns" --key "''${prefix%:}" --set "$xml" --config >/dev/null
+            }
+            ${lib.concatStrings (
+              lib.mapAttrsToList (
+                name: machine: lib.optionalString machine.service "mark_service ${lib.escapeShellArg name}\n"
+              ) config.losos.machines.system
+            )}
           '';
         };
 

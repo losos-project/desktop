@@ -1,0 +1,32 @@
+[package]
+name = "losos-vm-call"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_vm_call"
+path = "src/lib.rs"
+
+[[bin]]
+name = "losos-vm-call"
+path = "src/main.rs"
+
+[dependencies]
+# Logs go through tracing to stderr, `RUST_LOG` choosing the level, and
+# failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# Each pump hands its frames to the one thread that writes the socket.
+crossbeam-channel = "0.5"
+# The guest's listener, as in losos-boxes and derisk-machines.
+vsock = "0.5.4"
+# What std does not have yet: a socket's peer credentials, a user's groups,
+# and a vsock socket bound to a chosen port before it connects.
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

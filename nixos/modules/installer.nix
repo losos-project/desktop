@@ -35,8 +35,9 @@ let
   # here reads the same as its original in /etc/sysupdate.d.
   sysupdateFormat = pkgs.formats.ini { listToValue = toString; };
 
-  # GRUB and grubenv, as grub.nix puts them on the image's ESP, and on
-  # x86_64 nothing more: BIOS GRUB lives in the BIOS boot partition.
+  # GRUB and grubenv, as grub.nix puts them on the image's ESP, with shim,
+  # MokManager and the certificate when the image is signed for Secure Boot,
+  # and on x86_64 nothing more: BIOS GRUB lives in the BIOS boot partition.
   # The UKI is not in this set (repart-verity-store.nix adds it later), which
   # is as it should be: sysupdate installs the UKI, counted, like any update.
   espFiles = lib.mapAttrsToList (
@@ -180,6 +181,10 @@ let
       # The swap definition for the PC's RAM, as first boot writes it
       # (disk.nix), for an install that makes swap itself.
       swap = "${pkgs.losos-swap}/lib/losos/losos-swap";
+      inherit esp repartDefinitions sysupdateTemplates;
+      # The key the medium's GRUB and UKI are signed with, as the
+      # image's are (secure-boot.nix).
+      secureBoot = { inherit (cfg.secureBoot) privateKey certificate; };
       # Run on the disk once it is installed, so a legacy BIOS PC starts it
       # too; null where there is no BIOS (aarch64).
       biosBoot =

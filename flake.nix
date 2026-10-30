@@ -98,6 +98,14 @@
       # outside Actions, where the ISO offers no report.
       reportClientId = builtins.getEnv "LOSOS_REPORT_CLIENT_ID";
 
+      # Where the private half of nixos/keys/secure-boot.crt is on this
+      # builder, which signs GRUB and the UKIs for Secure Boot
+      # (docs/secure-boot.md). CI writes the repository secret
+      # SECURE_BOOT_KEY there, readable by the build users, and only the
+      # signing steps read it. Unset, the images are unsigned and start with
+      # Secure Boot off, as they always have.
+      secureBootKey = builtins.getEnv "LOSOS_SECURE_BOOT_KEY";
+
       # requireProxy refused to build an image without LOSOS_PROXY_URL, back
       # when the proxy was the only place an image could update from. It
       # went when GitHub Releases became the default source, and is not
@@ -117,6 +125,9 @@
         }
         // lib.optionalAttrs (reportClientId != "") {
           losos.report.clientId = lib.mkDefault reportClientId;
+        }
+        // lib.optionalAttrs (secureBootKey != "") {
+          losos.secureBoot.privateKey = lib.mkDefault secureBootKey;
         };
 
       mkSystem =
@@ -248,6 +259,9 @@
           "losos-installer"
           "losos-report"
           "losos-hardware"
+          "losos-peripherals"
+          "losos-gaming"
+          "losos-focus"
           "losos-security"
           "losos-swap"
           "losos-windows-installer"
@@ -257,6 +271,8 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-login-bridge"
+          "losos-tokens"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -289,6 +305,10 @@
           hardware = pkgs.testers.runNixOSTest ./nixos/tests/hardware.nix;
           # The same image on a legacy BIOS, started by GRUB (bios.nix).
           boot-bios = pkgs.testers.runNixOSTest (import ./nixos/tests/boot-bios.nix { inherit self; });
+          # The same image with Secure Boot on: shim, the signed GRUB and
+          # the signed UKI, and the Security page's check passing
+          # (secure-boot.nix).
+          secure-boot = pkgs.testers.runNixOSTest (import ./nixos/tests/secure-boot.nix { inherit self; });
           # hibernate is gone with hibernate.nix: the locked-down kernel
           # refuses to hibernate (kernel-hardening.nix).
           # The start-up sound reaches a sound card, and plays backwards at
@@ -305,6 +325,43 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # Encrypted DNS: names over HTTPS and no plain query leaving while
+          # it is on, failing closed when the server is gone (adblock.nix).
+          encrypted-dns = pkgs.testers.runNixOSTest ./nixos/tests/encrypted-dns.nix;
+          # A security key and a smart card reader on the host, used from a
+          # machine's half of the relay over vsock's loopback (tokens.nix).
+          tokens = pkgs.testers.runNixOSTest ./nixos/tests/tokens.nix;
+          # Signing in with an eID card: homed enrols the certificate that
+          # may decrypt and logs a person in with the PIN, through the
+          # relay and the eID machine's half, with SoftHSM for the card
+          # (eid-signin.nix).
+          eid-signin = pkgs.testers.runNixOSTest ./nixos/tests/eid-signin.nix;
+          # USB devices plugged into sys-usb's controller wake it and reach
+          # their machines, over and over, and it sleeps again once they are
+          # gone (peripherals.nix).
+          peripherals = pkgs.testers.runNixOSTest ./nixos/tests/peripherals.nix;
+          # The network and files machines under load: connections, downloads
+          # and DNS through the network machine, nmcli through losos-vm-call,
+          # schizo mode cutting the host off, the machine destroyed and
+          # started again; drives copied to and ejected from the files
+          # machine, which powers off when idle (service-machines.nix).
+          service-machines = pkgs.testers.runNixOSTest ./nixos/tests/service-machines.nix;
+          # The portal machine: a host app's request starts it, an app in
+          # another machine gets a copy of the file picked for it and saves
+          # it back to the host, and it stops when idle (portal-machine.nix).
+          portal-machine = pkgs.testers.runNixOSTest ./nixos/tests/portal-machine.nix;
+          # Opening the Agent starts the person's own machine, whose window
+          # reaches the host from its address, whose home is its own
+          # encrypted disk, kept across starts, and whose tools channel their
+          # session answers (agent.nix).
+          agent-machine = pkgs.testers.runNixOSTest ./nixos/tests/agent-machine.nix;
+          # Schizo mode: the kill switch before the network, the host's,
+          # its names' and a machine's connections through the Tor gateway
+          # to a Tor network of the test's own, and nothing out with the
+          # gateway down (schizo.nix).
+          schizo = pkgs.testers.runNixOSTest ./nixos/tests/schizo.nix;
+          # A security key and a smart card reader on the host, used from a
+          # machine's half of the relay over vsock's loopback (tokens.nix).
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;
@@ -312,11 +369,25 @@
           # LosOS box lays them out, files to one and a repository to the
           # other, then again after changes (backup.nix).
           backup = pkgs.testers.runNixOSTest ./nixos/tests/backup.nix;
+          # Company accounts: a computer joined to a LosOS box's LosOS Login
+          # (Authelia), the first login making each person's homed record,
+          # refusals, the offline fallback to homed and a password changed
+          # at the box (company.nix).
+          company = pkgs.testers.runNixOSTest ./nixos/tests/company.nix;
           # Windows app support's containers: a person's rootless Podman from
           # the image's subordinate IDs, a container run through WinBoat's
           # pm and its podman plugin, and none of either for root
           # (windows-apps.nix).
           windows-apps = pkgs.testers.runNixOSTest ./nixos/tests/windows-apps.nix;
+          # The gaming machine without a card to give it: the card refused
+          # for want of an IOMMU, a boot that carries on, and a definition
+          # libvirt's schema accepts with nothing on it that says virtual
+          # machine (gaming.nix).
+          gaming = pkgs.testers.runNixOSTest ./nixos/tests/gaming.nix;
+          # Focus mode as a game turns it on: gamemoderun in a session freezes
+          # the background slices and stops what focus stops, and the game
+          # exiting or its player logging out undoes it (focus.nix).
+          focus = pkgs.testers.runNixOSTest ./nixos/tests/focus.nix;
           installer-boot = pkgs.testers.runNixOSTest (
             import ./nixos/tests/installer-boot.nix { inherit self; }
           );

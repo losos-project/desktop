@@ -45,7 +45,12 @@
     # Flatpak on the host: a phone's kernel has no KVM for the machine a PC
     # runs it in (modules/flatpak-machine.nix).
     ../modules/flatpak.nix
+    # hardened_malloc for a 39-bit address space, tried by the initrd before
+    # it is preloaded, since the kernel is the phone's.
+    ../modules/allocator.nix
     ./boot.nix
     ./android.nix
   ];
+
+  losos.allocator.deviceKernel = true;
 }

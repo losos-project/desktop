@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- Joining this computer to a company's LosOS Login, or taking it out,
+     changes who may log in to it, so it asks an administrator of the
+     computer every time (src/service.rs). -->
+<policyconfig>
+  <vendor>LosOS</vendor>
+  <action id="org.losos.login-bridge.join">
+    <description>Join this computer to a company, or take it out</description>
+    <message>Authentication is required to change which company's accounts can log in to this computer</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+</policyconfig>
