@@ -76,6 +76,33 @@ template as `losos-boxes`, and refuses any other machine. Varlink's resolve
 interface only looks things up, so the machine can browse and resolve through
 the host but cannot change anything there.
 
+## Away from home
+
+A box that reaches the internet through an
+[edge](https://losos.dasmat.us/manual/terminal/#away-from-home) tells
+`losos login` its address there, and `losos` keeps it with the box's key.
+When the box's own address leads nowhere, because the computer is on
+another network, `losos` sends its calls to that address instead. They are
+still signed and encrypted end to end, so the edge carries them without
+reading them.
+
+`losos-boxes watch` offers such a box even while mDNS cannot find it. Once
+a minute it reads `losos hosts`, and for each box with an **away from
+home** address that is not on this network it writes the box's entry
+anyway, described as "LosOS box mattbox.local, away from home, through
+mattbox.losos.cfd". Opening it opens the box in `losos`, as at home, and
+its action, **Open LosOS Cloud**, opens LosOS Cloud at the edge address,
+which the edge serves to anyone who signs in to LosOS Login. There is no
+action for the admin pages, which a box keeps to its own network. When the
+box is found on the network again, its usual entry replaces this one. When
+`losos logout` forgets it, the entry goes. While the keyring is locked
+`watch` reads nothing, so it never asks for the keyring's password, and
+leaves the entries as they were.
+
+The palette's search inside the boxes' files ([below](#in-the-command-palette))
+goes through `losos` too, so it finds files on a box away from home the
+same way.
+
 ## From the other machines
 
 The other machines reach a box through the LosOS boxes machine, so it is the
