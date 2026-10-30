@@ -1,7 +1,8 @@
 //! What `losos-tokens` decides, apart from the sockets and devices it
 //! decides it for: the frames it sends machines, the CTAPHID it reads to
 //! keep machines' conversations with a key apart, the uhid events a machine
-//! makes its copy of a key with, and what the host's sysfs and libvirt say.
+//! makes its copy of a key with, what the host's sysfs and libvirt say, and
+//! which machine's localhost a forwarded port goes to.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,6 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const KEYS_PORT: u32 = 7370;
 /// The vsock port machines reach the host's pcscd on.
 pub const SMART_CARDS_PORT: u32 = 7371;
+/// The vsock port the host reaches a program on a machine's localhost on,
+/// such as the eID client a page hands a sign-in to (docs/tokens.md,
+/// "Hand-offs between apps").
+pub const LOCALHOST_PORT: u32 = 7372;
 
 /// The size of every CTAPHID report, in and out, on every FIDO key.
 pub const REPORT_LEN: usize = 64;
@@ -34,11 +39,18 @@ pub enum Frame {
     /// One CTAPHID report: from the key to the machine, or from the machine
     /// to the key.
     Report { key: u8, report: [u8; REPORT_LEN] },
+    /// From a machine: a program there listens on localhost `port`, which
+    /// the host forwards its own localhost `port` to.
+    Serves { port: u16 },
+    /// From a machine: nothing there listens on `port` any more.
+    Stopped { port: u16 },
 }
 
 const ADD: u8 = 1;
 const REMOVE: u8 = 2;
 const REPORT: u8 = 3;
+const SERVES: u8 = 4;
+const STOPPED: u8 = 5;
 /// The longest key name a frame carries, which is uhid's limit too.
 const NAME_MAX: usize = 127;
 
@@ -61,6 +73,8 @@ impl Frame {
             }
             Frame::Remove { key } => (REMOVE, *key, Vec::new()),
             Frame::Report { key, report } => (REPORT, *key, report.to_vec()),
+            Frame::Serves { port } => (SERVES, 0, port.to_le_bytes().to_vec()),
+            Frame::Stopped { port } => (STOPPED, 0, port.to_le_bytes().to_vec()),
         };
         let mut bytes = Vec::with_capacity(4 + payload.len());
         bytes.push(kind);
@@ -101,6 +115,12 @@ impl Frame {
             REPORT => Some(Frame::Report {
                 key,
                 report: payload.try_into().ok()?,
+            }),
+            SERVES => Some(Frame::Serves {
+                port: u16::from_le_bytes(payload.try_into().ok()?),
+            }),
+            STOPPED => Some(Frame::Stopped {
+                port: u16::from_le_bytes(payload.try_into().ok()?),
             }),
             _ => None,
         }
@@ -435,9 +455,144 @@ impl Lease {
     }
 }
 
+/// Whether `/proc/net/tcp` or `tcp6`, as `table`, has a socket listening
+/// on `port` that a connection to `localhost` reaches: on that address, on
+/// every address, or on its IPv6 forms. A machine reads its own tables
+/// rather than knock on the port, which the program behind it would see.
+pub fn listening(table: &str, localhost: std::net::Ipv4Addr, port: u16) -> bool {
+    const LISTEN: &str = "0A";
+    // The kernel prints each 32-bit word of an address as a number in the
+    // machine's own byte order.
+    let v4 = format!("{:08X}", u32::from_ne_bytes(localhost.octets()));
+    let mut reached = vec![
+        v4.clone(),
+        "0".repeat(8),
+        "0".repeat(32),
+        format!(
+            "{}{:08X}{v4}",
+            "0".repeat(16),
+            u32::from_ne_bytes([0, 0, 0xff, 0xff])
+        ),
+    ];
+    if localhost == std::net::Ipv4Addr::LOCALHOST {
+        reached.push(format!(
+            "{}{:08X}",
+            "0".repeat(24),
+            u32::from_ne_bytes([0, 0, 0, 1])
+        ));
+    }
+    table.lines().skip(1).any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let Some((address, local_port)) = fields.get(1).and_then(|l| l.rsplit_once(':')) else {
+            return false;
+        };
+        u16::from_str_radix(local_port, 16).ok() == Some(port)
+            && fields.get(3) == Some(&LISTEN)
+            && reached.iter().any(|r| r == address)
+    })
+}
+
+/// Which machines serve which forwarded port, from their `Serves` and
+/// `Stopped` frames. When two do, the one that started last gets the
+/// connections: that is the one the person just opened the app in.
+#[derive(Debug)]
+pub struct Services<M> {
+    /// By port, the machines serving it, the latest last.
+    ports: BTreeMap<u16, Vec<(u64, M)>>,
+}
+
+impl<M> Default for Services<M> {
+    fn default() -> Self {
+        Self {
+            ports: BTreeMap::new(),
+        }
+    }
+}
+
+impl<M: Clone> Services<M> {
+    /// Connection `id`, from `machine`, serves `port`.
+    pub fn serve(&mut self, id: u64, machine: M, port: u16) {
+        let serving = self.ports.entry(port).or_default();
+        serving.retain(|(i, _)| *i != id);
+        serving.push((id, machine));
+    }
+
+    pub fn stop(&mut self, id: u64, port: u16) {
+        if let Some(serving) = self.ports.get_mut(&port) {
+            serving.retain(|(i, _)| *i != id);
+        }
+    }
+
+    /// Connection `id` hung up: it serves nothing.
+    pub fn gone(&mut self, id: u64) {
+        for serving in self.ports.values_mut() {
+            serving.retain(|(i, _)| *i != id);
+        }
+    }
+
+    /// The machine a connection to `port` goes to.
+    pub fn who(&self, port: u16) -> Option<M> {
+        self.ports.get(&port)?.last().map(|(_, m)| m.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_frames_round_trip() {
+        for frame in [
+            Frame::Serves { port: 24727 },
+            Frame::Stopped { port: 24727 },
+        ] {
+            let bytes = frame.encode();
+            assert_eq!(Frame::read(&mut &bytes[..]).unwrap(), Some(frame));
+        }
+    }
+
+    #[test]
+    fn listening_sockets_are_found_by_port() {
+        // 127.0.0.1:24727 listening, 0.0.0.0:22 listening, and a connection
+        // from port 24727 that is not a listener.
+        let tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:6097 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 1 1 0 100 0 0 10 0
+   1: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 2 1 0 100 0 0 10 0
+   2: 0100007F:1F90 0100007F:6097 01 00000000:00000000 00:00000000 00000000  1000        0 3 1 0 20 4 30 10 -1
+";
+        let localhost = std::net::Ipv4Addr::LOCALHOST;
+        assert!(listening(tcp, localhost, 24727));
+        assert!(listening(tcp, localhost, 22));
+        assert!(!listening(tcp, localhost, 8080));
+        // Another loopback address does not reach 127.0.0.1's listener,
+        // but does reach one on every address.
+        let other = std::net::Ipv4Addr::new(127, 0, 0, 2);
+        assert!(!listening(tcp, other, 24727));
+        assert!(listening(tcp, other, 22));
+        let tcp6 = "  sl  local_address remote_address st
+   0: 00000000000000000000000001000000:6097 00000000000000000000000000000000:0000 0A
+   1: 0000000000000000FFFF00000100007F:1F90 00000000000000000000000000000000:0000 0A
+";
+        assert!(listening(tcp6, localhost, 24727));
+        assert!(listening(tcp6, localhost, 8080));
+        assert!(!listening(tcp6, other, 24727));
+    }
+
+    #[test]
+    fn the_latest_machine_to_serve_a_port_gets_it() {
+        let mut services = Services::default();
+        assert_eq!(services.who(24727), None);
+        services.serve(1, "work", 24727);
+        services.serve(2, "personal", 24727);
+        assert_eq!(services.who(24727), Some("personal"));
+        services.stop(2, 24727);
+        assert_eq!(services.who(24727), Some("work"));
+        services.serve(2, "personal", 24727);
+        services.gone(2);
+        assert_eq!(services.who(24727), Some("work"));
+        services.gone(1);
+        assert_eq!(services.who(24727), None);
+    }
 
     fn report(channel: [u8; 4], cmd: u8, payload: &[u8]) -> [u8; REPORT_LEN] {
         let mut r = [0u8; REPORT_LEN];

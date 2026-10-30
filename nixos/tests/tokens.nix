@@ -9,7 +9,11 @@
 # copy, and libfido2 in the machine reads the key's AAGUID through it.
 # Pulling the key out takes the copy away. The reader is vsmartcard's
 # virtual one in the host's pcscd, and the machine lists it and the virtual
-# card put in it through its own pcscd socket.
+# card put in it through its own pcscd socket. A web server on the
+# machine's localhost stands in for the eID klient: the host's localhost
+# reaches it while it listens, and nothing does once it stops. The
+# machine's localhost is 127.0.0.2 here, since the host's end listens on
+# 127.0.0.1 of the same kernel.
 #
 # Not the whole image, only the host's module, so it boots the test
 # driver's kernel quickly and runs without KVM too. machines.nix runs the
@@ -108,6 +112,8 @@ in
           "host"
           "--loopback-machine"
           "work"
+          "--forward"
+          "8124"
         ]
       );
       # The machine's half, as guest/tokens.nix runs it, with its pcscd
@@ -121,6 +127,10 @@ in
           "1"
           "--pcsc-socket"
           "/run/machine/pcscd.comm"
+          "--serve"
+          "8124"
+          "--localhost"
+          "127.0.0.2"
         ];
       };
       systemd.services.mock-fido-key.serviceConfig.ExecStart = lib.getExe (mockKey pkgs);
@@ -138,9 +148,22 @@ in
       systemd.services.virtual-card.serviceConfig.ExecStart =
         "${pkgs.vsmartcard-vpcd}/bin/vicc --type iso7816";
 
+      # The app on the machine's localhost that a page hands work to.
+      systemd.services.machine-app.serviceConfig.ExecStart = lib.escapeShellArgs [
+        "${pkgs.python3}/bin/python3"
+        "-m"
+        "http.server"
+        "--bind"
+        "127.0.0.2"
+        "--directory"
+        (pkgs.writeTextDir "hello.txt" "signed in")
+        "8124"
+      ];
+
       environment.systemPackages = [
         pkgs.libfido2
         pkgs.pcsc-tools
+        pkgs.curl
       ];
     };
 
@@ -205,5 +228,21 @@ in
         )
         # The one machine held the readers each time it asked.
         host.fail("journalctl -u losos-tokens | grep -q 'refused the smart card readers'")
+
+    with subtest("the host's localhost reaches an app on the machine's"):
+        # Nothing on the machine listens yet: the host takes the connection
+        # and closes it.
+        host.fail("curl -sf --max-time 10 http://127.0.0.1:8124/hello.txt")
+        host.succeed("systemctl start machine-app")
+        host.wait_until_succeeds(
+            "journalctl -u losos-tokens | grep -q 'serves a localhost port machine=work port=8124'"
+        )
+        reply = host.succeed("curl -sf --max-time 10 http://127.0.0.1:8124/hello.txt")
+        assert reply == "signed in", reply
+        host.succeed("systemctl stop machine-app")
+        host.wait_until_succeeds(
+            "journalctl -u losos-tokens | grep -q 'no longer serves a localhost port machine=work port=8124'"
+        )
+        host.fail("curl -sf --max-time 10 http://127.0.0.1:8124/hello.txt")
   '';
 }

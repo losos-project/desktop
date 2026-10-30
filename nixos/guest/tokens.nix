@@ -5,6 +5,8 @@
 # a browser, libfido2 or ssh here finds a key on USB, and listens where
 # programs look for pcscd, passing each connection to the host's. The guest
 # runs no pcscd of its own: it has no USB controller to find a reader on.
+# It also tells the host while the eID klient listens on localhost here, so
+# a sign-in page on the host can hand the card's work to it.
 {
   lib,
   pkgs,
@@ -26,7 +28,9 @@
     description = "Use the host's security keys and smart card readers";
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
-      ExecStart = "${lib.getExe pkgs.losos-tokens} guest";
+      # The eID client's port (BSI TR-03124), which the host forwards here
+      # while the eID klient listens on it (eid.nix).
+      ExecStart = "${lib.getExe pkgs.losos-tokens} guest --serve 24727";
       # Root, for /dev/uhid and /run/pcscd. It keeps trying the host, and
       # the copies go whenever the host does.
       Restart = "always";
@@ -41,6 +45,7 @@
       RestrictAddressFamilies = [
         "AF_UNIX"
         "AF_VSOCK"
+        "AF_INET"
       ];
       NoNewPrivileges = true;
     };
