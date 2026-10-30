@@ -84,9 +84,10 @@ in
           # so the command line has nothing to say about it.
           machine.succeed("grep -q '\\[integrity\\]' /sys/kernel/security/lockdown")
           machine.succeed("grep -qx Y /sys/module/module/parameters/sig_enforce")
-          # NVIDIA's open module is signed inside the kernel's build
-          # (nvidia.nix), or it could never load.
-          machine.succeed("modinfo -F signer nvidia | grep -q .")
+          # NVIDIA's open module is signed (nvidia.nix), or it could never
+          # load. kmodigest's signatures name no signer, only their type;
+          # tests/hardware.nix loads it.
+          machine.succeed("modinfo -F sig_id nvidia | grep -qx 'PKCS#7'")
           machine.succeed("test \"$(sysctl -n kernel.unprivileged_bpf_disabled)\" = 1")
           machine.succeed("test \"$(sysctl -n net.core.bpf_jit_harden)\" = 2")
           # QEMU emulates no IOMMU here, so only the asking can be checked.

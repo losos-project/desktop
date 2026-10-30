@@ -26,22 +26,20 @@ and any kernel module that does not carry a valid signature. Without that
 last rule the rest would not hold. A module is kernel code, so if root could
 load any module, it could switch lockdown off again.
 
-nixpkgs builds its kernel with neither the lockdown module nor module
-signatures, because signing means generating a key during the build, and a
-kernel signed with a key made fresh each time is never bit-for-bit the same
-twice. This image builds its own kernel with both. The build signs every
-module it makes with that key and then throws the key away. nixpkgs keeps the
-build tree out of the kernel's `dev` output, so nothing built afterwards can
-sign a module. The cost is that the kernel, and every package built against
-it, comes from this project's CI and its cache instead of cache.nixos.org.
+nixpkgs builds its kernel with the lockdown module and module signatures but
+enforces neither. This image builds its own kernel that enforces both. The
+cost is that the kernel, and every package built against it, comes from this
+project's CI and its cache instead of cache.nixos.org.
 
-For the same reason, `nvidia.nix` builds NVIDIA's open module inside the same
-kernel build. nixpkgs builds it as a separate package against the kernel's
-`dev` output, which has no key, so its modules would be unsigned and the
-kernel would refuse them. The kernel build compiles NVIDIA's source against
-its own build tree and installs it with its own `modules_install`, which signs
-and compresses it like every other module, then checks that each one carries
-a signature.
+nixpkgs signs each module with kmodigest as it is installed. kmodigest makes
+every module a certificate of its own from the module's contents, so the
+same build always gives the same signatures, and a module built later as a
+separate package, such as NVIDIA's open module in `nvidia.nix`, is signed the
+same way as the kernel's own. The kernel trusts those certificates only once
+they are inside its image. nixpkgs' kernel build leaves room for them and
+adds none, so `kernel-hardening.nix` links the compiled kernel into a second
+image with the certificates of the system's whole module tree in it, which
+takes under a minute. The UKI and the VM tests both boot that image. The plain build would load no module at all.
 
 The build forces integrity mode with `LOCK_DOWN_KERNEL_FORCE_INTEGRITY`
 instead of asking for it with `lockdown=` on the command line. Without Secure

@@ -15,11 +15,24 @@
 # keeps for months so a person is not handed a new, maybe hostile, entry
 # relay on every boot. It has no resolver of its own: Tor does its own
 # lookups.
-{ config, ... }:
+#
+# While an edge is set (docs/schizo-mode.md, "Through an edge"), the
+# inside's TCP goes to losos-edge-chain instead of the TransPort, which
+# reaches the edge's onion service through Tor and leaves from the edge.
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   addresses = import ../modules/schizo-addresses.nix;
   tor = config.ids.uids.tor;
+  inherit (addresses) edge ports;
+  edgeFile = "${edge.gatewayDir}/${edge.file}";
+  # Where Tor's DNSPort puts the onions it is asked for.
+  virtualAddresses = "10.192.0.0/10";
 in
 {
   losos.service.state = "/var/lib/tor";
@@ -73,7 +86,7 @@ in
             type filter hook input priority filter; policy drop;
             iif lo accept
             ct state established,related accept
-            iifname "inside" ip daddr ${addresses.inside.gateway} tcp dport { ${toString addresses.ports.trans}, ${toString addresses.ports.socks} } accept
+            iifname "inside" ip daddr ${addresses.inside.gateway} tcp dport { ${toString addresses.ports.trans}, ${toString addresses.ports.socks}, ${toString ports.edge} } accept
             iifname "inside" ip daddr ${addresses.inside.gateway} udp dport ${toString addresses.ports.dns} accept
           }
           chain forward {
@@ -88,14 +101,23 @@ in
         }
 
         table ip gateway-nat {
+          # Empty, or one rule that sends TCP to losos-edge-chain while an
+          # edge is set; losos-edge-select fills it.
+          chain edge {
+          }
           chain prerouting {
             type nat hook prerouting priority dstnat;
             # DNS to any address, the gateway's included, goes to Tor's
             # DNSPort, which answers UDP only; every TCP connection that is
             # not for the gateway itself goes to its TransPort, which reads
             # where it was going from the connection and opens it through
-            # Tor. Other UDP has nowhere to go and is dropped.
+            # Tor, or to the edge chain while an edge is set. An onion,
+            # whose address Tor's DNSPort handed out, is Tor's alone and
+            # never goes to the edge. Other UDP has nowhere to go and is
+            # dropped.
             iifname "inside" udp dport 53 redirect to :${toString addresses.ports.dns}
+            iifname "inside" ip daddr ${virtualAddresses} meta l4proto tcp redirect to :${toString addresses.ports.trans}
+            iifname "inside" ip daddr != ${addresses.inside.gateway} meta l4proto tcp jump edge
             iifname "inside" ip daddr != ${addresses.inside.gateway} meta l4proto tcp redirect to :${toString addresses.ports.trans}
           }
         }
@@ -127,6 +149,16 @@ in
       };
     };
     settings = {
+      # The inside's SOCKS above, and one on loopback for the edge chain,
+      # which isolates its streams with a username per client and
+      # destination port.
+      SOCKSPort = [
+        {
+          addr = "127.0.0.1";
+          port = ports.socks;
+          IsolateSOCKSAuth = true;
+        }
+      ];
       TransPort = [
         {
           addr = addresses.inside.gateway;
@@ -149,7 +181,7 @@ in
       # address from this range, which the TransPort then takes as that
       # onion, so .onion works for every program, not only for a browser
       # that speaks SOCKS.
-      VirtualAddrNetworkIPv4 = "10.192.0.0/10";
+      VirtualAddrNetworkIPv4 = virtualAddresses;
       AutomapHostsOnResolve = true;
       ClientUseIPv6 = false;
     };
@@ -157,4 +189,84 @@ in
   # The state disk has to be there before Tor starts, or its guards would
   # be picked again on the tmpfs and forgotten.
   systemd.services.tor.unitConfig.RequiresMountsFor = [ "/var/lib/tor" ];
+
+  # The edge the host chose, if any, in a share of the host's own: present
+  # while schizo mode must leave through that edge, gone otherwise. Never
+  # cached, so the host's change is what the next read sees.
+  fileSystems.${edge.gatewayDir} = {
+    device = edge.share;
+    fsType = "9p";
+    options = [
+      "ro"
+      "trans=virtio"
+      "version=9p2000.L"
+      "cache=none"
+      "nofail"
+    ];
+  };
+
+  # The chain itself: every connection the edge chain rule sends here goes
+  # through Tor to the edge's onion and out from the edge, or nowhere. It
+  # reads the edge from the share for each connection and refuses one
+  # without it, so a chain that cannot reach the edge fails closed instead
+  # of falling back to the TransPort. Root for the file, which is the
+  # host's root's own, and nothing else.
+  systemd.services.losos-edge-chain = {
+    description = "Schizo mode's way out through an edge";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "tor.service" ];
+    unitConfig.RequiresMountsFor = [ edge.gatewayDir ];
+    serviceConfig = {
+      ExecStart = "${lib.getExe pkgs.losos-edge-chain} --listen ${addresses.inside.gateway}:${toString ports.edge} --tor 127.0.0.1:${toString ports.socks} --config ${edgeFile}";
+      Restart = "always";
+      CapabilityBoundingSet = "";
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectControlGroups = true;
+      RestrictAddressFamilies = [ "AF_INET" ];
+      SystemCallFilter = [ "@system-service" ];
+    };
+  };
+
+  # Points the inside's TCP at the chain while the host has set an edge,
+  # and back at the TransPort when it has not. The host changes the file
+  # through 9p, which tells no inotify here, so this looks every two
+  # seconds. Its first look is done before Tor starts, so a gateway that
+  # boots with an edge set never sends a connection past it.
+  systemd.services.losos-edge-select = {
+    description = "Send schizo mode through the edge while one is set";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "tor.service" ];
+    after = [ "nftables.service" ];
+    requires = [ "nftables.service" ];
+    unitConfig.RequiresMountsFor = [ edge.gatewayDir ];
+    path = [ pkgs.nftables ];
+    script = ''
+      follow() {
+        if [ -e ${edgeFile} ]; then want=on; else want=off; fi
+        if nft list chain ip gateway-nat edge | grep -q redirect; then have=on; else have=off; fi
+        [ "$want" = "$have" ] && return
+        if [ "$want" = on ]; then
+          nft add rule ip gateway-nat edge meta l4proto tcp redirect to :${toString ports.edge}
+        else
+          nft flush chain ip gateway-nat edge
+        fi
+        echo "edge $want"
+      }
+      follow
+      # Started; from here on, follow the host.
+      systemd-notify --ready
+      while sleep 2; do follow; done
+    '';
+    serviceConfig = {
+      Type = "notify";
+      NotifyAccess = "all";
+      Restart = "always";
+    };
+  };
 }

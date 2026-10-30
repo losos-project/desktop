@@ -20,8 +20,9 @@ manager. A user of the running system builds and runs software with it, as
 Apps the image does not carry are Flatpaks from
 [Flathub](https://flathub.org), installed through derisk's own
 [Store](store.md). On a PC they run in [a machine of their
-own](hypervisor.md#the-flatpak-machine), and that machine's GTK portal backend
-serves their dialogs. On a phone they run on the host. There derisk's own
+own](hypervisor.md#the-flatpak-machine). Their dialogs, opening and saving a
+file among them, run in [the portal machine](portal-machine.md), as the host
+apps' dialogs do. On a phone they run on the host. There derisk's own
 portal backend gives them its theme, screenshots and the wallpaper, and asks
 for consent in its own dialog, `derisk-gpui ask`, drawn with the same toolkit
 as derisk's GPUI apps. GTK's backend covers the file chooser and the rest.
@@ -32,10 +33,12 @@ read derisk's theme, web pages among them, use it too. A theme can name any
 installed font instead.
 
 The web browser is [Danube](danube.md), WPE WebKit inside an mcsapi window.
-[Ad blocking](adblock.md) works from filter lists and covers every app. The
-terminal is [derisk's own](terminal.md), `derisk-terminal`. It draws the
-theme's monospace font from its Nerd Font build, so the icons that prompts
-and TUIs print show up. It renders on the GPU, or in software where there is
+[Ad blocking](adblock.md) works from filter lists and covers every app.
+[Schizo mode](schizo-mode.md) sends every connection through Tor by way of a
+gateway machine like Whonix's, and lets nothing out while that gateway is
+down. The terminal is [derisk's own](terminal.md), `derisk-terminal`. It
+draws the theme's monospace font from its Nerd Font build, so the icons that
+prompts and TUIs print show up. It renders on the GPU, or in software where there is
 no GPU. [The Agent](agent.md), on the PC image, runs Claude Code in its own
 window with live previews of the apps it builds, and derisk's palette can
 hand it a request.
