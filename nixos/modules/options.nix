@@ -178,14 +178,26 @@ in
         type = types.path;
         # The release key's public half is committed armored, so a change to
         # it reads as text in review. gpg's --keyring, which systemd-pull
-        # verifies with, takes only binary keys, hence the dearmor.
+        # verifies with, takes only binary keys, hence the export.
+        #
+        # update-signing-next.asc is there only while the key is being
+        # replaced (docs/binary-cache.md, "Replacing the update key"): the
+        # releases signed by the old key carry the new one too, so a machine
+        # that installed one of them takes the first release the new key
+        # signs. gpg --import fails the build on a file that is not a key.
         default =
-          pkgs.runCommand "import-pubring.gpg" { nativeBuildInputs = [ pkgs.buildPackages.gnupg ]; }
-            ''
-              export GNUPGHOME=$(mktemp -d)
-              gpg --batch --dearmor < ${../keys/update-signing.asc} > $out
-            '';
-        defaultText = lib.literalMD "`nixos/keys/update-signing.asc`, dearmored";
+          let
+            keys = [
+              ../keys/update-signing.asc
+            ]
+            ++ lib.optional (builtins.pathExists ../keys/update-signing-next.asc) ../keys/update-signing-next.asc;
+          in
+          pkgs.runCommand "import-pubring.gpg" { nativeBuildInputs = [ pkgs.buildPackages.gnupg ]; } ''
+            export GNUPGHOME=$(mktemp -d)
+            gpg --batch --import ${lib.escapeShellArgs keys}
+            gpg --batch --export > $out
+          '';
+        defaultText = lib.literalMD "`nixos/keys/update-signing.asc`, and `nixos/keys/update-signing-next.asc` while there is one";
         description = ''
           The GPG public keyring SHA256SUMS.gpg is verified against. CI signs
           each release's SHA256SUMS with the secret half (docs/binary-cache.md says how the two are made).

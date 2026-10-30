@@ -1,9 +1,92 @@
 # What is not done
 
+- **Slovak eID beyond signing in.** The eID klient runs in a machine and
+  signs in to slovensko.sk ([the Slovak eID](tokens.md#the-slovak-eid)),
+  but D.Signer, which the same download carries for qualified signatures
+  on documents, is not set up anywhere, and the eID klient is x86_64 only,
+  so an arm64 PC has neither. Nobody has signed in with a real card through
+  a machine yet, or to the computer itself
+  ([signing in with the eID](tokens.md#signing-in-with-the-eid)), and
+  Settings has no row for eID sign-in: `losos-eid-signin` sets it up.
 - **arm64 macOS.** `qemu-vmapple` runs `vmapple` under TCG with an M1 CPU
   on a PC, or under KVM on an arm64 host, with a GPU from Reims. Nobody has
   booted macOS on it yet, no guest has drawn through Reims, and nothing in
   derisk starts it. [arm64 macOS machines](macos-arm64.md) lists the rest.
+- **Peripherals in their machines.** [Peripherals](peripherals.md) moves
+  USB devices and Bluetooth radios into machines of their own. Some of it
+  is not finished:
+  - Bluetooth headphones pair and connect in sys-bluetooth, but there is
+    no PipeWire there and no path for their sound to the host's.
+  - A camera reaches apps on the host as one size, 1280x720, whatever the
+    camera can do, and its own microphone goes to its machine with it,
+    where nothing carries its sound to the host. Sound cards play and
+    record through the host's PipeWire, printers print from the host's
+    CUPS, and cameras film through a v4l2loopback device.
+  - A printer's scanner goes to its machine with it, and nothing there
+    scans. A printer Gutenprint and CUPS have no driver for, and that
+    speaks neither IPP over USB, PostScript nor PCL, gets no queue.
+  - A keyboard or mouse plugged into a port sys-usb holds comes to the
+    host over USB/IP, so the host parses its HID descriptors. Qubes's input
+    proxy, which passes only key and pointer events, is not done.
+  - A Bluetooth radio that is not on USB, on a UART or SDIO as on some
+    Arm laptops, stays the host's, and Settings does not see it.
+  - Every part has run only in virtual machines: the router, sys-usb and a
+    receiving machine nested in QEMU, and controller passthrough through
+    QEMU's emulated IOMMU (`nixos/tests/peripherals.nix`). None of it has
+    met a PC's own USB controllers or a real Bluetooth radio.
+- **The gaming machine.** [The gaming machine](gaming-machine.md) needs a
+  second graphics card. Some of it is not finished:
+  - A PC with one card cannot hand it to the machine and take it back
+    while the desktop waits on the processor.
+  - Settings has no page for it yet; `losos-gaming` and
+    `pm system start losos-gaming-reserve@<address>` do it.
+  - It has not run with a real card yet: the VM test defines the machine
+    in libvirt and checks the boot unit, without a card to move.
+  - Disks and other devices still carry QEMU's names, which some
+    anti-cheats look for.
+- **Focus mode.** [Focus mode](focus-mode.md) pauses background work, but
+  the desktop's own bar and dock stay on screen: a full-screen request
+  from a program does not yet hide them.
+- **The network and files machines.** [The network machine](network-machine.md)
+  and [the files machine](files-machine.md) have gaps:
+  - Handing a network card over by VFIO has only run in QEMU. The VM test
+    runs the fallback for a PC without an IOMMU.
+  - sys-net forwards IPv4 only. The host has no IPv6 while it routes
+    through it.
+  - The keyboard's Wi-Fi and airplane keys reach the host's rfkill, not
+    the machine's. Settings' Wi-Fi switch works.
+  - The edge as a way out has a command, `losos-edge`, and no row in
+    Settings yet. sys-net checks no gateway's passport, so an edge on
+    the network counts as a gateway by its own word; it is only ever the
+    way to the official edges it lists, never the exit.
+  - The edge's tunnel carries IPv4 only, like the rest of sys-net.
+  - The [VPN](vpn.md) has a command, `losos-vpn`, and no row in Settings
+    yet, and the host learns only whether sys-vpn runs, not whether its
+    tunnel is up.
+  - In schizo mode with a VPN, a provider's endpoint must be an address
+    in its file, not a name: sys-vpn would ask Tor for the name, and Tor
+    goes out through sys-vpn. Windscribe's files name their endpoints.
+  - Without an IOMMU, NetworkManager on the host keeps the networks the
+    host has saved, and sys-net keeps none of its own.
+  - Network shares have a command, `losos-shares`, and no page in
+    Settings or Files. WebDAV shares have not been tried against a
+    server.
+  - OpenSSH's `sftp-server` in sys-files is not chrooted to the volume it
+    serves. The host is the only one that can ask for one.
+- **The portal machine.** [The portal machine](portal-machine.md) has
+  gaps:
+  - Its dialogs are not attached to the app's window, which is on
+    another machine's display, so they open as windows of their own.
+  - What a machine may write back is kept until the host restarts. After
+    that, saving a copy a machine was given before changes only the copy.
+  - A folder picked for an app in a machine goes back file by file. An
+    empty folder made in the copy reaches the host only once a file is
+    put in it, and a link made in the copy stays in the machine.
+  - Changes made to a picked folder on the host after it was copied do
+    not reach the machine's copy.
+  - Only the files and screenshot portals copy files. A portal that hands
+    an app a file in another way, such as the Account portal's picture,
+    hands a machine's app a path it cannot open.
 - **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
   `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
   directories read-only. So a step whose tools come from the store runs. A
@@ -20,6 +103,15 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
+- **The Agent's machine.** The [Agent](agent.md) works on a copy of the
+  folder the person picks, so a file changed on the host while the copy is
+  open is not seen in the machine until the folder is picked again. The
+  machine has no Nix and no pm, so the Agent's `nix_build` and
+  `pm_build` tools fail there. Files the Agent asks to open, such as an
+  artifact, stay in the machine, because only web links open on the
+  desktop. The machine draws in software, with no GPU. Nothing on the
+  desktop shows that the machine is running or stops it, other than closing
+  the Agent and waiting ten minutes.
 - **A default for text files.** Since Sonne left, nothing claims text and
   source files as their default for `xdg-open`. Files opens them in whatever
   app happens to list their type, if any. derisk's Text Editor cannot be
@@ -39,8 +131,9 @@
   the 8 GiB `/usr` slot. Giving machines the host's store over virtiofs would
   save it. A machine's disk grows once, to the size it was made with, and
   nothing makes an existing machine's disk larger. Portal dialogs in a
-  machine, such as a Flatpak's file chooser, are GTK's, drawn through the
-  same waypipe, and nobody has tried them.
+  machine, such as a Flatpak's file chooser, are the
+  [portal machine](portal-machine.md)'s now, and nobody has tried them
+  with a real app in a machine.
 - **The Flatpak machine's loose ends.** A `.flatpakref` or `.flatpakrepo`
   file opened on the host has nothing to open it, because Flatpak is in
   [the machine](hypervisor.md#the-flatpak-machine), so it has to be copied
@@ -105,9 +198,10 @@
 - **Hibernation.** No machine hibernates. The locked-down kernel refuses to,
   and nothing in mainline Linux authenticates a hibernation image well
   enough to let it. [Hibernation](hibernation.md) has the details.
-- **Signing.** There is no key rotation. A new key needs an update signed by
-  the old one that carries both. Secure Boot signing of the UKI is not done
-  either. As in the pm tree, a key belongs to whoever owns the machine.
+- **Signing.** Secure Boot signing of the UKI is not done. The update key
+  can be [replaced](binary-cache.md#replacing-the-update-key), but a
+  machine that installed no release carrying both keys must be reinstalled.
+  As in the pm tree, a key belongs to whoever owns the machine.
 - **[The Windows installer](windows-installer.md) has not run on Windows.**
   Its install was checked against a disk image laid out like Windows', which
   then booted. The half that talks to Windows has only been compiled. That
@@ -194,12 +288,12 @@
     earlier run 4.x or 5.4 kernels, which systemd does not support at all.
     The flasher reads the kernel's version and refuses them. Supporting them
     would need an older systemd or a kernel built per device.
-  - **hardened_malloc.** The PC build preloads it into every process, and the
-    GSI does not. Its default configuration reserves 32 GiB per size class
-    per arena and needs a 48-bit address space, but Android kernels are
-    usually built with 39-bit virtual addresses. The GSI needs a
-    hardened_malloc with a smaller `CONFIG_CLASS_REGION_SIZE`, and derisk
-    built against it.
+  - **hardened_malloc.** The GSI's [allocator](allocator.md) is built for a
+    39-bit address space and tried by the initrd before it is preloaded,
+    but no phone's kernel has run that trial yet. A phone with 16 KiB pages
+    fails it, and its processes keep glibc's malloc. derisk gets it only
+    through the preload there, without the length check on Rust's frees
+    that a PC's derisk has.
   - **Telephony, audio, sensors, camera.** There is no ofono, no
     PulseAudio or PipeWire droid modules, and no sensorfw. Android's init
     starts the HALs, but nothing on the Linux side talks to them yet beyond
@@ -222,12 +316,6 @@
   though, is found by its partition label, `losos-swap`, in `disk.nix` and
   `hibernate.nix`. With two LosOS disks in one machine, swap may come from the
   other disk.
-- **A recovery shell on an aarch64 PC.** The boot menu's root shell for a
-  machine nobody can administer, described in [When something goes
-  wrong](troubleshooting.md#no-one-can-administer-the-machine), starts the
-  kernel kept beside the UKI for a BIOS boot. Only x86_64 images carry that
-  kernel. An aarch64 PC's GRUB can only chainload its UKI, and a UKI takes
-  kernel arguments only as a replacement for its whole command line.
 - **sysext.** Extensions merge into `/usr`, which here holds little but the
   Nix store, so an extension can add a program but cannot replace one.
 - **Android app support.** [Android app support](android-apps.md) boots
@@ -275,13 +363,10 @@
   other machines' connections to a box only on ports 80 and 443, by the name
   they ask for. An app's own port on a box is reached directly, and nothing
   stops a machine that knows a box's address from reaching it without the
-  [LosOS boxes](losos-boxes.md) machine. The machine's keyring has no sign-in
-  to unlock it, so the first `losos` command that stores a key or token asks
-  for a keyring password in a window of the machine. Nothing makes the
-  machine automatically either, and its owner makes it from the template.
-  The machine itself has not met a real box on a real LAN yet: the machines
-  test boots a stand-in box beside the host, and the real box in
-  `nixos/tests/losos-box.nix` is found by a desktop with no machine.
+  [LosOS boxes](losos-boxes.md) machine. Neither half has met a real box on a
+  real LAN yet: the machines test boots a stand-in box beside the host, and
+  the real box in `nixos/tests/losos-box.nix` is found by a desktop with no
+  machine.
 - **Backups to a LosOS box keep one copy and need a password sign-in.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A
@@ -297,3 +382,8 @@
   LosOS Git takes no passwords, so the repositories go to LosOS cloud as
   files. See
   [Backups to a LosOS box](backup.md).
+- **Names through the edge in schizo mode.** With an edge set, schizo mode
+  sends its connections out from the edge, but Tor's exits still look up
+  the names. The edge's SOCKS exit could take the name itself, but the
+  chain only sees the address a program connected to, not the name it
+  looked up ([Schizo mode](schizo-mode.md), "Through an edge").

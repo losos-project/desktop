@@ -24,7 +24,7 @@ without it. Then it:
    documentation site, as
    [Releases](releases.md#updating-from-github-releases) explains. From the
    index it downloads split files part by part and joins them. It checks
-   `SHA256SUMS.gpg` against the key in `nixos/keys/update-signing.asc`.
+   `SHA256SUMS.gpg` against the update keys in `nixos/keys/`.
    `--release DIR` takes a release from a folder instead, such as a
    `LOSOS-RELEASE` disk.
 3. Asks how much space LosOS gets, 64 GB unless the user types another
