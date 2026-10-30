@@ -74,14 +74,13 @@ let
       "reboot"
       "halt"
       "sleep"
-    ]
-    # The recovery shell's boot, which starts the kernel bios.nix puts beside
-    # the UKI as a BIOS boot does (grub.cfg's losos_extra). There is no such
-    # kernel on aarch64.
-    ++ lib.optionals (arch.name == "x86_64") [
-      "linux"
+      # losos_esp, for the recovery shell's boot (grub.cfg's losos_extra).
       "probe"
-    ];
+    ]
+    # The recovery shell's boot on x86_64, which starts the kernel
+    # uki-files.nix puts beside the UKI, as a BIOS boot does. An aarch64 PC
+    # has no such kernel and chainloads its UKI with arguments instead.
+    ++ lib.optional (arch.name == "x86_64") "linux";
   };
 
   # grubenv as grub-editenv creates it: a signature line padded with # to

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Decide which of ci.yml's jobs a change needs, from the paths it touches.
+#
+# A run of every job takes two runners for up to six hours each for the
+# image, a third for five hours for Android in the booted image, and the
+# organisation's runners are shared by every repository in it, so a pull
+# request that only edits a page or the proxy kept a typo fix queued behind
+# hours of rebuilding an image it cannot change. What a path can change is
+# known from where the flake reads it: the image is built from nixos/, src/,
+# plugins/, components/ and the flake itself, docs/ and website/ reach it
+# only as losos-docs (nixos/pkgs/losos-docs.nix), and the rest of the tree
+# is CI, the proxy or text for people. A path not named below counts as the
+# image's, so a new directory is built until someone says otherwise here.
+#
+#   git diff --name-only BASE HEAD | tools/ci-changes >> "$GITHUB_OUTPUT"
+#   tools/ci-changes --all >> "$GITHUB_OUTPUT"
+#
+# Prints one `job=true|false` line for each of image (prebuild and flake),
+# android, android-desktop, docs, format and proxy, and says why on stderr.
+# EVENT is the GitHub event the run is for; on a push to main, which
+# publishes the image, docs/ and website/ are the image's like everything
+# else, and both Android jobs run whenever the image does, so main keeps
+# every signal a pull request may skip. DRAFT=true skips the jobs that boot
+# or build the image until the pull request is ready for review.
+set -euo pipefail
+
+event=${EVENT:-pull_request}
+draft=${DRAFT:-false}
+
+image=false android=false android_desktop=false docs=false format=false proxy=false
+why() { printf 'ci-changes: %s\n' "$*" >&2; }
+
+all() {
+  image=true android=true android_desktop=true format=true proxy=true
+}
+
+if [ "${1:-}" = --all ]; then
+  why "every job runs: no diff to read"
+  all
+else
+  [ $# = 0 ] || { sed -n 's/^#   //p' "$0" >&2; exit 2; }
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case $path in
+      # How CI runs is itself the change, so all of it runs.
+      .github/workflows/ci.yml | tools/ci-changes)
+        why "$path: every job"
+        all
+        ;;
+      # Android app support: the package and units the runner test drives,
+      # and the image test that boots them.
+      tools/android-app-support-test)
+        android=true
+        ;;
+      nixos/pkgs/android-app-support* | nixos/modules/android-apps.nix | flake.nix | flake.lock)
+        image=true android=true android_desktop=true
+        ;;
+      nixos/tests/android-apps.nix | nixos/tests/image.nix)
+        image=true android_desktop=true
+        ;;
+      # The overlay builds the package the runner test installs.
+      nixos/pkgs/default.nix)
+        image=true android=true
+        ;;
+      docs/* | website/*)
+        if [ "$event" = push ]; then image=true; else docs=true; fi
+        ;;
+      proxy/*)
+        proxy=true
+        ;;
+      # Neither the flake nor CI reads these. The other workflows test
+      # what they cover themselves (docs.yml, app-windows.yml).
+      .github/* | README.md | CLAUDE.md | LICENSES/* | REUSE.toml | .editorconfig | .envrc | .gitignore | \
+        Justfile | quickemu/* | fix-ci-runner.patch | tools/update-lockfiles | tools/nix-refresh-hashes) ;;
+      *)
+        image=true
+        ;;
+    esac
+    case $path in
+      *.nix) format=true ;;
+    esac
+  done
+fi
+
+if [ "$event" = push ] && [ "$image" = true ]; then
+  android=true android_desktop=true
+fi
+if [ "$draft" = true ]; then
+  why "a draft: nothing that builds or boots the image runs until it is ready for review"
+  image=false android=false android_desktop=false
+fi
+# The release builds losos-docs with everything else, so it is built on its
+# own only when nothing else would.
+if [ "$image" = true ]; then docs=false; fi
+
+out() {
+  why "$1: $2"
+  echo "$1=$2"
+}
+out image "$image"
+out android "$android"
+out android-desktop "$android_desktop"
+out docs "$docs"
+out format "$format"
+out proxy "$proxy"

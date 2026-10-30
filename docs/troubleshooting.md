@@ -121,13 +121,15 @@ while the system runs, so run `systemctl reboot` when done. The shell is
 systemd's debug shell. `losos_extra` holds kernel arguments that GRUB adds to
 the command line the release was built with, as
 [Boot loader and boot screen](boot-loaders.md#grubs-menu) describes. On UEFI,
-setting it makes GRUB start the kernel kept beside the UKI, as on a BIOS,
-instead of the UKI itself, because a UKI takes arguments only as a
-replacement for its whole command line.
+setting it makes GRUB give the arguments the UKI's whole command line in
+front of them, because a UKI takes arguments only as a replacement for its
+whole command line. An x86_64 PC starts the kernel kept beside the UKI with
+them, as on a BIOS. An aarch64 PC hands them to the UKI itself.
 
-> [!NOTE]
-> Only an x86_64 PC has that kernel, so an aarch64 PC has no recovery shell
-> yet ([What is not done](not-done.md)).
+> [!IMPORTANT]
+> An aarch64 PC with Secure Boot on starts without the arguments, because
+> its UKI then ignores any it is given. Turn Secure Boot off in the
+> firmware's settings for that one boot.
 
 The shell does not open anyone's home. Each home is its own encrypted image,
 which only its owner's password unlocks. [The rest of the disk](layout.md),
