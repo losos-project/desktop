@@ -24,10 +24,12 @@
     ./kernel-hardening.nix
     ./pm.nix
     ./ping.nix
+    ./focus.nix
     ./report.nix
     ./backup.nix
     ./docs.nix
     ./losos-boxes.nix
+    ./company.nix
     ./app-windows.nix
     ./userland.nix
   ];

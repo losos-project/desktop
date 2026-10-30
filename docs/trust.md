@@ -66,6 +66,13 @@ Everything the flake builds from, besides this repository:
   and it runs as host root in the Android container, so it is trusted as much
   as the vendor blobs beside it. The phone's own kernel, vendor partitions and
   bootloader are the device maker's, and the GSI trusts them as Android does.
+- **Fedora's signed shim**, from `nixos/pkgs/shim-signed.nix`: shim and
+  MokManager 16.1 as Fedora's build system published them, pinned by hash,
+  and signed by Microsoft after shim-review. They are prebuilt, since
+  rebuilding them would lose Microsoft's signature, and they are the first
+  code a PC with [Secure Boot](secure-boot.md) on runs from the ESP. shim
+  also trusts Fedora's own certificate, as any machine that trusts
+  Microsoft's third-party CA already does through Fedora's shim.
 - **Flathub**, for apps installed later. Its repo file, with the signing key
   every install is checked against, is `nixos/modules/flathub.flatpakrepo` in
   this tree. The image adds the remote from that copy at boot and never

@@ -15,6 +15,14 @@
 //! own query. When every worker is busy and the queue is full, a query is
 //! dropped and the client retries, as DNS clients do. Every thread is
 //! scoped to `run`, which shares its state by reference.
+//!
+//! With encrypted DNS on, the networks' servers are asked only about names
+//! that exist on the local network alone (`LOCAL_ZONES`); everything else
+//! goes over HTTPS or TLS to the servers chosen for it (encrypted.rs), and
+//! when none of them answers the query fails. Falling back to the
+//! network's server would hand anyone who can block ports 443 and 853 every
+//! name in plain text. The one exception is a captive portal, unless
+//! encrypted DNS is strict (portal.rs).
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -22,7 +30,7 @@ use std::net::{IpAddr, SocketAddr, SocketAddrV6, TcpListener, TcpStream, UdpSock
 use std::os::fd::FromRawFd;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -30,6 +38,9 @@ use crossbeam_channel::TrySendError;
 use tracing::{debug, info, warn};
 
 use crate::dns;
+use crate::encrypted;
+use crate::lists::Paths;
+use crate::portal;
 use crate::rules::{Blocklist, Verdict};
 
 /// Where resolved lists the servers it uses, for a system without
@@ -39,6 +50,9 @@ const RESOLV_CONF: &str = "/run/systemd/resolve/resolv.conf";
 /// resolv.conf's `nameserver` lines: schizo mode's Tor gateway
 /// (nixos/modules/schizo.nix), past which no other server is reachable.
 const OVERRIDE: &str = "/run/losos-adblock/upstreams";
+/// There, empty, while `OVERRIDE`'s servers must be the only ones asked,
+/// encrypted DNS's included (`Switch`).
+const FORCED: &str = "/run/losos-adblock/upstreams-forced";
 /// How long one upstream gets before the next is tried.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the compiled list is checked for changes and the upstreams
@@ -53,6 +67,197 @@ const REFRESH_GAP: Duration = Duration::from_secs(2);
 /// upstream cannot pile up minutes of work.
 const WORKERS: usize = 8;
 const QUEUE: usize = 256;
+/// How often the encrypted DNS switch is looked at, so turning it on takes
+/// effect within a second rather than a reload's fifteen.
+const SWITCH_EVERY: Duration = Duration::from_secs(1);
+/// How long names go to the network's server once a captive portal was
+/// found, before encrypted DNS is tried again: long enough to sign in
+/// without a check on every query, short enough that a portal faked by the
+/// network sees little.
+const PORTAL_FOR: Duration = Duration::from_secs(30);
+/// The least time between two portal checks, so a network that is down
+/// is not checked on every query.
+const PORTAL_CHECK_GAP: Duration = Duration::from_secs(10);
+/// Names only the local network can answer, which still go to its server
+/// in plain DNS with encrypted DNS on: a resolver on the internet has no
+/// answer for them, and the network sees them either way when the
+/// connection is made. RFC 8375's home.arpa, the private-use names routers
+/// hand out, and the reverse zones of RFC 1918 and RFC 4193 addresses.
+/// `.local` is mDNS, which resolved answers itself.
+const LOCAL_ZONES: &[&str] = &[
+    "home.arpa",
+    "lan",
+    "home",
+    "internal",
+    "localdomain",
+    "intranet",
+    "10.in-addr.arpa",
+    "168.192.in-addr.arpa",
+    "16.172.in-addr.arpa",
+    "17.172.in-addr.arpa",
+    "18.172.in-addr.arpa",
+    "19.172.in-addr.arpa",
+    "20.172.in-addr.arpa",
+    "21.172.in-addr.arpa",
+    "22.172.in-addr.arpa",
+    "23.172.in-addr.arpa",
+    "24.172.in-addr.arpa",
+    "25.172.in-addr.arpa",
+    "26.172.in-addr.arpa",
+    "27.172.in-addr.arpa",
+    "28.172.in-addr.arpa",
+    "29.172.in-addr.arpa",
+    "30.172.in-addr.arpa",
+    "31.172.in-addr.arpa",
+    "254.169.in-addr.arpa",
+    "d.f.ip6.arpa",
+];
+
+/// Whether `name` is in one of the `LOCAL_ZONES`.
+pub fn is_local(name: &str) -> bool {
+    LOCAL_ZONES.iter().any(|zone| {
+        name == *zone
+            || name
+                .strip_suffix(zone)
+                .is_some_and(|rest| rest.ends_with('.'))
+    })
+}
+
+/// What encrypted DNS is set to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Off,
+    /// On, with the network's server asked while a captive portal is in
+    /// the way.
+    On,
+    /// On, with no exception at all.
+    Strict,
+}
+
+impl Mode {
+    fn word(self) -> &'static str {
+        match self {
+            Mode::Off => "off",
+            Mode::On => "on",
+            Mode::Strict => "strict",
+        }
+    }
+
+    pub fn from_word(word: &str) -> Option<Self> {
+        [Mode::Off, Mode::On, Mode::Strict]
+            .into_iter()
+            .find(|mode| mode.word() == word)
+    }
+}
+
+/// Encrypted DNS while it is on: whom it asks, and whether strictly.
+pub struct Encrypted {
+    pub servers: Vec<Arc<encrypted::Server>>,
+    pub strict: bool,
+}
+
+/// Encrypted DNS's settings, three files. The OS's, in the configuration
+/// directory: `encrypted-dns`, the servers, and `encrypted-dns-default`,
+/// the mode, `off`, `on` or `strict`. The person's, `encrypted-dns` in the
+/// state directory: a mode on its first line, which wins over the OS's,
+/// and any servers after it, which replace the OS's.
+///
+/// `FORCED` wins over all three. While it is there, the servers
+/// `OVERRIDE` names are the only way out: schizo mode's Tor gateway, whose
+/// DNS port keeps each destination's lookups on a circuit of its own and
+/// maps `.onion` names, which one resolver behind one encrypted connection
+/// would not, or the resolver inside an edge's tunnel. A file of its own
+/// because `OVERRIDE` alone does not mean that: in the network machine,
+/// which has no resolved, it always holds the network's servers. Both live
+/// in /run, so a machine that dies with them in place comes back without
+/// them, and the person's own choice was never touched.
+pub struct Switch {
+    pub own: PathBuf,
+    servers: PathBuf,
+    default: PathBuf,
+    overridden: PathBuf,
+}
+
+/// The words of a settings file, without blank lines and `#` comments.
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .map(|line| line.split('#').next().unwrap_or_default().trim())
+        .filter(|line| !line.is_empty())
+}
+
+/// The mode on the first line of `text`, if there is one.
+fn choice(text: &str) -> Option<Mode> {
+    Mode::from_word(lines(text).next()?)
+}
+
+impl Switch {
+    pub fn new(paths: &Paths) -> Self {
+        Self {
+            own: paths.state.join("encrypted-dns"),
+            servers: paths.config.join("encrypted-dns"),
+            default: paths.config.join("encrypted-dns-default"),
+            overridden: PathBuf::from(FORCED),
+        }
+    }
+
+    /// When any of the three last changed, to tell whether to read again.
+    fn stamp(&self) -> [Option<SystemTime>; 4] {
+        [
+            modified(&self.own),
+            modified(&self.servers),
+            modified(&self.default),
+            modified(&self.overridden),
+        ]
+    }
+
+    /// Whether `FORCED` is there, and encrypted DNS stands aside.
+    pub fn overridden(&self) -> bool {
+        self.overridden.exists()
+    }
+
+    /// Encrypted DNS's servers and strictness, or `None` while it is off.
+    /// On with no server at all is still on, and every query fails until
+    /// one is named: off has to be chosen, never fallen into.
+    pub fn read(&self) -> Option<Encrypted> {
+        if self.overridden() {
+            return None;
+        }
+        let own = fs::read_to_string(&self.own).unwrap_or_default();
+        let default = fs::read_to_string(&self.default).unwrap_or_default();
+        let strict = match choice(&own).or(choice(&default)).unwrap_or(Mode::Off) {
+            Mode::Off => return None,
+            Mode::On => false,
+            Mode::Strict => true,
+        };
+        let listed: String = lines(&own)
+            .filter(|line| Mode::from_word(line).is_none())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut servers = encrypted::parse(&listed);
+        if servers.is_empty() {
+            servers = encrypted::parse(&fs::read_to_string(&self.servers).unwrap_or_default());
+        }
+        if servers.is_empty() {
+            warn!("encrypted DNS is on with no server to ask; every query fails");
+        }
+        Some(Encrypted { servers, strict })
+    }
+
+    /// The person's switch set to `mode`, keeping any servers of their
+    /// own below it.
+    pub fn set(&self, mode: Mode) -> io::Result<()> {
+        let own = fs::read_to_string(&self.own).unwrap_or_default();
+        let mut text = format!("{}\n", mode.word());
+        for line in lines(&own).filter(|line| Mode::from_word(line).is_none()) {
+            text.push_str(line);
+            text.push('\n');
+        }
+        // Whole or not at all, for the forwarder reading it.
+        let new = self.own.with_extension("new");
+        fs::write(&new, text)?;
+        fs::rename(&new, &self.own)
+    }
+}
 
 /// The listening sockets: from systemd's socket activation, or bound here.
 pub struct Sockets {
@@ -119,16 +324,64 @@ impl Sockets {
 struct State {
     blocklist: Blocklist,
     upstreams: Vec<SocketAddr>,
+    /// Encrypted DNS, while it is on.
+    encrypted: Option<Encrypted>,
 }
 
 struct Shared {
     state: RwLock<State>,
     list: PathBuf,
+    switch: Switch,
     /// Our own addresses, never forwarded to: NetworkManager and resolved
     /// list us among their servers.
     own: Vec<SocketAddr>,
     /// When the upstreams were last read.
     refreshed: Mutex<Instant>,
+    /// Until when names go to the network's server for a captive portal,
+    /// and when one was last checked for.
+    portal_until: Mutex<Option<Instant>>,
+    portal_checked: Mutex<Option<Instant>>,
+}
+
+/// Whether a captive portal is in the way of encrypted DNS: one found
+/// lately, or found now by a check, unless one ran within the gap.
+fn behind_portal(shared: &Shared) -> bool {
+    let now = Instant::now();
+    if shared
+        .portal_until
+        .lock()
+        .ok()
+        .and_then(|u| *u)
+        .is_some_and(|until| now < until)
+    {
+        return true;
+    }
+    {
+        let Ok(mut checked) = shared.portal_checked.try_lock() else {
+            // Another worker is checking.
+            return false;
+        };
+        if checked.is_some_and(|at| now.duration_since(at) < PORTAL_CHECK_GAP) {
+            return false;
+        }
+        *checked = Some(now);
+    }
+    let upstreams = match shared.state.read() {
+        Ok(state) => state.upstreams.clone(),
+        Err(_) => return false,
+    };
+    let network = portal::check(&upstreams);
+    info!(
+        ?network,
+        "encrypted DNS failed; checked for a captive portal"
+    );
+    let portal = network == portal::Network::Portal;
+    if portal {
+        if let Ok(mut until) = shared.portal_until.lock() {
+            *until = Some(now + PORTAL_FOR);
+        }
+    }
+    portal
 }
 
 fn modified(path: &std::path::Path) -> Option<SystemTime> {
@@ -267,14 +520,57 @@ fn refresh_upstreams(shared: &Shared, gap: Duration) -> bool {
 /// upstream answers, the network may have changed since they were read, so
 /// they are read again and tried once more.
 fn answer(shared: &Shared, query: &[u8], tcp: bool) -> Option<Vec<u8>> {
-    {
+    let encrypted = {
         let state = shared.state.read().ok()?;
-        if let Some(question) = dns::question(query) {
+        let question = dns::question(query);
+        if let Some(question) = &question {
             if let Verdict::Blocked(rule) = state.blocklist.verdict(&question.name) {
                 debug!(name = %question.name, %rule, "blocked");
-                return Some(dns::blocked(query, &question));
+                return Some(dns::blocked(query, question));
             }
         }
+        match &state.encrypted {
+            // Local names go to the network's server; so does the portal
+            // check's own name unless strict, so Danube's sign-in window
+            // can find a portal that lets DNS through (docs/danube.md).
+            Some(encrypted)
+                if !question.as_ref().is_some_and(|q| {
+                    is_local(&q.name) || (!encrypted.strict && q.name == portal::CHECK_HOST)
+                }) =>
+            {
+                Some((encrypted.servers.clone(), encrypted.strict))
+            }
+            _ => None,
+        }
+    };
+    if let Some((mut servers, strict)) = encrypted {
+        let portal_now = !strict
+            && shared
+                .portal_until
+                .lock()
+                .ok()
+                .and_then(|u| *u)
+                .is_some_and(|until| Instant::now() < until);
+        if !portal_now {
+            // In the order given, except that one that failed lately waits
+            // until the rest have been tried.
+            servers.sort_by_key(|server| server.resting());
+            for server in &servers {
+                match server.ask(query) {
+                    Ok(reply) => {
+                        if let Ok(mut until) = shared.portal_until.lock() {
+                            *until = None;
+                        }
+                        return Some(reply);
+                    }
+                    Err(error) => debug!(url = %server.url, %error, "encrypted upstream failed"),
+                }
+            }
+            if strict || !behind_portal(shared) {
+                return dns::servfail(query);
+            }
+        }
+        debug!("behind a captive portal; asking the network's server");
     }
     if let Some(reply) = forward(shared, query, tcp) {
         return Some(reply);
@@ -361,16 +657,24 @@ fn serve_tcp_client(shared: &Shared, mut stream: TcpStream) -> io::Result<()> {
 
 /// Serves until the process is stopped; nothing it meets ends it, so it
 /// has nothing to return.
-pub fn run(sockets: Sockets, list: PathBuf) {
+pub fn run(sockets: Sockets, paths: &Paths) {
     let own = sockets.local_addrs();
+    let list = paths.dns();
+    let switch = Switch::new(paths);
+    let encrypted = switch.read();
+    info!(on = encrypted.is_some(), "encrypted DNS");
     let shared = Shared {
         state: RwLock::new(State {
             blocklist: load_list(&list),
             upstreams: load_upstreams(&own),
+            encrypted,
         }),
         list,
+        switch,
         own,
         refreshed: Mutex::new(Instant::now()),
+        portal_until: Mutex::new(None),
+        portal_checked: Mutex::new(None),
     };
     let shared = &shared;
 
@@ -379,6 +683,25 @@ pub fn run(sockets: Sockets, list: PathBuf) {
     let (queue, queries) = crossbeam_channel::bounded::<(Vec<u8>, SocketAddr, &UdpSocket)>(QUEUE);
 
     thread::scope(|s| {
+        // The encrypted DNS settings, by modification time, and whether
+        // the person's switch is there at all.
+        s.spawn(move || {
+            let mut seen = shared.switch.stamp();
+            loop {
+                thread::sleep(SWITCH_EVERY);
+                let now = shared.switch.stamp();
+                if now == seen {
+                    continue;
+                }
+                seen = now;
+                let encrypted = shared.switch.read();
+                info!(on = encrypted.is_some(), "encrypted DNS");
+                if let Ok(mut state) = shared.state.write() {
+                    state.encrypted = encrypted;
+                }
+            }
+        });
+
         // Reloads: the blocklist after an update, checked by modification
         // time so an update needs no signal to reach a running forwarder,
         // and the upstreams, which a network change moves without touching
@@ -450,6 +773,62 @@ pub fn run(sockets: Sockets, list: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_persons_choice_wins_and_off_must_be_chosen() {
+        let dir = std::env::temp_dir().join(format!("losos-adblock-switch-{}", std::process::id()));
+        let paths = Paths {
+            config: dir.join("etc"),
+            state: dir.join("var"),
+        };
+        fs::create_dir_all(&paths.config).unwrap();
+        fs::create_dir_all(&paths.state).unwrap();
+        let mut switch = Switch::new(&paths);
+        switch.overridden = dir.join("upstreams-forced");
+        fs::write(
+            paths.config.join("encrypted-dns"),
+            "https://dns.example/q 192.0.2.1\n",
+        )
+        .unwrap();
+        // No default and no choice: off.
+        assert!(switch.read().is_none());
+        fs::write(paths.config.join("encrypted-dns-default"), "on\n").unwrap();
+        assert_eq!(switch.read().unwrap().servers.len(), 1);
+        switch.set(Mode::Off).unwrap();
+        assert!(switch.read().is_none());
+        // Servers of the person's own survive turning it on and off.
+        fs::write(
+            &switch.own,
+            "off\ntls://dot.example 192.0.2.2\ntls://dot2.example 192.0.2.3\n",
+        )
+        .unwrap();
+        switch.set(Mode::Strict).unwrap();
+        let encrypted = switch.read().unwrap();
+        assert!(encrypted.strict);
+        assert_eq!(encrypted.servers.len(), 2);
+        assert_eq!(encrypted.servers[0].url, "tls://dot.example");
+        switch.set(Mode::On).unwrap();
+        assert!(!switch.read().unwrap().strict);
+        // On with nothing to ask is on, and fails, rather than plain.
+        fs::write(paths.config.join("encrypted-dns"), "").unwrap();
+        fs::write(&switch.own, "on\n").unwrap();
+        assert_eq!(switch.read().unwrap().servers.len(), 0);
+        // The runtime override stands encrypted DNS aside.
+        fs::write(&switch.overridden, "").unwrap();
+        assert!(switch.read().is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn knows_local_names() {
+        assert!(is_local("router.lan"));
+        assert!(is_local("lan"));
+        assert!(is_local("nas.home.arpa"));
+        assert!(is_local("1.1.168.192.in-addr.arpa"));
+        assert!(!is_local("plan"));
+        assert!(!is_local("example.com"));
+        assert!(!is_local("1.1.1.1.in-addr.arpa"));
+    }
 
     #[test]
     fn reads_networkmanagers_servers() {

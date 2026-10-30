@@ -24,7 +24,7 @@ without it. Then it:
    documentation site, as
    [Releases](releases.md#updating-from-github-releases) explains. From the
    index it downloads split files part by part and joins them. It checks
-   `SHA256SUMS.gpg` against the key in `nixos/keys/update-signing.asc`.
+   `SHA256SUMS.gpg` against the update keys in `nixos/keys/`.
    `--release DIR` takes a release from a folder instead, such as a
    `LOSOS-RELEASE` disk.
 3. Asks how much space LosOS gets, 64 GB unless the user types another
@@ -102,10 +102,11 @@ found its root.
 
 ## Secure Boot, BitLocker, fast startup
 
-- **Secure Boot** must be off. Neither GRUB nor the UKI is
-  [signed](not-done.md), so firmware with Secure Boot on would refuse to start
-  them. A shim signed by Microsoft would need a key this project does not
-  have. The installer says so and stops before changing anything.
+- **Secure Boot** must be off. The installer registers GRUB itself with the
+  firmware, and a signed GRUB still needs shim in front of it to start with
+  Secure Boot on ([Secure Boot](secure-boot.md)). Putting shim there from
+  Windows is [not done](not-done.md). The installer says so and stops before
+  changing anything.
 - **BitLocker** seals its key to the boot chain the TPM measured, and adding
   a boot manager in front of Windows' changes that chain. So the installer
   suspends protection on C: with `DisableKeyProtectors` until Windows has

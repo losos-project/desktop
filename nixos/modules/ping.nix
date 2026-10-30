@@ -86,6 +86,8 @@ in
       serviceConfig = {
         Type = "oneshot";
         ExecStart = lib.getExe losos-ping;
+        # Waits while focus mode is on (focus.nix).
+        Slice = "background.slice";
       };
     };
 

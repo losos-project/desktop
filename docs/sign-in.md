@@ -17,6 +17,7 @@ volume's key can log them in.
 | --- | --- | --- | --- |
 | Password | yes | yes | yes |
 | Security key (FIDO2) | yes, instead of the password | yes | yes |
+| Slovak eID card | yes, instead of the password | yes | yes |
 | Fingerprint | no | yes, beside the field | yes |
 | Verification code | after the password, when turned on | no | no |
 
@@ -31,6 +32,15 @@ PIN", and a touch, and derisk shows both prompts. Setting up a key replaces
 the one set up before, and the password keeps working. Passkeys held by a
 phone or a laptop's TPM cannot do this, because homed has no way to get a key
 out of them, so they are not offered.
+
+## The Slovak eID card
+
+The eID card signs in the same way, with homed's PKCS#11 support instead
+of FIDO2: homed encrypts a secret to the card's encryption certificate,
+and the card decrypts it after its PIN. The Ministry's closed module that
+reads the card runs in a machine of its own. `losos-eid-signin` sets it
+up. [Signing in with the eID](tokens.md#signing-in-with-the-eid) has the
+details.
 
 ## Fingerprints
 

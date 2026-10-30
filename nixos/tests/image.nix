@@ -5,11 +5,24 @@
 
 rec {
   node =
-    { lib, ... }:
+    { lib, pkgs, ... }:
     {
       imports = [ self.nixosModules.default ];
 
       losos.version = "1";
+
+      # The layout a release signed with LosOS's key has, shim and
+      # MokManager in front of GRUB, signed with a key made for the tests.
+      # The firmware here has Secure Boot off, so shim starts GRUB without
+      # checking it; secure-boot.nix boots the same image with it on.
+      losos.secureBoot =
+        let
+          key = import ./secure-boot-key.nix { inherit pkgs; };
+        in
+        {
+          certificate = "${key}/cert.pem";
+          privateKey = "${key}/key.pem";
+        };
 
       # The boot tests build three disks from the image, and the guest
       # template in each was what ran CI's runner out of space; booting the

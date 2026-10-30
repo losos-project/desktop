@@ -45,7 +45,7 @@
 }:
 
 let
-  version = "0.1.0-unstable-2026-10-28";
+  version = "0.1.0-unstable-2026-10-29";
 
   # The components/derisk submodule, at the commit this tree records for it
   # (flake.nix, `self.submodules`). cleanSource drops the submodule's .git
@@ -55,7 +55,7 @@ let
     src = lib.cleanSource ../../components/derisk;
   };
 
-  cargoHash = "sha256-RaCjjo6azcPqJp+2G1lQpiG+3GgIfqo7uBzFIq6Em1I=";
+  cargoHash = "sha256-C2KKSvXym5lF9Po/7bDV8Y1//fgArG65tRFvQ3E7i5Y=";
 
   # Fat LTO (Cargo.toml: lto = true) compiles every dependency as bitcode
   # (-C linker-plugin-lto) and links it in one rustc. That link is killed on

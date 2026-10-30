@@ -8,7 +8,10 @@
 //! SHA256SUMS from the channel, downloads the newest UKI and both /usr halves,
 //! writes the halves into one slot, relabels them with the version, and puts
 //! the UKI on the ESP. Everything else -- root, /home, swap -- is made by the
-//! installed system's first boot, as it is for an image written with dd.
+//! installed system's first boot, as it is for an image written with dd,
+//! unless the person asked for a PIN at startup: then the installer makes
+//! them itself once the download is done, root encrypted
+//! ([`crate::encrypt`]).
 //!
 //! Online, the installer pulls the release artifact for the ISO's version
 //! directly from GHCR with oras. The artifact carries the signed manifest and
@@ -38,6 +41,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::encrypt;
 use crate::github;
 use crate::stage::{self, Scratch};
 
@@ -71,6 +75,29 @@ pub struct Plan {
     /// its GRUB installer here on x86_64 (bios.nix); UEFI firmware ignores
     /// what it writes.
     pub bios_boot: Option<PathBuf>,
+    /// Root encrypted with this PIN, laid out as this says, when the person
+    /// asked for a PIN at startup.
+    pub encrypt: Option<(encrypt::Layout, Pin)>,
+}
+
+/// A PIN, kept out of every `{:?}` a plan is printed with.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Pin(pub String);
+
+impl std::fmt::Debug for Pin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Pin(…)")
+    }
+}
+
+impl Plan {
+    /// The steps this install takes, in order.
+    pub fn steps(&self) -> Vec<Step> {
+        Step::ALL
+            .into_iter()
+            .filter(|s| *s != Step::Encrypt || self.encrypt.is_some())
+            .collect()
+    }
 }
 
 /// Which GitHub release an online install reads ([`crate::github`]).
@@ -99,11 +126,19 @@ pub enum Step {
     Partition,
     Mount,
     Download,
+    Encrypt,
     Finish,
 }
 
 impl Step {
-    pub const ALL: [Step; 4] = [Step::Partition, Step::Mount, Step::Download, Step::Finish];
+    /// Every step there is; [`Plan::steps`] says which an install takes.
+    pub const ALL: [Step; 5] = [
+        Step::Partition,
+        Step::Mount,
+        Step::Download,
+        Step::Encrypt,
+        Step::Finish,
+    ];
 
     /// What the installer's page says while this step runs.
     pub fn title(self) -> &'static str {
@@ -111,6 +146,7 @@ impl Step {
             Step::Partition => "Partitioning the disk",
             Step::Mount => "Mounting the new boot partition",
             Step::Download => "Downloading and writing the system",
+            Step::Encrypt => "Encrypting the system's data",
             Step::Finish => "Finishing",
         }
     }
@@ -120,6 +156,8 @@ impl Step {
 pub enum Event {
     Step(Step),
     Line(String),
+    /// Root's recovery key, to show the person once and never log.
+    RecoveryKey(String),
     Finished(Result<(), String>),
 }
 
@@ -171,9 +209,6 @@ fn install(plan: &Plan, events: &Sender<Event>) -> Result<(), String> {
 
     step(Step::Download);
     let downloaded = download(plan, &disk, events);
-    if downloaded.is_ok() {
-        step(Step::Finish);
-    }
     // Unmount even when the download failed, so the next attempt can
     // repartition the disk.
     let unmounted = command("umount", &[&mount_point], false, events).map(|_| ());
@@ -185,6 +220,14 @@ fn install(plan: &Plan, events: &Sender<Event>) -> Result<(), String> {
             return Err(format!("{download}; cleanup also failed: {unmount}"));
         }
     }
+    // After the download, whose scratch partition is in the space root,
+    // /home and swap are about to take, and is gone by now.
+    if let Some((layout, pin)) = &plan.encrypt {
+        step(Step::Encrypt);
+        let key = encrypt::run(layout, &disk, &plan.work, &pin.0, events)?;
+        let _ = events.send(Event::RecoveryKey(key));
+    }
+    step(Step::Finish);
     command("sync", &[], false, events)?;
     Ok(())
 }
@@ -236,11 +279,15 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
                 "ghcr.io/{}/images:{}-{}",
                 release.repo, release.channel, release.arch
             );
-            let exact = github::release_tag(&release.channel, &release.version)
-                .map(|_| image.as_str());
+            let exact =
+                github::release_tag(&release.channel, &release.version).map(|_| image.as_str());
             let (reference, manifest, version) = match exact {
                 Some(reference) => match oci_manifest(reference, events) {
-                    Ok(manifest) => (reference.to_owned(), manifest, Some(release.version.as_str())),
+                    Ok(manifest) => (
+                        reference.to_owned(),
+                        manifest,
+                        Some(release.version.as_str()),
+                    ),
                     Err(e) => {
                         let _ = events.send(Event::Line(format!(
                             "No GHCR image for this ISO version ({e}); trying the current {} image",
@@ -258,7 +305,9 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
                 }
             };
             let files = oci_files(&manifest, &release.arch)?;
-            let _ = events.send(Event::Line(format!("Installing directly from GHCR artifact {reference}")));
+            let _ = events.send(Event::Line(format!(
+                "Installing directly from GHCR artifact {reference}"
+            )));
             online_oci(plan, disk, url, &reference, &files, version, events)?;
         }
         (Some(url), _, None) => channel(plan, disk, url, events)?,
@@ -338,10 +387,12 @@ fn oci_files(
             github::File {
                 // Store the OCI digest here; online_oci fetches each selected
                 // layer directly, writing it under its sysupdate file name.
-                urls: vec![layer["digest"]
-                    .as_str()
-                    .ok_or_else(|| format!("GHCR image layer {name} has no digest"))?
-                    .to_owned()],
+                urls: vec![
+                    layer["digest"]
+                        .as_str()
+                        .ok_or_else(|| format!("GHCR image layer {name} has no digest"))?
+                        .to_owned(),
+                ],
                 size,
             },
         );
@@ -381,7 +432,12 @@ fn online_oci(
                 .ok_or_else(|| format!("GHCR image layer {name} has no digest"))?;
             let output = scratch.mount.join(name).to_string_lossy().into_owned();
             let blob = format!("{repository}@{digest}");
-            command("oras", &["blob", "fetch", "--output", &output, &blob], false, events)?;
+            command(
+                "oras",
+                &["blob", "fetch", "--output", &output, &blob],
+                false,
+                events,
+            )?;
         }
         verify_release(&scratch.mount, Path::new(PUBRING), &plan.work, events)?;
         render_transfers(
@@ -520,8 +576,7 @@ fn online_oci_archive(
             false,
             events,
         )?;
-        fs::remove_file(&archive_path)
-            .map_err(|e| format!("{}: {e}", archive_path.display()))?;
+        fs::remove_file(&archive_path).map_err(|e| format!("{}: {e}", archive_path.display()))?;
 
         // Unwrap the individually compressed files in place. /usr and verity
         // are already named *.raw.xz, so they retain the XZ data sysupdate
@@ -533,12 +588,7 @@ fn online_oci_archive(
             if !name.ends_with(".raw.xz") {
                 let encoded = scratch.mount.join(format!("{name}.xz"));
                 let encoded_text = encoded.to_string_lossy().into_owned();
-                command(
-                    "xz",
-                    &["--decompress", "--", &encoded_text],
-                    false,
-                    events,
-                )?;
+                command("xz", &["--decompress", "--", &encoded_text], false, events)?;
             }
             let output = scratch.mount.join(name);
             let actual_size = fs::metadata(&output)
@@ -848,7 +898,7 @@ pub fn parse_sums(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn wait_for(path: &Path, timeout: Duration) -> Result<(), String> {
+pub(crate) fn wait_for(path: &Path, timeout: Duration) -> Result<(), String> {
     let start = Instant::now();
     while !path.exists() {
         if start.elapsed() > timeout {

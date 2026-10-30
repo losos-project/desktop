@@ -14,10 +14,10 @@ the PC LosOS expects, not the smallest one it boots on:
 | Graphics | virtio GPU with GL (virgl) |
 
 > [!IMPORTANT]
-> The firmware has to be UEFI with Secure Boot off for the reasons in
-> [Boot loader and boot screen](boot-loaders.md): GRUB chainloads a UKI
-> nobody has signed. Only a UEFI boot goes through systemd-stub, which
-> measures the UKI into the TPM, so with the TPM the
+> The firmware has to be UEFI. Secure Boot is off so that a local build,
+> which is not signed, starts as well as a release, which is
+> ([Secure Boot](secure-boot.md)). Only a UEFI boot goes through
+> systemd-stub, which measures the UKI into the TPM, so with the TPM the
 > [security report](security-report.md) finds both and the VM is the machine a
 > laptop would be. Like every machine it never [hibernates](hibernation.md).
 
