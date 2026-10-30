@@ -43,6 +43,8 @@ in
   losos.machines.system.${machine} = {
     template = "losos-flatpak";
     label = "purple";
+    # The OS's: out of the Machines app, its apps in the palette.
+    service = true;
   };
 
   # The apps the host had installed for everyone. /var/lib/flatpak is

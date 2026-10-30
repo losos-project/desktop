@@ -1,0 +1,33 @@
+[package]
+name = "losos-tokens"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_tokens"
+path = "src/lib.rs"
+
+[[bin]]
+name = "losos-tokens"
+path = "src/main.rs"
+
+[dependencies]
+# Logs go through tracing to stderr, `RUST_LOG` choosing the level, and
+# failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# The host's keys and every machine's connection hand their reports to one
+# thread that decides where each goes, so nothing is locked.
+crossbeam-channel = "0.5"
+# Machines reach the host's relays over vsock, as their windows do.
+vsock = "0.5.4"
+# Binding a privileged vsock port and reading a Unix peer's user, which
+# std cannot yet; the version vsock already brings.
+nix = { version = "0.31", default-features = false, features = ["socket"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
