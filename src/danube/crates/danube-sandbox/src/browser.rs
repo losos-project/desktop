@@ -1,13 +1,13 @@
 //! The sandbox the whole browser runs in.
 //!
 //! What Danube can see: the Nix store and the system's configuration,
-//! read-only; the GPU; its own profile, cache and settings directories, and
-//! Downloads, writable; the fonts, themes and icons a user installs,
-//! read-only; the Wayland, PipeWire and PulseAudio sockets and derisk's;
-//! the compiled filter lists. The session bus only through xdg-dbus-proxy,
-//! filtered to the portals, notifications and accessibility. Nothing else
-//! in the home directory exists in there, so a compromised browser cannot
-//! read SSH keys or other programs' data.
+//! read-only; the GPU, when it can draw ([`gpu_draws`]); its own profile, cache
+//! and settings directories, and Downloads, writable; the fonts, themes and
+//! icons a user installs, read-only; the Wayland, PipeWire and PulseAudio
+//! sockets and derisk's; the compiled filter lists. The session bus only
+//! through xdg-dbus-proxy, filtered to the portals, notifications and
+//! accessibility. Nothing else in the home directory exists in there, so a
+//! compromised browser cannot read SSH keys or other programs' data.
 //!
 //! A seccomp filter refuses the system calls a browser never needs.
 //! Network access is shared: it is a browser. There is no Landlock ruleset
@@ -16,7 +16,11 @@
 //! this one with both. The page sandboxes carry the Landlock rules instead
 //! ([`Plan::from_bwrap_args`]), around the web content itself.
 
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+
+use tracing::info;
 
 use crate::{Access, Op, Plan, Unshare};
 
@@ -131,7 +135,11 @@ pub fn plan(session: &Session) -> Plan {
     ] {
         bind(&mut plan, Path::new(path), Access::Read, true);
     }
-    bind(&mut plan, Path::new("/dev/dri"), Access::Device, true);
+    if gpu_draws(Path::new("/dev/dri")) {
+        bind(&mut plan, Path::new("/dev/dri"), Access::Device, true);
+    } else {
+        info!("the GPU cannot draw; pages render in software");
+    }
 
     plan.ops.push(Op::Dev("/dev".into()));
     plan.ops.push(Op::Proc("/proc".into()));
@@ -208,9 +216,110 @@ pub fn plan(session: &Session) -> Plan {
     plan
 }
 
+/// Whether Mesa can draw with this machine's GPU, so the browser gets
+/// /dev/dri. A virtual machine's virtio-gpu without 3D (QEMU's `-vga
+/// virtio`, virt-manager with 3D acceleration off) still has a render
+/// node. Mesa has no driver for it and falls back to drawing in software on
+/// that node, where the kernel refuses the dumb buffers software drawing
+/// needs, so WebKit's GBM buffers all fail and every page stays blank.
+/// Without /dev/dri, Mesa draws in software on its own and WebKit hands
+/// pages over in shared memory, which works anywhere. A render node of any
+/// other kind, or a machine with only primary nodes, keeps the GPU.
+fn gpu_draws(dri: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dri) else {
+        return true;
+    };
+    let mut nodes = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("renderD"))
+        .peekable();
+    nodes.peek().is_none() || nodes.any(|e| !virtio_without_3d(&e.path()))
+}
+
+/// The kernel's `struct drm_version`.
+#[repr(C)]
+struct DrmVersion {
+    major: libc::c_int,
+    minor: libc::c_int,
+    patchlevel: libc::c_int,
+    name_len: libc::size_t,
+    name: *mut libc::c_char,
+    date_len: libc::size_t,
+    date: *mut libc::c_char,
+    desc_len: libc::size_t,
+    desc: *mut libc::c_char,
+}
+
+/// The kernel's `struct drm_virtgpu_getparam`: `value` points at an int
+/// the answer is written to.
+#[repr(C)]
+struct VirtgpuGetparam {
+    param: u64,
+    value: u64,
+}
+
+/// `_IOWR('d', nr, size)`, the same encoding on x86_64 and aarch64.
+const fn drm_iowr(nr: libc::c_ulong, size: usize) -> libc::c_ulong {
+    (3 << 30) | ((size as libc::c_ulong) << 16) | ((b'd' as libc::c_ulong) << 8) | nr
+}
+
+/// Whether `node` is virtio-gpu's render node on a host that gives it no 3D.
+fn virtio_without_3d(node: &Path) -> bool {
+    const DRM_IOCTL_VERSION: libc::c_ulong = drm_iowr(0x00, size_of::<DrmVersion>());
+    // DRM_COMMAND_BASE + DRM_VIRTGPU_GETPARAM.
+    const DRM_IOCTL_VIRTGPU_GETPARAM: libc::c_ulong =
+        drm_iowr(0x40 + 0x03, size_of::<VirtgpuGetparam>());
+    const VIRTGPU_PARAM_3D_FEATURES: u64 = 1;
+
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(node) else {
+        return false;
+    };
+    let mut name = [0u8; 16];
+    let mut version = DrmVersion {
+        major: 0,
+        minor: 0,
+        patchlevel: 0,
+        name_len: name.len(),
+        name: name.as_mut_ptr().cast(),
+        date_len: 0,
+        date: std::ptr::null_mut(),
+        desc_len: 0,
+        desc: std::ptr::null_mut(),
+    };
+    // SAFETY: the kernel writes at most name_len bytes into `name` and
+    // nothing into the empty date and description.
+    if unsafe { libc::ioctl(file.as_raw_fd(), DRM_IOCTL_VERSION, &mut version) } != 0 {
+        return false;
+    }
+    if name.get(..version.name_len) != Some(b"virtio_gpu".as_slice()) {
+        return false;
+    }
+    let mut features: libc::c_int = 0;
+    let mut param = VirtgpuGetparam {
+        param: VIRTGPU_PARAM_3D_FEATURES,
+        value: &mut features as *mut libc::c_int as u64,
+    };
+    // SAFETY: the kernel writes one int to `features`.
+    let ok = unsafe { libc::ioctl(file.as_raw_fd(), DRM_IOCTL_VIRTGPU_GETPARAM, &mut param) } == 0;
+    ok && features == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gpu_is_kept_unless_known_not_to_draw() {
+        let dir = std::env::temp_dir().join(format!("danube-dri-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // No render node: primary nodes or none, Mesa manages either way.
+        assert!(gpu_draws(&dir));
+        // A render node that answers no DRM ioctl is not virtio-gpu.
+        std::fs::write(dir.join("renderD128"), "").unwrap();
+        assert!(gpu_draws(&dir));
+        assert!(gpu_draws(&dir.join("missing")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn home_holds_only_danubes_directories() {
