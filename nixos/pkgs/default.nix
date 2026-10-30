@@ -99,6 +99,9 @@ in
   losos = callWithMold ./losos.nix { };
   # Finds those boxes over mDNS and offers each one as an application.
   losos-boxes = callWithMold ./losos-boxes.nix { };
+  # Keeps machines apart on libvirt's network by their label
+  # (machine-labels.nix).
+  losos-machine-labels = callWithMold ./losos-machine-labels.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.

@@ -257,6 +257,7 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-machine-labels"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -305,6 +306,10 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # A red machine reaches the host's DHCP and DNS and the internet and
+          # nothing else, and the others only their own label's machines and
+          # the LosOS boxes machine (machine-labels.nix).
+          machine-labels = pkgs.testers.runNixOSTest ./nixos/tests/machine-labels.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;

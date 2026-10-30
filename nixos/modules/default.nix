@@ -14,6 +14,7 @@
     ./hardware.nix
     ./nvidia.nix
     ./libvirt.nix
+    ./machine-labels.nix
     ./machines.nix
     ./service-machines.nix
     ./schizo.nix
