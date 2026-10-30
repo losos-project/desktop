@@ -319,6 +319,17 @@
   driver on a private bus, which offers no Performance profile. The Halium
   GSI has no Bluetooth, because the phone's controller sits behind its vendor
   HAL and nothing here bridges that to BlueZ.
+- **A PIN at startup is the installer's only.** [The
+  installer](installer.md#asking-for-a-pin-at-startup) encrypts root with a
+  TPM and a PIN when asked, but a PC set up from a written image, first-boot
+  setup and the Windows installer leave root plain. A factory reset recreates
+  root from `disk.nix`, which has no encryption, so it comes back plain too.
+  The TPM slot is bound to no PCRs until the UKIs are signed. The VM test
+  unlocks the installed root with `systemd-cryptsetup` beside the installer;
+  no test yet boots an installed system through the PIN prompt, since that
+  needs a release to install. There is no way to change the PIN from
+  Settings; `systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto
+  --tpm2-with-pin=yes --tpm2-pcrs=` with the recovery key does it.
 - **Two LosOS disks in one PC.** Root comes from the disk the [boot
   loader](boot-loaders.md) started from, under UEFI and a BIOS alike. Swap,
   though, is found by its partition label, `losos-swap`, in `disk.nix` and

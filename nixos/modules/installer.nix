@@ -123,6 +123,26 @@ let
       Target = target // moved;
     };
 
+  # The installed system's own definitions, all of them, for an install
+  # that encrypts root (src/losos-installer's encrypt.rs): it then makes
+  # root, /home and swap itself, as first boot would, and only this drop-in
+  # differs, making root LUKS2 locked to the TPM. That slot is the
+  # installer's to replace with one that also asks for the person's PIN.
+  # First boot leaves the volume as it finds it: repart's Encrypt= applies
+  # to partitions it creates.
+  rootDefinitions = pkgs.linkFarm "losos-installer-root-repart.d" (
+    lib.mapAttrsToList (name: settings: {
+      name = "${name}.conf";
+      path = repartFormat.generate "${name}.conf" { Partition = settings; };
+    }) config.systemd.repart.partitions
+    ++ [
+      {
+        name = "30-root.conf.d/encrypt.conf";
+        path = repartFormat.generate "encrypt.conf" { Partition.Encrypt = "tpm2"; };
+      }
+    ]
+  );
+
   sysupdateTemplates = pkgs.linkFarm "losos-installer-sysupdate.d" (
     lib.mapAttrsToList (name: transfer: {
       name = "${name}.transfer";
@@ -152,6 +172,15 @@ let
       # with; no report is offered without both.
       reportRepo = cfg.report.repository;
       reportClientId = cfg.report.clientId;
+      inherit
+        esp
+        repartDefinitions
+        rootDefinitions
+        sysupdateTemplates
+        ;
+      # The swap definition for the PC's RAM, as first boot writes it
+      # (disk.nix), for an install that makes swap itself.
+      swap = "${pkgs.losos-swap}/lib/losos/losos-swap";
       inherit esp repartDefinitions sysupdateTemplates;
       # The key the medium's GRUB and UKI are signed with, as the
       # image's are (secure-boot.nix).
