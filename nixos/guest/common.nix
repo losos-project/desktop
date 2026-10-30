@@ -54,6 +54,8 @@ in
     ../modules/home-folders.nix
     # uutils, sudo-rs's su and Sequoia's gpg, as on the host.
     ../modules/userland.nix
+    # The portals' dialogs, from the portal machine.
+    ../modules/portal-backend.nix
     # The host's security keys and smart card readers.
     ./tokens.nix
   ];
@@ -226,12 +228,28 @@ in
     # derisk's GPUI apps need Vulkan.
     hardware.graphics.enable = true;
 
-    # A portal for the apps' dialogs (open a file, pick an app), which GTK's
-    # draws through the guest's waypipe like any other window.
+    # Portals for the apps. The ones with a dialog that sees the person's
+    # files or screen (opening and saving a file, saying yes to an app, a
+    # screenshot, the wallpaper) are the portal machine's, through the
+    # host, which copies the files picked for an app in here and writes
+    # them back when it saves (docs/portal-machine.md). GTK's backend,
+    # drawn through the guest's waypipe, does the rest, such as picking an
+    # app of this machine's to open a file in.
+    losos.portalBackend = {
+      enable = true;
+      inMachine = true;
+    };
     xdg.portal = {
       enable = true;
       extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
-      config.common.default = "gtk";
+      config.common = {
+        default = "gtk";
+        "org.freedesktop.impl.portal.FileChooser" = "losos";
+        "org.freedesktop.impl.portal.Access" = "losos";
+        "org.freedesktop.impl.portal.Account" = "losos";
+        "org.freedesktop.impl.portal.Screenshot" = "losos";
+        "org.freedesktop.impl.portal.Wallpaper" = "losos";
+      };
     };
 
     # A captive portal is the host's to deal with: the guest is behind

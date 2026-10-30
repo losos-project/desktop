@@ -57,6 +57,8 @@ in
           # resolved restarting ends a browse; the next run starts over.
           Restart = "on-failure";
           RestartSec = "10s";
+          # Waits while focus mode is on (focus.nix).
+          Slice = "background.slice";
         };
       };
     })
