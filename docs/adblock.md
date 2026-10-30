@@ -107,8 +107,10 @@ names, neither of which one resolver behind one encrypted connection
 would do. Both files live in `/run`, so a machine that stops with them in
 place comes back without them, and the person's own mode is never touched.
 
-`losos-adblock encrypted-dns on|strict|off|status` changes or shows the
-mode. `losos.adblock.encryptedDns.mode` sets the OS's default, and
+Settings › Network offers the three modes under **Encrypted DNS**, with a
+line saying where names go, and greys the choice out while schizo mode or
+an edge forces the servers. `losos-adblock encrypted-dns on|strict|off|status`
+changes or shows the mode from a terminal. `losos.adblock.encryptedDns.mode` sets the OS's default, and
 `/var/lib/losos-adblock/encrypted-dns` records the person's choice: the
 mode on its first line, and optionally servers of their own after it, one
 per line, which replace the OS's. An administrator changes the mode
