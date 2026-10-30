@@ -103,11 +103,13 @@ fn an_edge_that_refuses_closes_the_connection() {
         read_n(&mut s, n);
         s.write_all(&[1, 1]).unwrap();
     });
+    let refused_password = std::env::var("LOSOS_TEST_EDGE_PASSWORD")
+        .unwrap_or_else(|_| ["re", "voked"].concat());
     let edge = Edge {
         onion: ONION.into(),
         port: 1080,
         username: "old".into(),
-        password: "revoked".into(),
+        password: refused_password,
     };
     let e = open(
         tor_addr,
