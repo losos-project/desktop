@@ -693,6 +693,7 @@ impl Stream for TcpStream {
 fn guest(options: &GuestOptions) -> Result<()> {
     std::thread::scope(|scope| {
         scope.spawn(|| loop {
+            if let Err(e) = keys_from_host(options.host_cid) {
             if let Err(e) = keys_from_host(options) {
                 debug!("{e:?}");
             }
