@@ -211,6 +211,11 @@ fn host(options: HostOptions) -> Result<()> {
         smart_cards = SMART_CARDS_PORT,
         "relaying security keys and smart card readers to the machines"
     );
+    let (events, heard) = bounded::<Event>(QUEUE);
+    let lease = Mutex::new(Lease::default());
+    let options = &options;
+    std::thread::scope(|scope| {
+        scope.spawn(move || route(heard));
     let forwards = options
         .forward
         .iter()

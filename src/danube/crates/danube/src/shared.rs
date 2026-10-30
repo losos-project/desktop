@@ -42,6 +42,27 @@ pub struct PermissionAsk {
     pub kind: crate::permissions::Kind,
 }
 
+/// A site asking for a security key (webauthn.rs), as its bar shows it.
+#[derive(Clone, Debug)]
+pub struct KeyAsk {
+    pub id: u64,
+    pub tab: TabId,
+    /// The host asking, which the bar names.
+    pub host: String,
+    pub op: crate::webauthn::Op,
+    pub status: crate::webauthn::Status,
+}
+
+/// A security key's PIN on its way to the key, which a `Debug` of the
+/// command carrying it does not show.
+pub struct Pin(pub String);
+
+impl std::fmt::Debug for Pin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Pin(..)")
+    }
+}
+
 /// What the window asks of WebKit.
 #[derive(Debug)]
 pub enum Command {
@@ -84,6 +105,14 @@ pub enum Command {
     /// The window was laid out for a phone (short side under 600 px) or
     /// not; sets the User-Agent string for the next load.
     Phone(bool),
+    /// The PIN the person typed in a security key's bar.
+    KeyPin(u64, Pin),
+    /// The person pressed Cancel in a security key's bar.
+    KeyCancel(u64),
+    /// From the thread talking to the keys (webauthn.rs): how it is going,
+    /// and the answer for the page once it is over.
+    KeyStatus(u64, crate::webauthn::Status),
+    KeyDone(u64, String),
     /// For the extension runtime (extensions/runtime.rs).
     Extensions(ExtCommand),
     /// About a download handed to aria2 (downloads.rs, engine.rs).
@@ -181,6 +210,10 @@ pub enum Event {
     Permission(PermissionAsk),
     /// The request was answered (or its tab closed); the bar goes away.
     PermissionDone(u64),
+    /// A site asks for a security key, and how that goes until it is over.
+    Key(KeyAsk),
+    KeyStatus(u64, crate::webauthn::Status),
+    KeyDone(u64),
     /// How many content blocker rule sets are in force, for the Page menu.
     Filters(usize),
     /// The installed extensions, whenever they or their badges change.
@@ -250,6 +283,11 @@ impl Events {
 
     pub fn attach(&mut self, ctx: egui::Context) {
         self.ctx = Some(ctx);
+    }
+
+    /// The command channel, for a thread of WebKit's that reports back.
+    pub fn commands(&self) -> Commands {
+        self.commands.clone()
     }
 
     /// Queues `command` for WebKit's own thread to handle next.

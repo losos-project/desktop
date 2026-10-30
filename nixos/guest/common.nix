@@ -56,8 +56,6 @@ in
     ../modules/userland.nix
     # The host's security keys and smart card readers.
     ./tokens.nix
-    # The Slovak eID klient, downloaded on its first start.
-    ./eid.nix
   ];
 
   options.losos.guest.name = lib.mkOption {
