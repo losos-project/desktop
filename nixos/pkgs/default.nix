@@ -99,6 +99,9 @@ in
   losos = callWithMold ./losos.nix { };
   # Finds those boxes over mDNS and offers each one as an application.
   losos-boxes = callWithMold ./losos-boxes.nix { };
+  # The host's security keys and smart card readers, lent to its machines
+  # (docs/tokens.md).
+  losos-tokens = callWithMold ./losos-tokens.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.
@@ -106,6 +109,9 @@ in
   # A guest's apps and windows on the desktop, from macOS's app server or
   # any other that speaks its protocol (docs/app-windows.md).
   app-windows = callWithMold ./app-windows.nix { };
+  # Schizo mode's way out through the person's LosOS edge: in the Tor
+  # gateway, each connection over Tor to the edge's onion exit.
+  losos-edge-chain = callWithMold ./losos-edge-chain.nix { };
   # macOS app support (macos-apps.nix): macOS in dockur/macos on a Mac, and
   # its windows through app-windows.
   macos-app-support = final.callPackage ./macos-app-support.nix { };

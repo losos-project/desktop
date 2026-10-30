@@ -24,6 +24,7 @@ module.exports = {
         'quickemu',
         'first-boot',
         'sign-in',
+        'tokens',
         'users',
         'releases',
         'allocator',

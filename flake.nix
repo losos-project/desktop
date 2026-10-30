@@ -257,6 +257,8 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
+          "losos-tokens"
+          "losos-edge-chain"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -305,6 +307,9 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # A security key and a smart card reader on the host, used from a
+          # machine's half of the relay over vsock's loopback (tokens.nix).
+          tokens = pkgs.testers.runNixOSTest ./nixos/tests/tokens.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;
