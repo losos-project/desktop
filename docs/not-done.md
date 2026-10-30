@@ -388,36 +388,23 @@
   other machines' connections to a box only on ports 80 and 443, by the name
   they ask for. An app's own port on a box is reached directly, and nothing
   stops a machine that knows a box's address from reaching it without the
-  [LosOS boxes](losos-boxes.md) machine. Neither half has met a real box on a
-  real LAN yet: the machines test boots a stand-in box beside the host, and
-  the real box in `nixos/tests/losos-box.nix` is found by a desktop with no
-  machine.
-- **Backups to a LosOS box keep one copy and need a password sign-in.** LosOS
+  [LosOS boxes](losos-boxes.md) machine. The machine's keyring has no sign-in
+  to unlock it, so the first `losos` command that stores a key or token asks
+  for a keyring password in a window of the machine. Nothing makes the
+  machine automatically either, and its owner makes it from the template.
+  The machine itself has not met a real box on a real LAN yet: the machines
+  test boots a stand-in box beside the host, and the real box in
+  `nixos/tests/losos-box.nix` is found by a desktop with no machine.
+- **Backups to a LosOS box keep one copy.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A
   repository deleted at home stays on the box. Configs that are symbolic
   links, as Home Manager writes them, are not in the configs' repository, so
-  back up the Home Manager configuration they come from instead. Accounts
-  with two-factor sign-in cannot sign in from the Backups page, which sends a
-  name and a password. Git LFS objects are not pushed. Symbolic links, which
+  back up the Home Manager configuration they come from instead. Git LFS
+  objects are not pushed. Symbolic links, which
   Nextcloud cannot hold, are left out. A box with HTTPS turned off through
   `losos.tls.enable` cannot be backed up to. Only an administrator's run can
   start a stopped LosOS boxes machine. Backups run once a day, with no
-  setting to change that. Against a real box only LosOS cloud works so far:
-  LosOS Git takes no passwords, so the repositories go to LosOS cloud as
-  files. See
-  [Backups to a LosOS box](backup.md).
-- **Company accounts are half done.** The bridge logs people in with their
-  LosOS Login password, keeps their homed records in step at each login,
-  and locks people the box removed whenever the computer is on the office
-  network. Mesh CI manages a computer with six fixed steps only (status,
-  update, reboot, channel, lock, unlock): no Flatpaks, no settings, no
-  scripts. Joining is a command, with no Settings page. An account whose only second factor is a passkey cannot log in,
-  because PAM cannot ask for one. The bridge has logged in against Authelia
-  set up as LosOS Login sets it up, not against a real box behind a real
-  gateway. See [Company accounts](company.md).
-- **Names through the edge in schizo mode.** With an edge set, schizo mode
-  sends its connections out from the edge, but Tor's exits still look up
-  the names. The edge's SOCKS exit could take the name itself, but the
-  chain only sees the address a program connected to, not the name it
-  looked up ([Schizo mode](schizo-mode.md), "Through an edge").
+  setting to change that. A box older than LosOS Login's sign-in for backups
+  offers only the password sign-in to LosOS cloud, and the repositories then
+  go to LosOS cloud as files. See [Backups to a LosOS box](backup.md).
