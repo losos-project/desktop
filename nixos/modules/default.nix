@@ -36,6 +36,8 @@
     ./flatpak-machine.nix
     # Security keys and smart card readers, lent to the machines.
     ./tokens.nix
+    # Signing in with the Slovak eID card, through the eID machine.
+    ./eid-signin.nix
     ./allocator.nix
     ./image.nix
     ./disk.nix

@@ -260,13 +260,7 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
-          "losos-vm-call"
-          "losos-netd"
-          "losos-filesd"
-          "losos-portal"
-          "losos-agent-machine"
           "losos-tokens"
-          "losos-edge-chain"
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -315,6 +309,14 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
+          # A security key and a smart card reader on the host, used from a
+          # machine's half of the relay over vsock's loopback (tokens.nix).
+          tokens = pkgs.testers.runNixOSTest ./nixos/tests/tokens.nix;
+          # Signing in with an eID card: homed enrols the certificate that
+          # may decrypt and logs a person in with the PIN, through the
+          # relay and the eID machine's half, with SoftHSM for the card
+          # (eid-signin.nix).
+          eid-signin = pkgs.testers.runNixOSTest ./nixos/tests/eid-signin.nix;
           # USB devices plugged into sys-usb's controller wake it and reach
           # their machines, over and over, and it sleeps again once they are
           # gone (peripherals.nix).
@@ -341,7 +343,6 @@
           schizo = pkgs.testers.runNixOSTest ./nixos/tests/schizo.nix;
           # A security key and a smart card reader on the host, used from a
           # machine's half of the relay over vsock's loopback (tokens.nix).
-          tokens = pkgs.testers.runNixOSTest ./nixos/tests/tokens.nix;
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;

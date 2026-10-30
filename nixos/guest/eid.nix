@@ -40,10 +40,20 @@ let
     runScript = pkgs.writeShellScript "losos-eid-run" ''exec "$@"'';
   };
 
+  # AppRun sets the library path to the libraries the eID klient carries
+  # and starts it on X11, the only platform it is built for. The rest of
+  # what it links comes from the environment above.
   launcher = pkgs.writeShellApplication {
     name = "losos-eid";
     runtimeInputs = [
       env
+      pkgs.losos-eid-fetch
+    ];
+    text = ''
+      dir=''${XDG_DATA_HOME:-$HOME/.local/share}/losos-eid
+      losos-eid-fetch "$dir"
+      exec losos-eid-env "$dir/app/AppRun" "$@"
+    '';
       pkgs.curl
       pkgs.gnutar
       pkgs.gzip

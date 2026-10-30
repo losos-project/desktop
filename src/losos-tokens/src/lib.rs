@@ -14,6 +14,13 @@ pub const SMART_CARDS_PORT: u32 = 7371;
 /// such as the eID client a page hands a sign-in to (docs/tokens.md,
 /// "Hand-offs between apps").
 pub const LOCALHOST_PORT: u32 = 7372;
+/// The vsock port the eID machine serves the eID card's PKCS#11 module on,
+/// for signing in to the computer (docs/tokens.md, "Signing in with the
+/// eID").
+pub const PKCS11_PORT: u32 = 7373;
+/// vsock ports below this one may be bound only with CAP_NET_BIND_SERVICE,
+/// as with TCP: a connection from one is from a privileged program.
+pub const PRIVILEGED_PORTS: u32 = 1024;
 
 /// The size of every CTAPHID report, in and out, on every FIDO key.
 pub const REPORT_LEN: usize = 64;
@@ -455,6 +462,15 @@ impl Lease {
     }
 }
 
+/// The user at seat0's active session, from logind's
+/// `/run/systemd/seats/seat0` as `seat`: the person sitting at the
+/// computer, whom pcscd also lets at the readers.
+pub fn active_uid(seat: &str) -> Option<u32> {
+    seat.lines()
+        .find_map(|line| line.strip_prefix("ACTIVE_UID="))
+        .and_then(|uid| uid.trim().parse().ok())
+}
+
 /// Whether `/proc/net/tcp` or `tcp6`, as `table`, has a socket listening
 /// on `port` that a connection to `localhost` reaches: on that address, on
 /// every address, or on its IPv6 forms. A machine reads its own tables
@@ -796,5 +812,13 @@ mod tests {
         lease.give_back("work");
         assert_eq!(lease.holder(), None);
         assert!(lease.take("play"));
+    }
+
+    #[test]
+    fn the_person_at_the_seat() {
+        let seat = "# This is private data. Do not parse.\nIS_SEAT0=1\nCAN_MULTI_SESSION=1\nACTIVE=c2\nACTIVE_UID=60514\nSESSIONS=c2 3\n";
+        assert_eq!(active_uid(seat), Some(60514));
+        // Nobody signed in: the login screen's session has no person.
+        assert_eq!(active_uid("IS_SEAT0=1\nCAN_MULTI_SESSION=1\n"), None);
     }
 }
