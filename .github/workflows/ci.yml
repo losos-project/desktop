@@ -183,9 +183,12 @@ jobs:
           echo "$NIX_INSTALLER_SHA256  install-nix" | sha256sum -c -
           sh install-nix --daemon --yes --no-channel-add
           # Ubuntu 24.04's AppArmor stops unprivileged processes making user
-          # namespaces, and a Nix build user is one. Test suites that run
-          # bwrap inside the build, such as xdg-desktop-portal's icon and
-          # sound validators, then fail on this runner and nowhere else.
+          # namespaces, and a Nix build user is one. The image's
+          # systemd-repart runs under `unshare --map-root-user`
+          # (modules/image.nix), and xdg-desktop-portal's icon and sound
+          # validators are tested inside bwrap; the overlay tests those
+          # unsandboxed on a host that refuses, but here they are tested as
+          # the image runs them.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           features="nixos-test benchmark big-parallel"
           if [ -e /dev/kvm ]; then
