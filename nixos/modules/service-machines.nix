@@ -122,9 +122,9 @@ let
           <type arch='${pkgs.stdenv.hostPlatform.qemuArch}' machine='${
             if pkgs.stdenv.hostPlatform.isx86 then "q35" else "virt"
           }'>hvm</type>
-          <kernel>${config.system.build.kernelImage}</kernel>
-          <initrd>${guest.system.build.initialRamdisk}/${guest.system.boot.loader.initrdFile}</initrd>
-          <cmdline>init=${guest.system.build.toplevel}/init ${toString guest.boot.kernelParams}</cmdline>
+          <kernel>${os.kernel}</kernel>
+          <initrd>${os.initrd}</initrd>
+          <cmdline>${os.cmdline}</cmdline>
         </os>
         @CPU@${
           # A PC's kernel finds its devices' interrupts through ACPI, which a
