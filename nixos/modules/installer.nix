@@ -181,7 +181,6 @@ let
       # The swap definition for the PC's RAM, as first boot writes it
       # (disk.nix), for an install that makes swap itself.
       swap = "${pkgs.losos-swap}/lib/losos/losos-swap";
-      inherit esp repartDefinitions sysupdateTemplates;
       # The key the medium's GRUB and UKI are signed with, as the
       # image's are (secure-boot.nix).
       secureBoot = { inherit (cfg.secureBoot) privateKey certificate; };

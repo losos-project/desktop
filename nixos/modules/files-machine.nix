@@ -125,7 +125,10 @@ in
       # where an untrusted drive's parsers belong, away from the host's
       # kernel, so a Mac's USB stick or a DVD opens here.
       kicksecure.allowModules =
-        (import ../guest/kicksecure-settings.nix { inherit (pkgs.stdenv.hostPlatform) isx86; })
+        (import ../guest/kicksecure-settings.nix {
+          inherit (pkgs.stdenv.hostPlatform) isx86;
+          falseProgram = "/bin/false";
+        })
         .disabledModules.filesystems
         ++ [
           "cdrom"
