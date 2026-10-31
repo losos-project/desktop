@@ -41,6 +41,8 @@ let
   # the sysctls, and its modprobe reads the modules from a modprobe.d file.
   kicksecure = import ../guest/kicksecure-settings.nix {
     inherit (pkgs.stdenv.hostPlatform) isx86;
+    # The guest's own BusyBox false, which core dumps are piped to.
+    falseProgram = "/bin/false";
   };
 
   guest =
