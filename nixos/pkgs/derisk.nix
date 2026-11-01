@@ -360,7 +360,7 @@ rustPlatform.buildRustPackage {
     # only inside the binary: on disk, their MimeType= lines are what lets
     # xdg-open hand them a text file or a folder (desktop.nix's defaults).
     # derisk lists core apps itself and skips these copies.
-    for app in editor files; do
+    for app in editor files store; do
       install -Dm644 -t $out/share/applications crates/derisk-apps/data/org.derisk.$app.desktop
       substituteInPlace $out/share/applications/org.derisk.$app.desktop \
         --replace-fail "Exec=derisk " "Exec=$out/bin/derisk "

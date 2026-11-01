@@ -161,7 +161,7 @@ impl Tree {
         let mut list = String::from(
             "# The symbolic links in this home, which LosOS cloud cannot hold:\n\
              # each line is a path, a tab and the link's target. From the home,\n\
-             #   grep -v '^#' .losos-backup-links.tsv | while IFS=\"$(printf '\\t')\" read -r p t; do ln -sfn \"$t\" \"$p\"; done\n\
+             #   tail -n +5 .losos-backup-links.tsv | while IFS=\"$(printf '\\t')\" read -r p t; do ln -sfn -- \"$t\" \"$p\"; done\n\
              # makes them again.\n",
         );
         for link in &self.links {
@@ -369,7 +369,19 @@ mod tests {
                 target: "/nix/store".into(),
             }]
         );
-        assert!(tree.links_list().ends_with("\nstore-link\t/nix/store\n"));
+        let links = tree.links_list();
+        assert!(links.contains("tail -n +5 .losos-backup-links.tsv"));
+        assert!(links.contains("ln -sfn -- \"$t\" \"$p\""));
+        assert!(links.ends_with("\nstore-link\t/nix/store\n"));
+        let special = Tree {
+            links: vec![Link {
+                rel: "#source".into(),
+                target: "-target".into(),
+            }],
+            ..Tree::default()
+        }
+        .links_list();
+        assert!(special.ends_with("\n#source\t-target\n"));
 
         let tree = walk(
             &home,

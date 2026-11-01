@@ -330,12 +330,6 @@ pub fn run(commands: Receiver<Command>, events: Events, options: Options) {
         filters
     });
 
-    // The runtime before the engine: its views come from the same display
-    // and session.
-    let extensions = options
-        .extensions
-        .map(|o| Runtime::new(o, &display, &session));
-
     // The files a page is given to upload are the document portal's
     // (portal.rs), which the web processes read from too; only the files
     // the person chose are in there.
@@ -344,6 +338,13 @@ pub fn run(commands: Receiver<Command>, events: Events, options: Options) {
             WebContext::default().add_path_to_sandbox(&doc, true);
         }
     }
+
+    // The runtime before the engine: its views come from the same display
+    // and session.
+    let extensions = options
+        .extensions
+        .map(|o| Runtime::new(o, &display, &session));
+
     let library = Rc::new(RefCell::new(Library::open(options.profile.as_ref().map(|(data, _)| data.as_path()))));
 
     let engine = Engine {
@@ -704,7 +705,8 @@ impl Engine {
         let notes = self.notifier.clone();
         page.on_show_notification(move |page, notification| {
             let Ok(mut notes) = notes.try_borrow_mut() else { return false };
-            notes.show_site(notification, id, &config::host(&page.uri()));
+            let uri = page.uri();
+            notes.show_site(notification, id, &config::host(&uri), config::origin(&uri).as_deref());
             true
         });
         let finder = page.find_controller();

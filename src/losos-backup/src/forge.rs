@@ -341,12 +341,11 @@ impl<'a> Forge<'a> {
                 }
                 Err(e) => return Err(e.into()),
             };
-            for (object, (oid, size, path)) in answer["objects"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .zip(chunk)
-            {
+            let responses = match_lfs_objects(&answer, chunk)?;
+            for (oid, size, path) in chunk {
+                let object = responses
+                    .get(oid.as_str())
+                    .expect("validated LFS response contains every requested object");
                 if let Some(error) = object["error"]["message"].as_str() {
                     return Err(Error::new(format!("Git LFS object {oid}: {error}")));
                 }
@@ -373,6 +372,48 @@ impl<'a> Forge<'a> {
         }
         Ok(())
     }
+}
+
+fn match_lfs_objects<'a>(
+    answer: &'a Value,
+    requested: &[(String, u64, std::path::PathBuf)],
+) -> Result<BTreeMap<&'a str, &'a Value>, Error> {
+    let Some(objects) = answer["objects"].as_array() else {
+        return Err(Error::new("Git LFS returned no objects for its batch"));
+    };
+    if objects.len() != requested.len() {
+        return Err(Error::new("Git LFS returned an incomplete object batch"));
+    }
+
+    let requested_oids: BTreeSet<&str> = requested.iter().map(|(oid, _, _)| oid.as_str()).collect();
+    let mut matched = BTreeMap::new();
+    for object in objects {
+        let Some(oid) = object["oid"].as_str() else {
+            return Err(Error::new("Git LFS returned an object without an OID"));
+        };
+        if !requested_oids.contains(oid) {
+            return Err(Error::new(format!(
+                "Git LFS returned unexpected object {oid}"
+            )));
+        }
+        if matched.insert(oid, object).is_some() {
+            return Err(Error::new(format!(
+                "Git LFS returned object {oid} more than once"
+            )));
+        }
+    }
+
+    for (oid, size, _) in requested {
+        let Some(object) = matched.get(oid.as_str()) else {
+            return Err(Error::new(format!("Git LFS did not return object {oid}")));
+        };
+        if object["size"].as_u64() != Some(*size) {
+            return Err(Error::new(format!(
+                "Git LFS returned the wrong size for object {oid}"
+            )));
+        }
+    }
+    Ok(matched)
 }
 
 /// The media type of Git LFS's API.
@@ -632,6 +673,33 @@ fn git_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_lfs_batch_objects_by_oid_and_rejects_invalid_batches() {
+        let requested = vec![
+            ("a".to_owned(), 3, "a".into()),
+            ("b".to_owned(), 5, "b".into()),
+        ];
+        let answer = json!({
+            "objects": [
+                {"oid": "b", "size": 5},
+                {"oid": "a", "size": 3},
+            ]
+        });
+        let matched = match_lfs_objects(&answer, &requested).unwrap();
+        assert_eq!(matched["a"]["size"], 3);
+        assert_eq!(matched["b"]["size"], 5);
+
+        for objects in [
+            json!([{"oid": "a", "size": 3}]),
+            json!([{"oid": "a", "size": 3}, {"oid": "a", "size": 3}]),
+            json!([{"oid": "a", "size": 3}, {"oid": "c", "size": 5}]),
+            json!([{"oid": "a", "size": 3}, {"oid": "b", "size": 4}]),
+        ] {
+            assert!(match_lfs_objects(&json!({"objects": objects}), &requested).is_err());
+        }
+        assert!(match_lfs_objects(&json!({}), &requested).is_err());
+    }
 
     #[test]
     fn names_repositories_after_their_directory() {

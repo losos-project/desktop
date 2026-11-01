@@ -336,6 +336,11 @@ fn upload(
     tree: &Tree,
     report: &mut Report,
 ) -> Result<(), Error> {
+    let links_collision = has_links_collision(tree);
+    if links_collision {
+        report.fail_file(format!("~/{LINKS}: reserved for symbolic-link metadata"));
+    }
+
     let cloud = Cloud::new(
         agent,
         cloud::base(&route.name),
@@ -372,9 +377,15 @@ fn upload(
     let changed: Vec<&walk::File> = tree
         .files
         .iter()
+        .filter(|file| !links_collision || file.rel != LINKS)
         .filter(|f| index.files.get(&f.rel) != Some(&(f.size, f.mtime)))
         .collect();
-    report.unchanged = (tree.files.len() - changed.len()) as u64;
+    let eligible = tree
+        .files
+        .iter()
+        .filter(|file| !links_collision || file.rel != LINKS)
+        .count();
+    report.unchanged = (eligible - changed.len()) as u64;
     info!(
         changed = changed.len(),
         unchanged = report.unchanged,
@@ -447,7 +458,7 @@ fn upload(
         return Err(e);
     }
 
-    if !tree.links.is_empty() {
+    if !tree.links.is_empty() && tree.unreadable.is_empty() && !links_collision {
         if let Err(e) = put_links(paths, &cloud, tree, &mut index) {
             if e.unreachable {
                 config::save(&paths.index_file(), &index, false)?;
@@ -513,7 +524,7 @@ fn delete_gone(
     let dirs: BTreeSet<&str> = tree.dirs.iter().map(String::as_str).collect();
     let mut files: BTreeSet<&str> = tree.files.iter().map(|f| f.rel.as_str()).collect();
     // The list of links stays while there are any.
-    if !tree.links.is_empty() {
+    if keeps_links_list(tree) {
         files.insert(LINKS);
     }
     let gone_dirs: Vec<String> = index
@@ -555,6 +566,14 @@ fn delete_gone(
         }
     }
     Ok(())
+}
+
+fn keeps_links_list(tree: &Tree) -> bool {
+    !tree.links.is_empty() || !tree.unreadable.is_empty()
+}
+
+fn has_links_collision(tree: &Tree) -> bool {
+    keeps_links_list(tree) && tree.files.iter().any(|file| file.rel == LINKS)
 }
 
 /// What the Backups page shows: `losos-backup status`.
@@ -618,6 +637,34 @@ pub fn status(paths: &Paths) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_incomplete_walk_keeps_the_synthetic_links_manifest() {
+        let tree = Tree {
+            unreadable: vec!["Documents/private".into()],
+            ..Tree::default()
+        };
+        assert!(keeps_links_list(&tree));
+        assert!(!keeps_links_list(&Tree::default()));
+    }
+
+    #[test]
+    fn a_home_file_cannot_overwrite_the_synthetic_links_manifest() {
+        let tree = Tree {
+            files: vec![walk::File {
+                rel: LINKS.into(),
+                size: 0,
+                mtime: 0,
+            }],
+            links: vec![walk::Link {
+                rel: "link".into(),
+                target: "target".into(),
+            }],
+            ..Tree::default()
+        };
+        assert!(has_links_collision(&tree));
+        assert!(!has_links_collision(&Tree::default()));
+    }
 
     #[test]
     fn is_due_a_day_after_the_last_backup_by_default() {

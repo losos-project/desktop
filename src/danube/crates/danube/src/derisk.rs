@@ -171,13 +171,12 @@ pub fn with_library(mut menus: Value, tabs: &[Tab], active: Option<TabId>, histo
     if !bookmarks.is_empty() {
         marks.push(json!({"kind": "separator"}));
     }
-    for (n, page) in bookmarks.iter().enumerate() {
-        marks.push(json!({"kind": "item", "id": format!("{PREFIX}bookmarks.{n}"), "label": page.label()}));
+    for page in bookmarks {
+        marks.push(json!({"kind": "item", "id": format!("{PREFIX}bookmarks.{}", page.uri), "label": page.label()}));
     }
     let mut recent: Vec<Value> = history
         .iter()
-        .enumerate()
-        .map(|(n, page)| json!({"kind": "item", "id": format!("{PREFIX}history.{n}"), "label": page.label()}))
+        .map(|page| json!({"kind": "item", "id": format!("{PREFIX}history.{}", page.uri), "label": page.label()}))
         .collect();
     if recent.is_empty() {
         recent.push(json!({"kind": "item", "id": format!("{PREFIX}info.history"), "label": "No pages visited yet", "enabled": false}));
@@ -194,19 +193,18 @@ pub fn with_library(mut menus: Value, tabs: &[Tab], active: Option<TabId>, histo
 
 /// The command for a picked Bookmarks or History item; `None` for any
 /// other.
-pub fn library_command(item: &str, active: Option<TabId>, history: &[Page], bookmarks: &[Page]) -> Option<Command> {
+pub fn library_command(item: &str, active: Option<TabId>) -> Option<Command> {
     let rest = item.strip_prefix(PREFIX)?;
-    let load = |page: &Page| match active {
-        Some(tab) => Command::Load(tab, page.uri.clone()),
+    let load = |uri: &str| match active {
+        Some(tab) => Command::Load(tab, uri.to_owned()),
         None => Command::NewTab {
-            uri: Some(page.uri.clone()),
+            uri: Some(uri.to_owned()),
             activate: true,
         },
     };
-    let at = |n: &str| n.parse::<usize>().ok();
     Some(match rest.split_once('.') {
-        Some(("bookmarks", n)) => load(bookmarks.get(at(n)?)?),
-        Some(("history", n)) => load(history.get(at(n)?)?),
+        Some(("bookmarks", uri)) if !uri.is_empty() => load(uri),
+        Some(("history", uri)) if !uri.is_empty() => load(uri),
         None if rest == "bookmark" => Command::Bookmark(active?),
         None if rest == "clearhistory" => Command::ClearHistory,
         _ => return None,
@@ -443,7 +441,7 @@ fn talk(
                 if !send(stream, show_palette(), Asked::Palette, &mut asked) {
                     return Ok(());
                 }
-            } else if let Some(command) = library_command(item, current.active, &current.history, &current.bookmarks)
+            } else if let Some(command) = library_command(item, current.active)
                 .or_else(|| command(item, &current.tabs, current.active, &current.extensions))
             {
                 commands.send(command);
@@ -600,17 +598,21 @@ mod tests {
         assert_eq!(all[3]["entries"][0]["label"], "Remove Bookmark");
         assert_eq!(all[3]["entries"][2]["label"], "A");
         assert_eq!(all[4]["entries"][1]["label"], "https://c.example/");
+        assert_eq!(
+            all[4]["entries"][1]["id"],
+            "danube.history.https://c.example/"
+        );
         assert!(matches!(
-            library_command("danube.history.1", Some(4), &history, &bookmarks),
+            library_command(all[4]["entries"][1]["id"].as_str().unwrap(), Some(4)),
             Some(Command::Load(4, uri)) if uri == "https://c.example/"
         ));
         assert!(matches!(
-            library_command("danube.bookmarks.0", None, &history, &bookmarks),
+            library_command("danube.bookmarks.https://a.example/", None),
             Some(Command::NewTab { uri: Some(uri), activate: true }) if uri == "https://a.example/"
         ));
-        assert!(matches!(library_command("danube.bookmark", Some(4), &[], &[]), Some(Command::Bookmark(4))));
-        assert!(library_command("danube.history.9", Some(4), &history, &bookmarks).is_none());
-        assert!(library_command("danube.tab.4", Some(4), &history, &bookmarks).is_none());
+        assert!(matches!(library_command("danube.bookmark", Some(4)), Some(Command::Bookmark(4))));
+        assert!(library_command("danube.history.", Some(4)).is_none());
+        assert!(library_command("danube.tab.4", Some(4)).is_none());
         let empty = with_library(menus(&[], None, 0, &[]), &[], None, &[], &[]);
         assert_eq!(empty[3]["entries"][0]["enabled"], false);
         assert_eq!(empty[4]["entries"][0]["label"], "No pages visited yet");

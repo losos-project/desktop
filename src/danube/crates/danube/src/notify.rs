@@ -71,8 +71,8 @@ pub struct Notifier {
     served: Option<bool>,
     notes: HashMap<DownloadId, Note>,
     /// Sites' notifications on screen, by the server's id, with the tab
-    /// that showed each.
-    sites: HashMap<u32, (Notification, TabId)>,
+    /// and origin that showed each.
+    sites: HashMap<u32, (Notification, TabId, Option<String>)>,
     me: Weak<RefCell<Notifier>>,
 }
 
@@ -113,8 +113,14 @@ impl Notifier {
     }
 
     /// Shows a site's `notification` from tab `tab`, whose page is at
-    /// `host`; one with the tag of one already shown replaces it.
-    pub fn show_site(&mut self, notification: Notification, tab: TabId, host: &str) {
+    /// `host`; a tag replaces one shown by the same origin.
+    pub fn show_site(
+        &mut self,
+        notification: Notification,
+        tab: TabId,
+        host: &str,
+        origin: Option<&str>,
+    ) {
         let (title, body) = (notification.title(), notification.body());
         if self.served == Some(false) || (self.bus.is_none() && !self.connect()) {
             return emit(Event::Notice(if body.is_empty() { title } else { format!("{title}: {body}") }));
@@ -124,10 +130,18 @@ impl Notifier {
         let replaces = self
             .sites
             .iter()
-            .find(|(_, (shown, _))| tag.is_some() && shown.tag() == tag)
+            .find(|(_, (shown, _, shown_origin))| {
+                same_origin_tag(
+                    origin,
+                    tag.as_deref(),
+                    shown_origin.as_deref(),
+                    shown.tag().as_deref(),
+                )
+            })
             .map_or(0, |(id, _)| *id);
         let me = self.me.clone();
         let args = site_args(replaces, &title, &body, host);
+        let origin = origin.map(str::to_owned);
         bus.call(SERVER, PATH, SERVER, "Notify", &args, move |reply| {
             let Some(me) = me.upgrade() else { return };
             let Ok(mut me) = me.try_borrow_mut() else { return };
@@ -153,7 +167,7 @@ impl Notifier {
                     }
                 }
             });
-            me.sites.insert(id, (notification, tab));
+            me.sites.insert(id, (notification, tab, origin));
         });
     }
 
@@ -261,7 +275,7 @@ impl Notifier {
     fn site_signal(&mut self, id: u32, signal: &str, args: &[Arg]) {
         match (signal, args.get(1)) {
             ("ActionInvoked", Some(Arg::Str(action))) if action == "default" => {
-                if let Some((notification, tab)) = self.sites.get(&id) {
+                if let Some((notification, tab, _)) = self.sites.get(&id) {
                     later(Command::Activate(*tab));
                     notification.clicked();
                 }
@@ -269,7 +283,7 @@ impl Notifier {
             ("NotificationClosed", reason) => {
                 // Taken out first: `close` emits `closed`, whose handler
                 // would close it on the server again.
-                if let Some((notification, _)) = self.sites.remove(&id) {
+                if let Some((notification, _, _)) = self.sites.remove(&id) {
                     // Dismissed by the person (2); not expired or replaced.
                     if reason == Some(&Arg::U32(2)) {
                         notification.close();
@@ -279,6 +293,19 @@ impl Notifier {
             _ => {}
         }
     }
+}
+
+fn same_origin_tag(
+    origin: Option<&str>,
+    tag: Option<&str>,
+    shown_origin: Option<&str>,
+    shown_tag: Option<&str>,
+) -> bool {
+    matches!(
+        (origin, tag, shown_origin, shown_tag),
+        (Some(origin), Some(tag), Some(shown_origin), Some(shown_tag))
+            if origin == shown_origin && tag == shown_tag
+    )
 }
 
 /// `Notify`'s arguments for a site's notification: what the page said,
@@ -391,6 +418,28 @@ pub fn percent(received: u64, total: Option<u64>) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn site_notification_tags_are_scoped_to_the_origin() {
+        assert!(same_origin_tag(
+            Some("https://a.example"),
+            Some("message"),
+            Some("https://a.example"),
+            Some("message")
+        ));
+        assert!(!same_origin_tag(
+            Some("https://a.example"),
+            Some("message"),
+            Some("https://b.example"),
+            Some("message")
+        ));
+        assert!(!same_origin_tag(
+            None,
+            Some("message"),
+            None,
+            Some("message")
+        ));
+    }
 
     #[test]
     fn sizes_read_like_a_file_manager() {

@@ -34,7 +34,11 @@ let
     #!/bin/sh
     PATH=${lib.makeBinPath [ pkgs.util-linux ]}
     root=$(findmnt --noheadings --output SOURCE --nofsroot /) || exit 1
-    [ "$(lsblk --noheadings --nodeps --output PKNAME "$root")" = "$1" ]
+    target=$1
+    devices=$(lsblk --inverse --list --noheadings --output NAME "$root") || exit 1
+    [ -n "$devices" ] || exit 1
+    for root_disk in $devices; do :; done
+    [ "$root_disk" = "$target" ]
   '';
 in
 {
