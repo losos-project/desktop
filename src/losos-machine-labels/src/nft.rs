@@ -74,7 +74,7 @@ pub fn table() -> String {
         "    iifname @boxes meta mark set (meta mark & 0x0000ffff) | {boxes_mark}\n    iifname @unlabelled meta mark set (meta mark & 0x0000ffff) | {unlabelled_mark}\n"
     ));
     output_rules.push_str(&format!(
-        "    meta mark & 0xffff0000 == {boxes_mark} oifname @trusted accept\n    meta mark & 0xffff0000 == {boxes_mark} drop\n    meta mark & 0xffff0000 == {unlabelled_mark} oifname @unlabelled accept\n    meta mark & 0xffff0000 == {unlabelled_mark} drop\n"
+        "    meta mark & 0xffff0000 == {boxes_mark} oifname @trusted accept\n    meta mark & 0xffff0000 == {boxes_mark} drop\n    meta mark & 0xffff0000 == {unlabelled_mark} oifname @unlabelled accept\n    meta mark & 0xffff0000 == {unlabelled_mark} oifname @boxes accept\n    meta mark & 0xffff0000 == {unlabelled_mark} drop\n"
     ));
     format!(
         "table bridge {TABLE}
