@@ -360,12 +360,10 @@ impl LososBox {
 
     /// The entry for a box `losos` remembers while it is not on this
     /// network: it opens the box in `losos`, which goes through the box's
-    /// edge at `edge` when the box's own address leads nowhere, and its
-    /// action opens LosOS Cloud there, which the edge serves to anyone
-    /// signed in to LosOS Login. The admin pages stay on the box's own
-    /// network, so there is no action for them. The file is the same as
-    /// the box's entry on the network, which replaces it once the box is
-    /// found there.
+    /// edge at `edge` when the box's own address leads nowhere. LosOS Cloud
+    /// has its own entry, which the machine launcher can expose. The file is
+    /// the same as the box's entry on the network, which replaces it once the
+    /// box is found there.
     pub fn away_entry(&self, url: &str, edge: &str) -> String {
         let name = escape(self.name());
         format!(
@@ -376,12 +374,7 @@ impl LososBox {
              Comment={comment}\n\
              Keywords=LosOS;box;server;home;away;{host};\n\
              Icon=network-server\n\
-             Exec=derisk-terminal --app-id=org.losos.Boxes --title={name} losos-boxes terminal {url}\n\
-             Actions=cloud;\n\
-             \n\
-             [Desktop Action cloud]\n\
-             Name=Open LosOS Cloud\n\
-             Exec=xdg-open {edge}/cloud/\n",
+             Exec=derisk-terminal --app-id=org.losos.Boxes --title={name} losos-boxes terminal {url}\n",
             comment = escape(&format!(
                 "LosOS box {}, away from home, through {}",
                 self.host,
@@ -389,6 +382,29 @@ impl LososBox {
             )),
             host = escape(&self.host),
         )
+    }
+
+    /// A separate application entry, since the machine launcher opens an
+    /// app's `Exec` but does not expose desktop actions.
+    pub fn away_cloud_entry(&self, edge: &str) -> String {
+        let name = escape(&format!("LosOS Cloud — {}", self.name()));
+        format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name={name}\n\
+             GenericName=LosOS Cloud\n\
+             Comment={comment}\n\
+             Keywords=LosOS;Cloud;box;away;{host};\n\
+             Icon=network-server\n\
+             Exec=xdg-open {edge}/cloud/\n",
+            comment = escape(&format!("LosOS Cloud for {} through {edge}", self.host)),
+            host = escape(&self.host),
+        )
+    }
+
+    /// The separate application entry for this box's LosOS Cloud.
+    pub fn away_cloud_file_name(&self) -> String {
+        format!("{ENTRY_PREFIX}{}-cloud.desktop", self.host)
     }
 }
 
@@ -1237,9 +1253,16 @@ mod tests {
             ),
             "{entry}"
         );
+        assert!(!entry.contains("Actions="), "{entry}");
+        let cloud = found.away_cloud_entry("https://mattbox.losos.cfd");
+        assert!(cloud.contains("Name=LosOS Cloud — mattbox\n"), "{cloud}");
         assert!(
-            entry.contains("Exec=xdg-open https://mattbox.losos.cfd/cloud/\n"),
-            "{entry}"
+            cloud.contains("Exec=xdg-open https://mattbox.losos.cfd/cloud/\n"),
+            "{cloud}"
+        );
+        assert_eq!(
+            found.away_cloud_file_name(),
+            "losos-box-mattbox.local-cloud.desktop"
         );
     }
 }

@@ -365,6 +365,7 @@ fn watch(dir: &Path, opens: Opens) -> Result<()> {
                 Change::Write(found) => {
                     info!(host = %found.host, version = ?found.version, "box present");
                     present.insert(found.host.clone());
+                    remove(&dir.join(found.away_cloud_file_name()))?;
                     write_entry(dir, &found.file_name(), &found.desktop_entry(opens))
                 }
                 Change::Remove(file) => {
@@ -400,6 +401,13 @@ fn remembered(
     stop: &crossbeam_channel::Receiver<()>,
 ) {
     let mut away = BTreeSet::<String>::new();
+    // Let the watcher test exercise repeated polls without waiting a minute.
+    let every = std::env::var("LOSOS_BOXES_REMEMBER_EVERY_SECS")
+        .ok()
+        .and_then(|seconds| seconds.parse().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(REMEMBER_EVERY);
     loop {
         if keyring_unlocked() {
             match Command::new("losos")
@@ -426,8 +434,17 @@ fn remembered(
                             write_entry(dir, &found.file_name(), &found.away_entry(url, edge))
                         {
                             warn!(host = %found.host, "{e:?}");
-                        } else if away.insert(found.host.clone()) {
+                            continue;
+                        }
+                        if away.insert(found.host.clone()) {
                             info!(host = %found.host, %edge, "box away from home");
+                        }
+                        if let Err(e) = write_entry(
+                            dir,
+                            &found.away_cloud_file_name(),
+                            &found.away_cloud_entry(edge),
+                        ) {
+                            warn!(host = %found.host, "{e:?}");
                         }
                     }
                     let forgotten: Vec<String> = away
@@ -440,12 +457,19 @@ fn remembered(
                             away.remove(&host);
                         } else {
                             info!(%host, "box no longer remembered");
-                            match remove(&dir.join(format!("{ENTRY_PREFIX}{host}.desktop"))) {
-                                Ok(()) => {
-                                    away.remove(&host);
-                                }
-                                Err(e) => warn!(%host, "{e:?}"),
+                            if let Err(e) =
+                                remove(&dir.join(format!("{ENTRY_PREFIX}{host}.desktop")))
+                            {
+                                warn!(%host, "{e:?}");
+                                continue;
                             }
+                            if let Err(e) =
+                                remove(&dir.join(format!("{ENTRY_PREFIX}{host}-cloud.desktop")))
+                            {
+                                warn!(%host, "{e:?}");
+                                continue;
+                            }
+                            away.remove(&host);
                         }
                     }
                 }
@@ -458,7 +482,7 @@ fn remembered(
             }
         }
         if !matches!(
-            stop.recv_timeout(REMEMBER_EVERY),
+            stop.recv_timeout(every),
             Err(crossbeam_channel::RecvTimeoutError::Timeout)
         ) {
             return;

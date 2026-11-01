@@ -98,14 +98,16 @@ reading them.
 a minute it reads `losos hosts`, and for each box with an **away from
 home** address that is not on this network it writes the box's entry
 anyway, described as "LosOS box mattbox.local, away from home, through
-mattbox.losos.cfd". Opening it opens the box in `losos`, as at home, and
-its action, **Open LosOS Cloud**, opens LosOS Cloud at the edge address,
-which the edge serves to anyone who signs in to LosOS Login. There is no
-action for the admin pages, which a box keeps to its own network. When the
-box is found on the network again, its usual entry replaces this one. When
-`losos logout` forgets it, the entry goes. While the keyring is locked
-`watch` reads nothing, so it never asks for the keyring's password, and
-leaves the entries as they were.
+mattbox.losos.cfd". Opening it opens the box in `losos`, as at home. A
+separate **LosOS Cloud — mattbox** entry opens LosOS Cloud at the edge
+address, which the edge serves to anyone who signs in to LosOS Login. A
+separate entry makes Cloud available through the PC's machine launcher,
+which does not expose desktop actions. The admin pages stay on the box's
+own network. When the box is found on the network again, its usual entry
+replaces the away entry and the Cloud entry goes. When `losos logout`
+forgets it, both entries go. While the keyring is locked `watch` reads
+nothing, so it never asks for the keyring's password, and leaves the entries
+as they were.
 
 The palette's search inside the boxes' files ([below](#in-the-command-palette))
 goes through `losos` too, so it finds files on a box away from home the
