@@ -12,8 +12,9 @@
 # the session runs them itself.
 #
 # The host makes the machine, `boxes`, at the first boot, and starts it the
-# first time a box answers on one of its networks (`losos-boxes wake`).
-# It keeps the machine's keyring password, which the machine asks the
+# first time a box answers on one of its networks (`losos-boxes wake`), or at
+# later boots when the machine has a remembered box reachable through its
+# edge. It keeps the machine's keyring password, which the machine asks the
 # relay for at every boot, so nobody is asked for one.
 {
   config,
@@ -51,6 +52,7 @@ in
         wantedBy = [ "graphical-session.target" ];
         partOf = [ "graphical-session.target" ];
         after = [ "graphical-session.target" ];
+        path = [ pkgs.losos ];
         serviceConfig = {
           ExecStart = "${lib.getExe pkgs.losos-boxes} watch";
           ExecStopPost = "${lib.getExe pkgs.losos-boxes} clear";
@@ -91,7 +93,9 @@ in
       # address into a hosts file of HOSTS_DIR, below, so the other machines'
       # connections to a box go to it. On port 7353 it is handed its
       # keyring's password, made the first time and kept in the relay's state
-      # directory, which only the relay's user reads.
+      # directory, which only the relay's user reads. On port 7354 it reports
+      # whether it has a box reachable through its edge, so the host can start
+      # it at boot without waiting for LAN discovery.
       systemd.services.losos-boxes-relay = {
         description = "Lend the LosOS boxes machine this host's resolved";
         wantedBy = [ "multi-user.target" ];
@@ -126,14 +130,14 @@ in
         };
       };
 
-      # Starts the LosOS boxes machine the first time a box answers on one of
-      # the host's networks, browsing through the host's resolved as the
-      # machine does through the relay, and ends there: a machine its owner
-      # stops stays stopped until the next boot. Root's, as starting a
-      # machine takes libvirt's read-write socket; it reads nothing of
-      # anyone's.
+      # Starts the LosOS boxes machine on later boots if it has remembered
+      # away boxes; otherwise it waits for a box on the host's networks,
+      # browsing through the host's resolved as the machine does through the
+      # relay. A machine its owner stops stays stopped until the next boot.
+      # Root's, as starting a machine takes libvirt's read-write socket; it
+      # reads nothing of anyone's.
       systemd.services.losos-boxes-wake = {
-        description = "Start the LosOS boxes machine when a box shows up";
+        description = "Start the LosOS boxes machine when needed";
         wantedBy = [ "multi-user.target" ];
         after = [
           "losos-system-machines.service"

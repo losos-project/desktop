@@ -18,10 +18,12 @@ has no machines, so there the session does the work itself, as described
 The computer makes it at its first boot, as `boxes`, framed in green, with
 1.5 GB of memory. It does not start then. The first time a box answers on
 one of the computer's networks, `losos-boxes-wake`, a service on the host,
-starts it, and stops watching. A machine you stop after that stays stopped
-until the next boot, and you can start it in the Machines app at any time.
-If you remove it, the computer does not make it again. Make it again in the
-Machines app from the **losos-boxes** template, or with
+starts it, and stops watching. On later boots, if it remembers a box reachable
+through its edge, it starts it without waiting for LAN discovery; an unpaired
+machine still waits for a box on the network. A machine you stop after that
+stays stopped until the next boot, and you can start it in the Machines app at
+any time. If you remove it, the computer does not make it again. Make it again
+in the Machines app from the **losos-boxes** template, or with
 
 ```sh
 pm machine create boxes --image /run/current-system/sw/share/losos/machines/losos-boxes.qcow2 --label green
@@ -81,6 +83,35 @@ connection to resolved's Varlink socket only if pm recorded that machine's
 template as `losos-boxes`, and refuses any other machine. Varlink's resolve
 interface only looks things up, so the machine can browse and resolve through
 the host but cannot change anything there.
+
+## Away from home
+
+A box that reaches the internet through an
+[edge](https://losos.dasmat.us/manual/terminal/#away-from-home) tells
+`losos login` its address there, and `losos` keeps it with the box's key.
+When the box's own address leads nowhere, because the computer is on
+another network, `losos` sends its calls to that address instead. They are
+still signed and encrypted end to end, so the edge carries them without
+reading them.
+
+`losos-boxes watch` offers such a box even while mDNS cannot find it. Once
+a minute it reads `losos hosts`, and for each box with an **away from
+home** address that is not on this network it writes the box's entry
+anyway, described as "LosOS box mattbox.local, away from home, through
+mattbox.losos.cfd". Opening it opens the box in `losos`, as at home. A
+separate **LosOS Cloud — mattbox** entry opens LosOS Cloud at the edge
+address, which the edge serves to anyone who signs in to LosOS Login. A
+separate entry makes Cloud available through the PC's machine launcher,
+which does not expose desktop actions. The admin pages stay on the box's
+own network. When the box is found on the network again, its usual entry
+replaces the away entry and the Cloud entry goes. When `losos logout`
+forgets it, both entries go. While the keyring is locked `watch` reads
+nothing, so it never asks for the keyring's password, and leaves the entries
+as they were.
+
+The palette's search inside the boxes' files ([below](#in-the-command-palette))
+goes through `losos` too, so it finds files on a box away from home the
+same way.
 
 ## From the other machines
 

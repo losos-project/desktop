@@ -364,6 +364,49 @@
         status = in_guest("/run/current-system/sw/bin/resolvectl", "status", domain="boxes")
         assert "+mDNS" not in status, status
 
+    with subtest("a paired machine starts without LAN discovery, until logout"):
+        uuid = machine.succeed(f"{virsh} domuuid boxes").strip()
+        paired = f"/var/lib/losos-boxes/paired/{uuid}"
+        # Nothing is remembered yet: the machine's `losos` knows no box.
+        machine.fail(f"test -e {paired}")
+        # The machine reports a box reachable through its edge, which the
+        # host's relay writes down. The watcher's poll reports this; here the
+        # subcommand stands in for one, so no box behind an edge is needed.
+        in_guest("/run/current-system/sw/bin/losos-boxes", "paired", "yes", domain="boxes")
+        machine.wait_for_file(paired, timeout=60)
+        machine.succeed(f"stat -c %a {paired} | grep -qx 600")
+        # Stopped with the box's announcer off, it still starts: the pairing
+        # the relay kept, not the network, says to.
+        machine.succeed(f"{virsh} shutdown boxes")
+        machine.wait_until_succeeds(f"{virsh} domstate boxes | grep -qx 'shut off'", timeout=120)
+        lanbox.succeed("systemctl stop avahi-daemon.service")
+        machine.succeed("systemctl start losos-boxes-wake.service")
+        machine.wait_until_succeeds(f"{virsh} domstate boxes | grep -qx running", timeout=120)
+        machine.wait_until_succeeds(
+            f"{virsh} qemu-agent-command boxes '{{\"execute\":\"guest-ping\"}}'", timeout=900
+        )
+        machine.succeed(
+            "journalctl -u losos-boxes-wake --no-pager | grep -q 'remembered away boxes'"
+        )
+        # `losos logout`, which forgets the box, has the machine take the
+        # pairing back, and the host's note of it goes.
+        in_guest("/run/current-system/sw/bin/losos-boxes", "paired", "no", domain="boxes")
+        machine.wait_until_fails(f"test -e {paired}", timeout=60)
+        # With nothing remembered it waits for a box again.
+        machine.succeed(f"{virsh} shutdown boxes")
+        machine.wait_until_succeeds(f"{virsh} domstate boxes | grep -qx 'shut off'", timeout=120)
+        machine.succeed("systemctl start losos-boxes-wake.service")
+        machine.sleep(20)
+        assert machine.succeed(f"{virsh} domstate boxes").strip() == "shut off"
+        machine.succeed("systemctl stop losos-boxes-wake.service")
+        # A box on the network still starts it, as before.
+        lanbox.succeed("systemctl start avahi-daemon.service")
+        machine.succeed("systemctl start losos-boxes-wake.service")
+        machine.wait_until_succeeds(f"{virsh} domstate boxes | grep -qx running", timeout=120)
+        machine.wait_until_succeeds(
+            f"{virsh} qemu-agent-command boxes '{{\"execute\":\"guest-ping\"}}'", timeout=900
+        )
+
     with subtest("the LosOS boxes machine's keyring opens with the password the host keeps"):
         uuid = machine.succeed(f"{virsh} domuuid boxes").strip()
         machine.wait_until_succeeds(f"test -s /var/lib/losos-boxes/keyrings/{uuid}", timeout=300)

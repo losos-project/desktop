@@ -15,6 +15,8 @@
 //!                                     box shows up
 //!     losos-boxes keyring-password    print the keyring's password the
 //!                                     host keeps for this machine
+//!     losos-boxes paired yes|no       report to the host whether a box is
+//!                                     reachable through its edge
 //!
 //! `watch` is a user service in the LosOS boxes machine
 //! (nixos/guest/boxes.nix). It browses `_losos._tcp` and `_workstation._tcp`
@@ -34,6 +36,7 @@
 //! or TLS server name asks for, and refuses any other name.
 
 mod keyring;
+mod paired;
 mod wake;
 
 use std::collections::BTreeSet;
@@ -42,7 +45,7 @@ use std::net::{IpAddr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6, TcpListener
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::sync::RwLock;
+use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use miette::{bail, miette, IntoDiagnostic, Result, WrapErr};
@@ -96,6 +99,13 @@ fn main() -> ExitCode {
             None => Err(miette!("usage: losos-boxes wake <machine>")),
         },
         Some("keyring-password") => keyring::print(),
+        // The watcher's poll reports this itself; the subcommand lets a test
+        // report it without one (nixos/tests/machines.nix).
+        Some("paired") => match args.get(1).map(String::as_str) {
+            Some("yes") => paired::report(true),
+            Some("no") => paired::report(false),
+            _ => Err(miette!("usage: losos-boxes paired yes|no")),
+        },
         Some("route") => route(),
         Some("list") => list(),
         Some("clear") => entries_dir().and_then(|dir| clear(&dir)),
@@ -108,7 +118,7 @@ fn main() -> ExitCode {
             _ => Err(miette!("usage: losos-boxes search <text>")),
         },
         _ => Err(miette!(
-            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | search <text> | route | relay | wake <machine> | keyring-password"
+            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | search <text> | route | relay | wake <machine> | keyring-password | paired yes|no"
         )),
     };
     match result {
@@ -340,28 +350,163 @@ fn run(until: Option<Instant>, mut apply: impl FnMut(&Change) -> Result<()>) -> 
 /// Keeps one entry per box present, until resolved stops browsing, which
 /// the service restarts after. Entries from an earlier run go first: their
 /// boxes may have left while nothing watched.
+///
+/// A box `losos` remembers an edge address for gets an entry too while it
+/// is not on this network (`remembered`), so it can be reached away from
+/// home. Its entry is the same file, and the box's own replaces it as soon
+/// as the box is found here.
 fn watch(dir: &Path, opens: Opens) -> Result<()> {
     clear(dir)?;
     std::fs::create_dir_all(dir)
         .into_diagnostic()
         .wrap_err_with(|| format!("cannot create {}", dir.display()))?;
     info!(dir = %dir.display(), "watching for LosOS boxes");
-    run(None, |change| match change {
-        Change::Write(found) => {
-            info!(host = %found.host, version = ?found.version, "box present");
-            let path = dir.join(found.file_name());
-            let partial = dir.join(format!(".{}.partial", found.file_name()));
-            std::fs::write(&partial, found.desktop_entry(opens))
-                .and_then(|()| std::fs::rename(&partial, &path))
-                .into_diagnostic()
-                .wrap_err_with(|| format!("cannot write {}", path.display()))
-        }
-        Change::Remove(file) => {
-            info!(%file, "box gone");
-            remove(&dir.join(file))
-        }
+    // The hosts found on this network, which a remembered box's entry must
+    // not replace; held while either side writes, so neither overwrites
+    // the other's newer entry.
+    let present = Mutex::new(BTreeSet::<String>::new());
+    let (stop_tx, stop) = crossbeam_channel::bounded::<()>(0);
+    std::thread::scope(|scope| {
+        scope.spawn(|| remembered(dir, &present, &stop));
+        let watched = run(None, |change| {
+            let mut present = present.lock().unwrap_or_else(PoisonError::into_inner);
+            match change {
+                Change::Write(found) => {
+                    info!(host = %found.host, version = ?found.version, "box present");
+                    present.insert(found.host.clone());
+                    remove(&dir.join(found.away_cloud_file_name()))?;
+                    write_entry(dir, &found.file_name(), &found.desktop_entry(opens))
+                }
+                Change::Remove(file) => {
+                    info!(%file, "box gone");
+                    if let Some(host) = file
+                        .strip_prefix(ENTRY_PREFIX)
+                        .and_then(|f| f.strip_suffix(".desktop"))
+                    {
+                        present.remove(host);
+                    }
+                    remove(&dir.join(file))
+                }
+            }
+        });
+        drop(stop_tx);
+        watched
     })?;
     Ok(())
+}
+
+/// How often `watch` reads which boxes `losos` remembers: a sign-in or a
+/// sign-out shows within a minute.
+const REMEMBER_EVERY: Duration = Duration::from_secs(60);
+
+/// Writes an entry for each box `losos` remembers an edge address for
+/// while it is not on this network, and removes it once `losos` forgets
+/// the box, every [`REMEMBER_EVERY`] until `stop` closes. It reads nothing
+/// while the keyring is locked, so it never brings up the keyring's
+/// password window, and leaves the entries it wrote as they were.
+fn remembered(
+    dir: &Path,
+    present: &Mutex<BTreeSet<String>>,
+    stop: &crossbeam_channel::Receiver<()>,
+) {
+    let mut away = BTreeSet::<String>::new();
+    // Let the watcher test exercise repeated polls without waiting a minute.
+    let every = std::env::var("LOSOS_BOXES_REMEMBER_EVERY_SECS")
+        .ok()
+        .and_then(|seconds| seconds.parse().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(REMEMBER_EVERY);
+    loop {
+        if keyring_unlocked() {
+            match Command::new("losos")
+                .args(["--lang", "en", "hosts"])
+                .output()
+            {
+                Ok(out) if out.status.success() => {
+                    let listed = String::from_utf8_lossy(&out.stdout);
+                    let remembered: Vec<(LososBox, String, String)> =
+                        losos_boxes::remembered_boxes(&listed)
+                            .into_iter()
+                            .filter_map(|(url, edge)| Some((LososBox::at(&url)?, url, edge)))
+                            .collect();
+                    if let Err(e) = paired::report(!remembered.is_empty()) {
+                        warn!(error = ?e, "cannot update paired-box state on the host");
+                    }
+                    let present = present.lock().unwrap_or_else(PoisonError::into_inner);
+                    for (found, url, edge) in &remembered {
+                        if present.contains(&found.host) {
+                            away.remove(&found.host);
+                            continue;
+                        }
+                        if let Err(e) =
+                            write_entry(dir, &found.file_name(), &found.away_entry(url, edge))
+                        {
+                            warn!(host = %found.host, "{e:?}");
+                            continue;
+                        }
+                        if away.insert(found.host.clone()) {
+                            info!(host = %found.host, %edge, "box away from home");
+                        }
+                        if let Err(e) = write_entry(
+                            dir,
+                            &found.away_cloud_file_name(),
+                            &found.away_cloud_entry(edge),
+                        ) {
+                            warn!(host = %found.host, "{e:?}");
+                        }
+                    }
+                    let forgotten: Vec<String> = away
+                        .iter()
+                        .filter(|host| !remembered.iter().any(|(b, _, _)| &b.host == *host))
+                        .cloned()
+                        .collect();
+                    for host in forgotten {
+                        if present.contains(&host) {
+                            away.remove(&host);
+                        } else {
+                            info!(%host, "box no longer remembered");
+                            if let Err(e) =
+                                remove(&dir.join(format!("{ENTRY_PREFIX}{host}.desktop")))
+                            {
+                                warn!(%host, "{e:?}");
+                                continue;
+                            }
+                            if let Err(e) =
+                                remove(&dir.join(format!("{ENTRY_PREFIX}{host}@cloud.desktop")))
+                            {
+                                warn!(%host, "{e:?}");
+                                continue;
+                            }
+                            away.remove(&host);
+                        }
+                    }
+                }
+                Ok(out) => warn!(
+                    status = %out.status,
+                    error = %String::from_utf8_lossy(&out.stderr).trim(),
+                    "losos hosts failed; preserving away entries"
+                ),
+                Err(e) => debug!(error = %e, "cannot run losos"),
+            }
+        }
+        if !matches!(
+            stop.recv_timeout(every),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout)
+        ) {
+            return;
+        }
+    }
+}
+
+/// Writes `text` as the entry `file` in `dir`, whole or not at all.
+fn write_entry(dir: &Path, file: &str, text: &str) -> Result<()> {
+    let path = dir.join(file);
+    let partial = dir.join(format!(".{file}.partial"));
+    std::fs::write(&partial, text)
+        .and_then(|()| std::fs::rename(&partial, &path))
+        .into_diagnostic()
+        .wrap_err_with(|| format!("cannot write {}", path.display()))
 }
 
 /// Prints the boxes found within a few seconds, one per line.
@@ -544,22 +689,25 @@ fn keyring_unlocked() -> bool {
 /// address, so the other machines' connections to a box go to it. The file
 /// goes when the machine hangs up: a stopped machine routes nothing.
 ///
-/// On a third it hands the machine its keyring's password (keyring.rs).
+/// On a third it hands the machine its keyring's password (keyring.rs), and
+/// on a fourth it remembers whether the machine has away boxes (paired.rs).
 fn relay() -> Result<()> {
     let listen = |port: u32| {
         vsock::VsockListener::bind(&vsock::VsockAddr::new(vsock::VMADDR_CID_ANY, port))
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot listen on vsock port {port}"))
     };
-    let (lookups, names, keyrings) = (
+    let (lookups, names, keyrings, pairings) = (
         listen(RELAY_PORT)?,
         listen(NAMES_PORT)?,
         listen(keyring::KEYRING_PORT)?,
+        listen(paired::PAIRED_PORT)?,
     );
     info!(
         lookups = RELAY_PORT,
         names = NAMES_PORT,
         keyrings = keyring::KEYRING_PORT,
+        pairings = paired::PAIRED_PORT,
         "relaying resolved to the LosOS boxes machine"
     );
     std::thread::scope(|scope| {
@@ -567,6 +715,7 @@ fn relay() -> Result<()> {
             (&lookups, relay_one as fn(vsock::VsockStream) -> Result<()>),
             (&names, name_boxes),
             (&keyrings, keyring::serve),
+            (&pairings, paired::serve),
         ] {
             scope.spawn(move || {
                 std::thread::scope(|connections| {
