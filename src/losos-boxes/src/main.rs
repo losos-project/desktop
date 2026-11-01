@@ -15,6 +15,8 @@
 //!                                     box shows up
 //!     losos-boxes keyring-password    print the keyring's password the
 //!                                     host keeps for this machine
+//!     losos-boxes paired yes|no       report to the host whether a box is
+//!                                     reachable through its edge
 //!
 //! `watch` is a user service in the LosOS boxes machine
 //! (nixos/guest/boxes.nix). It browses `_losos._tcp` and `_workstation._tcp`
@@ -97,6 +99,13 @@ fn main() -> ExitCode {
             None => Err(miette!("usage: losos-boxes wake <machine>")),
         },
         Some("keyring-password") => keyring::print(),
+        // The watcher's poll reports this itself; the subcommand lets a test
+        // report it without one (nixos/tests/machines.nix).
+        Some("paired") => match args.get(1).map(String::as_str) {
+            Some("yes") => paired::report(true),
+            Some("no") => paired::report(false),
+            _ => Err(miette!("usage: losos-boxes paired yes|no")),
+        },
         Some("route") => route(),
         Some("list") => list(),
         Some("clear") => entries_dir().and_then(|dir| clear(&dir)),
@@ -109,7 +118,7 @@ fn main() -> ExitCode {
             _ => Err(miette!("usage: losos-boxes search <text>")),
         },
         _ => Err(miette!(
-            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | search <text> | route | relay | wake <machine> | keyring-password"
+            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | search <text> | route | relay | wake <machine> | keyring-password | paired yes|no"
         )),
     };
     match result {
