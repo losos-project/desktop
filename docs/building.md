@@ -30,6 +30,14 @@ project's [binary cache](binary-cache.md) has them. `systemd-repart` builds
 the image inside the build sandbox, with no loop device, no root and no KVM.
 Only the VM tests need KVM.
 
+> [!IMPORTANT]
+> The build user has to be able to make user namespaces: `systemd-repart`
+> runs under `unshare --map-root-user`. Ubuntu 23.10 and later refuse them
+> to unprivileged processes through AppArmor, and the image then fails to
+> build. Lift that with
+> `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, as CI
+> does, or keep it across reboots in a file under `/etc/sysctl.d/`.
+
 > [!WARNING]
 > CI builds every other check first and boots the VM tests last. A VM test
 > that fails there is a warning and a line in the run's summary, not a red

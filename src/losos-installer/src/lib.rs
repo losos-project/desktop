@@ -8,6 +8,7 @@
 //! the disks and runs the two in order. Joining a network moved to derisk,
 //! which does it the same way on the ISO and on an installed system.
 pub mod disks;
+pub mod encrypt;
 pub mod github;
 pub mod install;
 pub mod report;

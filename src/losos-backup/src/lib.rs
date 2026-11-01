@@ -1,8 +1,9 @@
 //! losos-backup: each person's backups to a LosOS box on the local network
-//! (docs/backup.md). Git repositories in the home go to the box's LosOS Git
-//! (Forgejo), each pushed to a private repository of the person's own, and
-//! everything else in the home goes to their LosOS cloud (Nextcloud) over
-//! WebDAV, only what changed since the last run.
+//! (docs/backup.md). Git repositories in the home go to the box's LosOS Git,
+//! each pushed to a private repository of the person's own, and everything
+//! else in the home goes to their LosOS cloud over WebDAV, only what
+//! changed since the last run. The person signs both in at once through
+//! LosOS Login ([`login`]).
 //!
 //! It runs on the host as the person, from a user timer, because that is
 //! where the home is and only while they are signed in is it unlocked
@@ -14,6 +15,7 @@ pub mod boxes;
 pub mod cloud;
 pub mod config;
 pub mod forge;
+pub mod login;
 pub mod run;
 pub mod walk;
 

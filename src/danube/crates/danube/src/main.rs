@@ -29,6 +29,7 @@ mod notify;
 mod permissions;
 mod shared;
 mod ui;
+mod webauthn;
 mod webkit;
 
 use std::convert::Infallible;
@@ -552,6 +553,7 @@ fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, 
             PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() }))
         });
     let (proxy, bus) = bus_proxy(&runtime_dir);
+    let keys = security_keys(&runtime_dir);
     let mut program = vec![exe.to_string_lossy().into_owned()];
     program.extend(std::env::args().skip(1));
     let session = danube_sandbox::browser::Session {
@@ -559,6 +561,7 @@ fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, 
         runtime_dir,
         wayland_display: std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into()),
         bus_proxy: bus.clone(),
+        keys: keys.clone(),
         adblock_state: ADBLOCK_STATE.into(),
         read_only: shown.into_iter().map(Path::to_path_buf).collect(),
         program,
@@ -568,10 +571,28 @@ fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, 
         let _ = proxy.kill();
         let _ = proxy.wait();
     }
-    if let Some(bus) = bus {
-        let _ = std::fs::remove_file(bus);
+    for socket in [bus, keys].into_iter().flatten() {
+        let _ = std::fs::remove_file(socket);
     }
     Ok(result?)
+}
+
+/// Listens for the sandboxed browser's security key requests, which this
+/// process asks the keys for (webauthn.rs), on a thread that ends with it.
+/// `None` when the socket cannot be made; the browser then finds no keys.
+fn security_keys(runtime_dir: &Path) -> Option<PathBuf> {
+    let socket = runtime_dir.join(format!("danube-keys-{}", std::process::id()));
+    let _ = std::fs::remove_file(&socket);
+    match UnixListener::bind(&socket) {
+        Ok(listener) => {
+            thread::spawn(move || webauthn::serve(listener));
+            Some(socket)
+        }
+        Err(error) => {
+            warn!(%error, "cannot listen for security key requests; sites will find no keys");
+            None
+        }
+    }
 }
 
 /// Starts xdg-dbus-proxy, so the browser sees only the parts of the

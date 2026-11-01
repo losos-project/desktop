@@ -16,8 +16,8 @@ first, known as a captive portal, and it loads the content blockers that
 WPE's headless platform renders each page into a buffer and hands that
 buffer over instead of putting it on screen. Danube copies the active tab's
 frame into an egui texture and draws it. The window's own interface is small:
-a progress line, a permission request's bar, a crashed page's notice and
-toasts. All of it is ordinary mcsapi code with the same components as
+a progress line, a permission request's bar, a security key's bar, a
+crashed page's notice and toasts. All of it is ordinary mcsapi code with the same components as
 derisk's apps, recoloured whenever derisk publishes a new theme to
 `$XDG_RUNTIME_DIR/derisk/theme.json`. Pointer, wheel, touch and key input over
 the page goes back to WebKit as WPE events. Typed text goes as one key press
@@ -262,6 +262,49 @@ once or remembered. Remembered answers are lines in
 `~/.config/danube/permissions`, in the form `host kind allow|deny`, which the
 person can edit or delete.
 
+## Security keys
+
+WebKit builds its own Web Authentication only for Apple's ports, so on Linux
+a page finds no `navigator.credentials` and cannot ask for a security key.
+Danube adds it in `webauthn.rs`, so a site such as Proton, GitHub or a bank
+can register a key and sign in with one:
+
+- `webauthn.js` runs in the page's own world of the top frame before the
+  page's scripts. It defines `navigator.credentials.create` and `get`,
+  `PublicKeyCredential` and its responses as the specification has them,
+  and only on a secure page, which is HTTPS or `localhost`.
+- `webauthn-bridge.js` runs in a world of Danube's own in the same frame,
+  which is the only place the message handler exists. It passes each call
+  on and the answer back. A frame inside the page has no bridge, so an
+  embedded site cannot ask in the top site's name.
+- `webauthn.rs` checks the call against the address WebKit has for the tab,
+  never against what the page says about itself. The relying party must be
+  the page's host or a domain it is under, and never a public suffix such as
+  `co.uk` or `github.io`. Then Danube builds the client data the key signs and
+  talks CTAP2, or CTAP1 for an old U2F key, to every key on USB. It uses
+  Mozilla's `authenticator` crate, the code Firefox uses.
+
+A bar over the page names the site and asks the person to touch their key.
+When the key wants its PIN, the bar has a field for it and says how many
+tries are left. Cancel stops the request, and so do closing the tab or
+leaving the page. The key's make and model reach the site only when the
+site asks for attestation; otherwise Danube removes them, as the
+specification allows. Danube has no key of its own built in and does not
+offer passkeys in autofill, so a site that asks for a platform
+authenticator is told there is none.
+
+The browser's sandbox has no `/dev` from the host. A key's device node
+appears there when the key is plugged in, and a bind made when the sandbox
+starts cannot follow it. Binding the whole of `/dev` would give the browser
+every device the person may open. So the launcher, the `danube` process
+outside the sandbox, asks the keys. The sandbox gets one socket,
+`$XDG_RUNTIME_DIR/danube-keys`, and over it the browser sends each request
+with the tab's address, and then the PIN and Cancel the person gives. The
+launcher checks the request again before any key hears of it.
+
+In a machine, the keys are the host's, which
+[losos-tokens lends to every machine](tokens.md).
+
 ## Captive portals
 
 `danube captive-watch` is a user service in every session. It reads
@@ -319,7 +362,8 @@ Danube uses two sandboxes, both built with the
     fonts, icons and derisk's settings are visible read-only where they
     exist;
   - an empty runtime directory with only the Wayland, PipeWire and
-    PulseAudio sockets and derisk's directory;
+    PulseAudio sockets, derisk's directory and the launcher's socket for
+    [security keys](#security-keys);
   - the session bus through xdg-dbus-proxy, which lets through only the
     desktop portals, notifications and the accessibility bus.
 
@@ -356,7 +400,7 @@ longer make the browser write and run machine code, which most WebKit
 exploits rely on. `javascript.jit = true` in the user's settings turns the
 JIT back on. WebKit keeps its own allocator, libpas with its Gigacage, for
 JavaScript and DOM objects. Everything else it allocates through `malloc`,
-which is hardened_malloc on a PC, as [the allocator](allocator.md)
+which is hardened_malloc wherever it runs, as [the allocator](allocator.md)
 describes. Tracking prevention, WebKit's ITP, is on, and there is no keyring
 for WebKit to save passwords in.
 
