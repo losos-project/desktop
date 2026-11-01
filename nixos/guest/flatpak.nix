@@ -61,4 +61,34 @@ in
     guestFlatpak
     move
   ];
+
+  # Lazy, as the OS's other machines are: with no app open and nothing
+  # being installed for ten minutes, it powers off and gives the host its
+  # memory back. Picking one of its apps in the palette, or installing one
+  # from the Store, starts it again. Every Flatpak app runs under bwrap; an
+  # install or update is a flatpak or losos-guest-flatpak process.
+  systemd.services.losos-flatpak-idle = {
+    description = "Power off when no Flatpak app has been open for a while";
+    wantedBy = [ "multi-user.target" ];
+    path = [
+      pkgs.procps
+      pkgs.systemd
+    ];
+    script = ''
+      idle=0
+      while :; do
+        # Names as the kernel keeps them, cut at 15 characters.
+        if pgrep '^(bwrap|flatpak|flatpak-system-|losos-guest-fla|losos-flatpak-m)$' >/dev/null; then
+          idle=0
+        else
+          idle=$((idle + 1))
+        fi
+        if [ "$idle" -ge 10 ]; then
+          echo "no app open for ten minutes: powering off"
+          exec systemctl poweroff
+        fi
+        sleep 60
+      done
+    '';
+  };
 }

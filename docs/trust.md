@@ -46,9 +46,13 @@ Everything the flake builds from, besides this repository:
   and the portal backend. The `components/mcsapi` submodule is the same
   mcsapi commit, and builds `x2mcsapi`.
 - **The LosOS terminal client**, `losos`, built from the LosOS repository at
-  `github.com/dasmatus/losos`, at the commit `nixos/pkgs/losos.nix` names. It
-  is a sparse `fetchgit` of the directories it builds from, checked by hash,
-  with its crates pinned by its `Cargo.lock` and `cargoHash`. See
+  `github.com/dasmatus/losos`, at the commit `nixos/pkgs/losos-pin.nix`
+  names. It is a sparse `fetchgit` of the directories it builds from, checked
+  by hash, with its crates pinned by its `Cargo.lock` and `cargoHash`. A
+  second sparse fetch of the same commit, the box's modules and lososd's
+  crates, is read only by `nix flake check`, to boot a box in
+  `nixos/tests/losos-box.nix`; the image and the release never do. The LosOS
+  repository's release workflow proposes each new pin as a pull request. See
   [LosOS boxes](losos-boxes.md).
 - **Home Manager**, `github.com/nix-community/home-manager`, pinned by
   revision and `narHash` in `flake.lock`. Only `nix flake check` reads it, to
@@ -62,6 +66,13 @@ Everything the flake builds from, besides this repository:
   and it runs as host root in the Android container, so it is trusted as much
   as the vendor blobs beside it. The phone's own kernel, vendor partitions and
   bootloader are the device maker's, and the GSI trusts them as Android does.
+- **Fedora's signed shim**, from `nixos/pkgs/shim-signed.nix`: shim and
+  MokManager 16.1 as Fedora's build system published them, pinned by hash,
+  and signed by Microsoft after shim-review. They are prebuilt, since
+  rebuilding them would lose Microsoft's signature, and they are the first
+  code a PC with [Secure Boot](secure-boot.md) on runs from the ESP. shim
+  also trusts Fedora's own certificate, as any machine that trusts
+  Microsoft's third-party CA already does through Fedora's shim.
 - **Flathub**, for apps installed later. Its repo file, with the signing key
   every install is checked against, is `nixos/modules/flathub.flatpakrepo` in
   this tree. The image adds the remote from that copy at boot and never

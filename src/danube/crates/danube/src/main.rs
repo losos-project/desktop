@@ -31,6 +31,7 @@ mod permissions;
 mod portal;
 mod shared;
 mod ui;
+mod webauthn;
 mod webkit;
 
 use std::convert::Infallible;
@@ -585,6 +586,7 @@ fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, 
         .map_err(|error| warn!(%error, "no instance info; the portals will not answer"))
         .ok();
     let bus = bus_proxy(&runtime_dir, &app_info);
+    let keys = security_keys(&runtime_dir);
     let mut program = vec![exe.to_string_lossy().into_owned()];
     program.extend(std::env::args().skip(1));
     let session = danube_sandbox::browser::Session {
@@ -592,6 +594,7 @@ fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, 
         runtime_dir: runtime_dir.clone(),
         wayland_display: std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".into()),
         bus_proxy: bus.clone(),
+        keys: keys.clone(),
         adblock_state: ADBLOCK_STATE.into(),
         documents: documents(&runtime_dir),
         read_only: shown.into_iter().map(Path::to_path_buf).collect(),
@@ -604,12 +607,29 @@ fn sandboxed(exe: &Path, home: &Path, shown: Option<&Path>) -> Result<ExitCode, 
         plan.consumed_fds.push(fd);
     }
     let result = danube_sandbox::run(plan);
-    // The proxy's sandbox dies with this process, which is about to end.
-    if let Some(bus) = bus {
-        let _ = std::fs::remove_file(bus);
+    for socket in [bus, keys].into_iter().flatten() {
+        let _ = std::fs::remove_file(socket);
     }
     let _ = std::fs::remove_dir_all(flatpak);
     Ok(result?)
+}
+
+/// Listens for the sandboxed browser's security key requests, which this
+/// process asks the keys for (webauthn.rs), on a thread that ends with it.
+/// `None` when the socket cannot be made; the browser then finds no keys.
+fn security_keys(runtime_dir: &Path) -> Option<PathBuf> {
+    let socket = runtime_dir.join(format!("danube-keys-{}", std::process::id()));
+    let _ = std::fs::remove_file(&socket);
+    match UnixListener::bind(&socket) {
+        Ok(listener) => {
+            thread::spawn(move || webauthn::serve(listener));
+            Some(socket)
+        }
+        Err(error) => {
+            warn!(%error, "cannot listen for security key requests; sites will find no keys");
+            None
+        }
+    }
 }
 
 /// Starts xdg-dbus-proxy in a sandbox of its own (danube-sandbox's

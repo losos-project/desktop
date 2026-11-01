@@ -4,9 +4,9 @@
 //! what derisk.rs registers. Ctrl+L asks derisk for the palette, and the
 //! window's title names the active tab. What the window still draws is
 //! drawn with mcsapi's components in the desktop's theme: a progress
-//! line while a page loads, a permission request's bar, the find bar
-//! (Ctrl+F), a crashed page's notice, the link under the pointer, and
-//! toasts.
+//! line while a page loads, a permission request's bar, a security key's
+//! bar with its PIN field, the find bar (Ctrl+F), a crashed page's notice,
+//! the link under the pointer, and toasts.
 //!
 //! The page is WebKit's last frame for the active tab, painted as a
 //! texture; input over it goes back to WebKit (input.rs).
@@ -25,7 +25,10 @@ use crate::config;
 use crate::derisk::Update;
 use crate::input;
 use crate::library::Page;
-use crate::shared::{Command, Commands, Event, ExtCommand, ExtensionInfo, PermissionAsk, Tab, TabId};
+use crate::shared::{
+    Command, Commands, Event, ExtCommand, ExtensionInfo, KeyAsk, PermissionAsk, Pin, Tab, TabId,
+};
+use crate::webauthn::Status;
 
 /// The window's short side below which it is laid out for a phone.
 const PHONE: f32 = 600.0;
@@ -56,6 +59,9 @@ pub struct Window {
     phone: Option<bool>,
     focused: bool,
     remember: bool,
+    /// What the person has typed of a security key's PIN, cleared once it
+    /// is sent and whenever the bar goes.
+    key_pin: String,
     theme: ThemeWatch,
     /// The find bar, while it is open.
     find: Option<FindBar>,
@@ -149,6 +155,8 @@ struct State {
     frames: HashMap<TabId, Arc<egui::ColorImage>>,
     hovered_link: Option<String>,
     permissions: VecDeque<PermissionAsk>,
+    /// Sites asking for a security key, oldest first.
+    keys: VecDeque<KeyAsk>,
     /// How many content blocker rule sets are in force, for the Page menu.
     filters: usize,
     /// The window's title, as last set and sent to derisk.
@@ -197,6 +205,7 @@ impl State {
                 self.tabs.retain(|t| t.id != id);
                 self.frames.remove(&id);
                 self.permissions.retain(|p| p.tab != id);
+                self.keys.retain(|k| k.tab != id);
                 if self.active == Some(id) {
                     self.active = None;
                 }
@@ -215,6 +224,20 @@ impl State {
             }
             Event::PermissionDone(id) => {
                 self.permissions.retain(|p| p.id != id);
+                return false;
+            }
+            Event::Key(ask) => {
+                self.keys.push_back(ask);
+                return false;
+            }
+            Event::KeyStatus(id, status) => {
+                if let Some(ask) = self.keys.iter_mut().find(|k| k.id == id) {
+                    ask.status = status;
+                }
+                return false;
+            }
+            Event::KeyDone(id) => {
+                self.keys.retain(|k| k.id != id);
                 return false;
             }
             Event::Filters(n) => self.filters = n,
@@ -330,6 +353,7 @@ impl Window {
             phone: None,
             focused: true,
             remember: false,
+            key_pin: String::new(),
             theme: ThemeWatch::new(),
             find: None,
         }
@@ -566,6 +590,67 @@ impl Window {
         });
     }
 
+    /// The bar for the oldest security key request: touch the key, or type
+    /// its PIN when it asks for one.
+    fn security_key(&mut self, ui: &mut egui::Ui, ask: &KeyAsk) {
+        let host = if ask.host.is_empty() {
+            "This page"
+        } else {
+            ask.host.as_str()
+        };
+        let title = format!("{host} wants you to {}", ask.op.describe());
+        let pin = match ask.status {
+            Status::Touch => {
+                ui.add(Alert::new(title).description(
+                    "Touch your security key. With more than one plugged in, touch the one you mean.",
+                ));
+                false
+            }
+            Status::Pin { retries, wrong } => {
+                let left = match retries {
+                    Some(1) => " One try is left before the key locks.".to_owned(),
+                    Some(n) => format!(" {n} tries are left."),
+                    None => String::new(),
+                };
+                let said = if wrong {
+                    format!("That PIN was wrong.{left}")
+                } else {
+                    format!("Type your security key's PIN.{left}")
+                };
+                ui.add(Alert::new(title).description(said));
+                true
+            }
+        };
+        ui.horizontal(|ui| {
+            if pin {
+                let field = ui.add(
+                    Input::new(&mut self.key_pin)
+                        .password(true)
+                        .placeholder("PIN")
+                        .width(160.0),
+                );
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                if (ui.add(Button::new("Unlock").size(ButtonSize::Sm)).clicked() || entered)
+                    && !self.key_pin.is_empty()
+                {
+                    let typed = Pin(std::mem::take(&mut self.key_pin));
+                    self.send(Command::KeyPin(ask.id, typed));
+                }
+            }
+            if ui
+                .add(
+                    Button::new("Cancel")
+                        .variant(ButtonVariant::Outline)
+                        .size(ButtonSize::Sm),
+                )
+                .clicked()
+            {
+                self.key_pin.clear();
+                self.send(Command::KeyCancel(ask.id));
+            }
+        });
+    }
+
     /// Draws the active tab's page and sends it the input over it.
     fn page(
         &mut self,
@@ -758,6 +843,10 @@ impl eframe::App for Window {
         let active = self.state.active;
         let frame = active.and_then(|id| self.state.frames.get(&id).cloned());
         let permission = self.state.permissions.front().cloned();
+        let key = self.state.keys.front().cloned();
+        if key.is_none() {
+            self.key_pin.clear();
+        }
         self.textures
             .retain(|id, _| tabs.iter().any(|t| t.id == *id));
         let tab = active
@@ -813,6 +902,11 @@ impl eframe::App for Window {
             egui::Panel::bottom("find")
                 .frame(bar)
                 .show(ui, |ui| self.find_bar(ui, t, &tokens));
+        }
+        if let Some(ask) = &key {
+            egui::Panel::top("security-key")
+                .frame(bar)
+                .show(ui, |ui| self.security_key(ui, ask));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(tokens.background))

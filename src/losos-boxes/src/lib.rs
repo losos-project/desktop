@@ -578,6 +578,144 @@ pub fn logged_in_hosts(output: &str) -> impl Iterator<Item = &str> {
         .filter(|url| url.contains("://"))
 }
 
+/// The boxes among those, from `losos --lang en hosts`: the word after a
+/// host's URL is its kind, and an edge has no files to search.
+pub fn logged_in_boxes(output: &str) -> impl Iterator<Item = &str> {
+    output
+        .lines()
+        .filter(|line| !line.starts_with(char::is_whitespace))
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            Some((words.next()?, words.next()?))
+        })
+        .filter(|(url, kind)| url.contains("://") && *kind == "box")
+        .map(|(url, _)| url)
+}
+
+/// What a box is asked for at most per search and app: the palette shows
+/// nine rows, and the desktop's own files share them.
+pub const SEARCH_LIMIT: usize = 5;
+
+/// The two searches inside a box's files that `losos-boxes search` makes:
+/// LosOS Cloud's files and LosOS Git's repositories, the paths
+/// `losos call GET` takes.
+pub fn text_paths(text: &str) -> [(&'static str, String); 2] {
+    let q = encode(text);
+    ["cloud", "git"].map(|app| (app, format!("/api/{app}/text?q={q}&limit={SEARCH_LIMIT}")))
+}
+
+/// `text` as one URL component: everything but RFC 3986's unreserved
+/// characters is percent-encoded, a byte at a time.
+pub fn encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// Each segment of a `/`-separated path encoded on its own, empty ones
+/// dropped, as the box's own palette builds its links.
+fn segments(path: &str) -> String {
+    path.split('/')
+        .filter(|part| !part.is_empty())
+        .map(encode)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The box's name in a URL `losos hosts` lists: its host without `.local`,
+/// as the desktop names the box's app.
+pub fn box_name(url: &str) -> &str {
+    let host = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let host = host.split(['/', ':']).next().unwrap_or(host);
+    host.strip_suffix(".local").unwrap_or(host)
+}
+
+/// A box's answer to one search as rows for the palette, each with the
+/// address that shows it in the box's own pages. An answer the box could
+/// not give (`available: false`, an app it does not run, a search that is
+/// off) has none, and so has one that is not JSON.
+///
+/// Each row is `{box, app, title, place, snippet, url}`: the file's name,
+/// the folder or repository it is in, the text that matched as one line,
+/// and where to open it. A cloud file opens its folder in LosOS Cloud,
+/// which knows paths and not the ids its own links use; a line in Git
+/// opens the file at that line.
+pub fn text_hits(base: &str, app: &str, answer: &Value) -> Vec<Value> {
+    let base = base.trim_end_matches('/');
+    let name = box_name(base);
+    let none = Vec::new();
+    let hits = match answer.get("available") {
+        Some(Value::Bool(false)) => &none,
+        _ => answer["hits"].as_array().unwrap_or(&none),
+    };
+    hits.iter()
+        .filter_map(|hit| {
+            let text = |key: &str| hit[key].as_str().filter(|s| !s.is_empty());
+            let path = text("path")?.trim_matches('/');
+            let (folder, file) = path.rsplit_once('/').unwrap_or(("", path));
+            let snippet = one_line(&hit["snippet"]);
+            let (place, url) = match app {
+                "cloud" => (
+                    if folder.is_empty() {
+                        "LosOS Cloud".to_owned()
+                    } else {
+                        format!("LosOS Cloud › {folder}")
+                    },
+                    format!("{base}/cloud/files/{}", segments(folder))
+                        .trim_end_matches('/')
+                        .to_owned(),
+                ),
+                "git" => {
+                    let owner = text("owner").filter(|o| is_git_name(o))?;
+                    let repo = text("repo").filter(|r| is_git_name(r))?;
+                    let branch = text("branch")?;
+                    let line = hit["line"].as_u64().filter(|l| *l >= 1)?;
+                    (
+                        format!("{owner}/{repo}"),
+                        format!(
+                            "{base}/git/{owner}/{repo}/src/branch/{}/{}#L{line}",
+                            segments(branch),
+                            segments(path)
+                        ),
+                    )
+                }
+                _ => return None,
+            };
+            Some(json!({
+                "box": name,
+                "app": app,
+                "title": file,
+                "place": place,
+                "snippet": snippet,
+                "url": url,
+            }))
+        })
+        .collect()
+}
+
+/// An owner's or a repository's name as LosOS Git allows it, which is what
+/// goes into a link unescaped.
+fn is_git_name(name: &str) -> bool {
+    name.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
+/// A box's snippet, alternating runs of plain and matched text, as one
+/// line: the runs joined, every run of whitespace one space.
+fn one_line(snippet: &Value) -> String {
+    let joined: String = snippet
+        .as_array()
+        .map(|runs| runs.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    joined.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,5 +1026,97 @@ mod tests {
             logged_in_hosts("You are not logged in to any host.\n").count(),
             0
         );
+    }
+
+    #[test]
+    fn searches_only_boxes() {
+        let output = "https://mattbox.local  box\n  host key: AAAA BBBB\n\
+                      http://edge.example  edge\n  host key: DDDD\n";
+        assert_eq!(
+            logged_in_boxes(output).collect::<Vec<_>>(),
+            ["https://mattbox.local"]
+        );
+    }
+
+    #[test]
+    fn asks_both_apps_with_the_text_encoded() {
+        assert_eq!(
+            text_paths("rent & milk/ä"),
+            [
+                (
+                    "cloud",
+                    "/api/cloud/text?q=rent%20%26%20milk%2F%C3%A4&limit=5".to_owned()
+                ),
+                (
+                    "git",
+                    "/api/git/text?q=rent%20%26%20milk%2F%C3%A4&limit=5".to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn names_the_box_after_its_host() {
+        assert_eq!(box_name("http://mattbox.local"), "mattbox");
+        assert_eq!(box_name("https://mattbox.local:8443/"), "mattbox");
+        assert_eq!(box_name("https://box.example.org"), "box.example.org");
+    }
+
+    #[test]
+    fn a_cloud_hit_opens_its_folder() {
+        let answer = json!({
+            "available": true,
+            "partial": false,
+            "hits": [
+                {"path": "Documents/Taxes 2026/budget.md", "snippet": ["the ", "rent", " is\n  due"]},
+                {"path": "todo.txt", "snippet": ["", "rent"]},
+                {"path": "", "snippet": []},
+            ],
+        });
+        let hits = text_hits("http://mattbox.local/", "cloud", &answer);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(
+            hits[0],
+            json!({
+                "box": "mattbox",
+                "app": "cloud",
+                "title": "budget.md",
+                "place": "LosOS Cloud › Documents/Taxes 2026",
+                "snippet": "the rent is due",
+                "url": "http://mattbox.local/cloud/files/Documents/Taxes%202026",
+            })
+        );
+        assert_eq!(hits[1]["place"], "LosOS Cloud");
+        assert_eq!(hits[1]["url"], "http://mattbox.local/cloud/files");
+    }
+
+    #[test]
+    fn a_git_hit_opens_the_line() {
+        let answer = json!({
+            "available": true,
+            "hits": [
+                {"owner": "notshared", "repo": "notes", "branch": "main",
+                 "path": "plans/rent.md", "line": 12, "snippet": ["pay ", "rent"]},
+                {"owner": "x\"><script>", "repo": "notes", "branch": "main",
+                 "path": "a", "line": 1, "snippet": []},
+                {"owner": "notshared", "repo": "notes", "branch": "main",
+                 "path": "a", "line": 0, "snippet": []},
+            ],
+        });
+        let hits = text_hits("http://mattbox.local", "git", &answer);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["title"], "rent.md");
+        assert_eq!(hits[0]["place"], "notshared/notes");
+        assert_eq!(
+            hits[0]["url"],
+            "http://mattbox.local/git/notshared/notes/src/branch/main/plans/rent.md#L12"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_search_has_no_hits() {
+        let off = json!({"available": false, "reason": "noGit"});
+        assert!(text_hits("http://mattbox.local", "git", &off).is_empty());
+        assert!(text_hits("http://mattbox.local", "cloud", &json!("not json")).is_empty());
     }
 }

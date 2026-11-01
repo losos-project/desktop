@@ -4,10 +4,17 @@
 //!     losos-boxes list                print the boxes found in a few seconds
 //!     losos-boxes clear               remove the entries `watch` wrote
 //!     losos-boxes terminal <url>      sign in to a box when needed, then open it
+//!     losos-boxes search <text>       find text in the files and Git of the
+//!                                     boxes `losos` is signed in to, as JSON
 //!     losos-boxes route               pass the other machines' connections
 //!                                     to a box on (the LosOS boxes machine)
 //!     losos-boxes relay               let the LosOS boxes machine use this
-//!                                     host's resolved and name its boxes
+//!                                     host's resolved, name its boxes and
+//!                                     have its keyring's password
+//!     losos-boxes wake <machine>      start the LosOS boxes machine when a
+//!                                     box shows up
+//!     losos-boxes keyring-password    print the keyring's password the
+//!                                     host keeps for this machine
 //!
 //! `watch` is a user service in the LosOS boxes machine
 //! (nixos/guest/boxes.nix). It browses `_losos._tcp` and `_workstation._tcp`
@@ -25,6 +32,9 @@
 //! answer those names with the LosOS boxes machine's address. `route` then
 //! passes each connection on ports 80 and 443 to the box its `Host` header
 //! or TLS server name asks for, and refuses any other name.
+
+mod keyring;
+mod wake;
 
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
@@ -81,6 +91,11 @@ fn main() -> ExitCode {
             Some(_) => Err(miette!("usage: losos-boxes watch [--terminal]")),
         },
         Some("relay") => relay(),
+        Some("wake") => match args.get(1) {
+            Some(machine) => wake::wake(machine),
+            None => Err(miette!("usage: losos-boxes wake <machine>")),
+        },
+        Some("keyring-password") => keyring::print(),
         Some("route") => route(),
         Some("list") => list(),
         Some("clear") => entries_dir().and_then(|dir| clear(&dir)),
@@ -88,8 +103,12 @@ fn main() -> ExitCode {
             Some(url) => return terminal(url),
             None => Err(miette!("usage: losos-boxes terminal <url>")),
         },
+        Some("search") => match &args[1..] {
+            [text] => search(text),
+            _ => Err(miette!("usage: losos-boxes search <text>")),
+        },
         _ => Err(miette!(
-            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | route | relay"
+            "usage: losos-boxes watch [--terminal] | list | clear | terminal <url> | search <text> | route | relay | wake <machine> | keyring-password"
         )),
     };
     match result {
@@ -422,6 +441,94 @@ fn run_losos(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// The most boxes one search asks: each is two calls through `losos`.
+const SEARCH_BOXES: usize = 3;
+
+/// Prints, as one JSON object `{"hits": [...]}`, what the boxes `losos` is
+/// signed in to find for `text` in LosOS Cloud's files and LosOS Git's
+/// repositories (`losos_boxes::text_hits` has a row's shape). It is how
+/// derisk's command palette searches the boxes (docs/losos-boxes.md, "In
+/// the command palette"), and it asks nothing of the person: with the
+/// keyring locked it finds nothing rather than have the keyring ask for its
+/// password, and a box that does not answer is left out.
+fn search(text: &str) -> Result<()> {
+    let hits = if keyring_unlocked() {
+        let hosts = Command::new("losos")
+            .args(["--lang", "en", "hosts"])
+            .output()
+            .into_diagnostic()
+            .wrap_err("cannot run losos")?;
+        let listed = String::from_utf8_lossy(&hosts.stdout);
+        let boxes: Vec<&str> = losos_boxes::logged_in_boxes(&listed)
+            .take(SEARCH_BOXES)
+            .collect();
+        let paths = losos_boxes::text_paths(text);
+        // Every call at once: each is a round trip to a box and a search
+        // there, and the palette is waiting.
+        std::thread::scope(|scope| {
+            let calls: Vec<_> = boxes
+                .iter()
+                .flat_map(|url| paths.iter().map(move |(app, path)| (*url, *app, path)))
+                .map(|(url, app, path)| {
+                    scope.spawn(move || {
+                        let answer = call(url, path).unwrap_or_else(|report| {
+                            debug!(%url, %path, "{report}");
+                            Value::Null
+                        });
+                        losos_boxes::text_hits(url, app, &answer)
+                    })
+                })
+                .collect();
+            calls
+                .into_iter()
+                .flat_map(|call| call.join().unwrap_or_default())
+                .collect::<Vec<_>>()
+        })
+    } else {
+        debug!("the keyring is locked: no box is searched");
+        Vec::new()
+    };
+    println!("{}", json!({ "hits": hits }));
+    Ok(())
+}
+
+/// `losos call GET <path>` on the box at `url`: its answer's body, which
+/// `losos` prints on stdout, the status going to stderr.
+fn call(url: &str, path: &str) -> Result<Value> {
+    let output = Command::new("losos")
+        .args(["--host", url, "call", "GET", path])
+        .output()
+        .into_diagnostic()
+        .wrap_err("cannot run losos")?;
+    if !output.status.success() {
+        bail!(
+            "losos call failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    serde_json::from_slice(&output.stdout)
+        .into_diagnostic()
+        .wrap_err("losos call printed no JSON")
+}
+
+/// Whether the Secret Service's default collection, where `losos` keeps its
+/// tokens, is open. `losos` asks it to unlock, which makes GNOME Keyring
+/// show a password window; a search typed into the palette must not. With
+/// no keyring, or no collection yet, nothing has been signed in to either.
+fn keyring_unlocked() -> bool {
+    Command::new("busctl")
+        .args([
+            "--user",
+            "get-property",
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets/aliases/default",
+            "org.freedesktop.Secret.Collection",
+            "Locked",
+        ])
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.trim_ascii() == b"b false")
+}
+
 /// Lets the LosOS boxes machine browse and resolve through this host's
 /// resolved, which does mDNS on every network the host is on, the LAN
 /// included: a machine behind libvirt's NAT can multicast only to the other
@@ -436,22 +543,30 @@ fn run_losos(args: &[&str]) -> Result<()> {
 /// writes them into a hosts file for libvirt's dnsmasq at that machine's
 /// address, so the other machines' connections to a box go to it. The file
 /// goes when the machine hangs up: a stopped machine routes nothing.
+///
+/// On a third it hands the machine its keyring's password (keyring.rs).
 fn relay() -> Result<()> {
     let listen = |port: u32| {
         vsock::VsockListener::bind(&vsock::VsockAddr::new(vsock::VMADDR_CID_ANY, port))
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot listen on vsock port {port}"))
     };
-    let (lookups, names) = (listen(RELAY_PORT)?, listen(NAMES_PORT)?);
+    let (lookups, names, keyrings) = (
+        listen(RELAY_PORT)?,
+        listen(NAMES_PORT)?,
+        listen(keyring::KEYRING_PORT)?,
+    );
     info!(
         lookups = RELAY_PORT,
         names = NAMES_PORT,
+        keyrings = keyring::KEYRING_PORT,
         "relaying resolved to the LosOS boxes machine"
     );
     std::thread::scope(|scope| {
         for (listener, serve) in [
             (&lookups, relay_one as fn(vsock::VsockStream) -> Result<()>),
             (&names, name_boxes),
+            (&keyrings, keyring::serve),
         ] {
             scope.spawn(move || {
                 std::thread::scope(|connections| {

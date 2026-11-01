@@ -23,6 +23,23 @@ most 200 of them.
 A window's title is never sent, only its app's ID. A title is often the name
 of a document or a page, which belongs to the person, not to the bug.
 
+## Where derisk offers it
+
+- **A window that stopped responding** gets a card over the desktop saying
+  the app isn't responding, with Report, Force Quit and Wait. Wait is the
+  default, since an app busy with something often comes back. The compositor
+  pings a window's app on each click and key into it, and the card comes
+  when the answer is five seconds late.
+- **A failed service** gets a "Report" row in the command palette, beside
+  Restart and Dismiss.
+- **An action that never finished** in Settings shows "This is taking much
+  longer than it should." under its spinner after thirty seconds, with a
+  "Report it" button.
+
+Each one opens the same report dialog. None of them appear on a system that
+does not report problems, which is how the section on
+[where reports go](#where-reports-go) ends.
+
 ## Sending one
 
 derisk runs `losos-report serve` for each report and talks to it in JSON

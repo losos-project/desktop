@@ -14,6 +14,32 @@
 let
   # Where losos-boxes reaches the host's resolved, below.
   hostResolve = "/run/losos-boxes/resolve";
+
+  # common.nix's one account, whose keyring holds what `losos` signed in to.
+  user = "user";
+
+  # What the host's command palette runs here through the guest agent to
+  # find text in the boxes' files and Git (docs/losos-boxes.md, "In the
+  # command palette"). The agent runs it as root with an empty environment,
+  # and `losos` keeps its tokens in the user's keyring, reached over the
+  # user's bus: so it runs `losos-boxes search` as the user, on that bus,
+  # with the user's PATH, where `losos` and its secret-tool are.
+  boxesSearch = pkgs.writeShellApplication {
+    name = "losos-boxes-search";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.util-linux
+    ];
+    text = ''
+      uid=$(id -u ${user})
+      exec runuser -u ${user} -- env \
+        HOME=/home/${user} \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        PATH="/etc/profiles/per-user/${user}/bin:/run/current-system/sw/bin" \
+        losos-boxes search "$@"
+    '';
+  };
 in
 {
   imports = [ ./common.nix ];
@@ -23,6 +49,7 @@ in
     # `losos-boxes list` prints what the machine sees, and the entries run
     # `losos-boxes terminal`.
     pkgs.losos-boxes
+    boxesSearch
     # `losos ci setup` puts a CI key and the box's address into a GitHub
     # repository's Actions secrets with gh, so a workflow can reach the box;
     # it signs in with `gh auth login` here, where the keys are.
@@ -98,8 +125,32 @@ in
   };
 
   # losos keeps every box's key and token in the Secret Service through
-  # secret-tool, never in a file. The keyring starts on the user's bus when
-  # asked, and its first use asks for the keyring's password in a window
-  # of this machine, through waypipe like any other.
+  # secret-tool, never in a file.
   services.gnome.gnome-keyring.enable = true;
+
+  # Nobody signs in here, so no sign-in password unlocks the keyring: the
+  # host keeps one for this machine instead (`losos-boxes keyring-password`,
+  # which asks the host's relay on vsock port 7353), and this starts the
+  # keyring with it at every boot, making the login keyring with it the
+  # first time. --replace takes over from a keyring D-Bus started first.
+  # A keyring made before this, with a password its owner chose, does not
+  # open with the host's and keeps asking for the owner's in a window of
+  # this machine; so does every keyring if the host cannot be asked, as
+  # D-Bus then starts one locked.
+  systemd.user.services.losos-boxes-keyring = {
+    description = "Unlock the keyring with the password the host keeps for this machine";
+    wantedBy = [ "default.target" ];
+    before = [ "losos-boxes.service" ];
+    script = ''
+      password=$(${pkgs.losos-boxes}/bin/losos-boxes keyring-password)
+      # Every byte read is the password, so no newline goes with it.
+      exec /run/wrappers/bin/gnome-keyring-daemon --replace --foreground \
+        --components=secrets --unlock < <(printf '%s' "$password")
+    '';
+    serviceConfig = {
+      # Until the host's relay answers, which it does from its boot.
+      Restart = "on-failure";
+      RestartSec = "5s";
+    };
+  };
 }

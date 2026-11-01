@@ -368,7 +368,14 @@ fn requests_parse_and_name_a_device() {
     );
     assert_eq!(
         serve::parse_request(r#"{"method":"install","disk":"/dev/vda"}"#),
-        Ok(Request::Install("/dev/vda".into()))
+        Ok(Request::Install("/dev/vda".into(), None))
+    );
+    assert_eq!(
+        serve::parse_request(r#"{"method":"install","disk":"/dev/vda","pin":"246813"}"#),
+        Ok(Request::Install(
+            "/dev/vda".into(),
+            Some(install::Pin("246813".into()))
+        ))
     );
     assert_eq!(
         serve::parse_request(r#"{"method":"reboot"}"#),
@@ -386,17 +393,20 @@ fn requests_parse_and_name_a_device() {
 
 #[test]
 fn steps_and_disks_as_derisk_reads_them() {
-    let steps = serve::steps_event();
+    use install::Step;
+    // Without a PIN there is nothing to encrypt, and no such step.
+    let plain = [Step::Partition, Step::Mount, Step::Download, Step::Finish];
+    let steps = serve::steps_event(&plain);
     assert_eq!(steps["event"], "steps");
-    assert_eq!(
-        steps["labels"].as_array().unwrap().len(),
-        install::Step::ALL.len()
-    );
-    let step = serve::step_event(install::Step::Download, Some(0.5));
+    assert_eq!(steps["labels"].as_array().unwrap().len(), 4);
+    let step = serve::step_event(&plain, Step::Download, Some(0.5));
     assert_eq!(step["index"], 2);
     assert_eq!(step["count"], 4);
     assert_eq!(step["fraction"], 0.5);
-    assert!(serve::step_event(install::Step::Partition, None)["fraction"].is_null());
+    assert!(serve::step_event(&plain, Step::Partition, None)["fraction"].is_null());
+    let finish = serve::step_event(&Step::ALL, Step::Finish, None);
+    assert_eq!(finish["index"], 4);
+    assert_eq!(finish["count"], 5);
 
     let disk = Disk {
         path: "/dev/vda".into(),
@@ -431,6 +441,7 @@ fn an_install_is_refused_for_a_disk_not_offered() {
         report_client_id: None,
         report_login: None,
         report_api: None,
+        encryption: None,
     };
     let input = "{\"method\":\"install\",\"disk\":\"/dev/not-a-disk\"}\nbogus\n";
     let (tx, rx) = std::sync::mpsc::channel();
@@ -486,6 +497,7 @@ fn hello_names_a_release_disk_only_when_it_holds_a_release() {
         report_client_id: None,
         report_login: None,
         report_api: None,
+        encryption: None,
     };
     assert!(serve::hello(&config).get("release").is_none());
     dir.write("release/SHA256SUMS", "");
@@ -723,6 +735,7 @@ fn quiet_config() -> serve::Config {
         report_client_id: None,
         report_login: None,
         report_api: None,
+        encryption: None,
     }
 }
 

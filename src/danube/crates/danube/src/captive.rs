@@ -50,7 +50,9 @@ fn parse(url: &str) -> Option<(String, u16, String)> {
     Some((host.to_owned(), port, path.to_owned()))
 }
 
-/// Reads an HTTP answer's status and body.
+/// Reads an HTTP answer's status and body. The body is matched line by
+/// line, so a chunked answer, which HTTP/1.1 allows, passes too: its chunk
+/// sizes sit on lines of their own.
 fn judge(response: &[u8]) -> Verdict {
     let text = String::from_utf8_lossy(response);
     let Some((head, body)) = text.split_once("\r\n\r\n") else {
@@ -61,7 +63,7 @@ fn judge(response: &[u8]) -> Verdict {
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    if status == 200 && body.trim() == EXPECT {
+    if status == 200 && body.lines().any(|line| line.trim() == EXPECT) {
         Verdict::Online
     } else {
         Verdict::Portal
@@ -83,8 +85,11 @@ pub fn check() -> Verdict {
         return Verdict::Offline;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    // HTTP/1.1: a proxy that speaks nothing older, as Envoy by default,
+    // answers HTTP/1.0 with 426 Upgrade Required, which read as a portal and
+    // opened the sign-in window at every login on such a network.
     let request = format!(
-        "GET {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: Danube\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Danube\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(request.as_bytes()).is_err() {
         return Verdict::Offline;
@@ -187,6 +192,13 @@ mod tests {
         assert_eq!(
             judge(b"HTTP/1.1 200 OK\r\n\r\n<html>Log in</html>"),
             Verdict::Portal
+        );
+        assert_eq!(
+            judge(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
+                  19\r\nNetworkManager is online\n\r\n0\r\n\r\n"
+            ),
+            Verdict::Online
         );
     }
 
