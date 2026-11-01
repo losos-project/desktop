@@ -12,6 +12,7 @@
   nftables,
   iproute2,
   libvirt,
+  util-linux,
 }:
 
 rustPlatform.buildRustPackage {
@@ -39,6 +40,7 @@ rustPlatform.buildRustPackage {
         nftables
         iproute2
         libvirt
+        util-linux
       ]
     }
   '';

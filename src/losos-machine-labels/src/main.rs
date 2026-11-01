@@ -15,14 +15,17 @@
 mod domain;
 mod nft;
 
-use std::io::{IsTerminal, Read};
-use std::process::{Command, ExitCode};
+use std::io::{IsTerminal, Read, Write};
+use std::process::{Command, ExitCode, Stdio};
 
 use miette::IntoDiagnostic;
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str =
     "usage: losos-machine-labels load|sync|hook DOMAIN OPERATION SUB-OPERATION EXTRA";
+const LOCK_FILE: &str = "/run/losos-machine-labels/lock";
+const GENERATION_FILE: &str = "/run/losos-machine-labels/generation";
+const LEASES_FILE: &str = "/var/lib/libvirt/dnsmasq/default.leases";
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -44,27 +47,33 @@ fn main() -> ExitCode {
 fn run() -> miette::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("load") => load(),
-        Some("sync") => {
-            load()?;
-            sync()
-        }
-        Some("hook") if args.len() >= 3 => {
-            hook(&args[1], &args[2]);
-            Ok(())
-        }
+        Some("load") => with_lock("locked-load", &[], &[]),
+        Some("sync") => sync(),
+        Some("hook") if args.len() >= 3 => hook(&args[2]),
+        Some("locked-load") => locked_load(),
+        Some("locked-sync") if args.len() == 3 => locked_sync(&args[1], &args[2]),
+        Some("locked-hook") if args.len() == 2 => locked_hook(&args[1]),
         _ => Err(miette::miette!(USAGE)),
     }
 }
 
 /// Replaces the table with an empty one, so every card is red until its
 /// machine is added.
-fn load() -> miette::Result<()> {
-    nft::apply(&(nft::table() + &nft::current_gateways())).into_diagnostic()
+fn locked_load() -> miette::Result<()> {
+    advance_generation()?;
+    let mut script = nft::table();
+    script.push_str(&nft::current_gateways());
+    nft::apply(&script).into_diagnostic()
 }
 
 /// Adds every running machine, as their hooks would have.
 fn sync() -> miette::Result<()> {
+    let generation = read_generation()?;
+    let leases = read_leases()?;
+    let mut ports: std::collections::BTreeMap<_, _> = nft::current_port_macs()
+        .into_diagnostic()?
+        .into_iter()
+        .collect();
     let list = Command::new("virsh")
         .args(["-r", "list", "--name"])
         .output()
@@ -81,63 +90,194 @@ fn sync() -> miette::Result<()> {
             .args(["-r", "dumpxml", name])
             .output()
             .into_diagnostic()?;
+        if !xml.status.success() {
+            return Err(miette::miette!("cannot read {name}'s definition"));
+        }
         match domain::read(&String::from_utf8_lossy(&xml.stdout)) {
-            Ok(machine) => script.push_str(&nft::started(&machine)),
+            Ok(machine) => {
+                script.push_str(&nft::started(&machine));
+                ports.extend(
+                    machine
+                        .macs
+                        .iter()
+                        .map(|(mac, port)| (port.clone(), mac.clone())),
+                );
+            }
             // Left red, which is what a machine nothing can be read of is.
             Err(e) => tracing::warn!(machine = name, "{e}"),
         }
     }
-    nft::apply(&script).into_diagnostic()
+    script.push_str(&nft::arp_owners(
+        &ports.into_iter().collect::<Vec<_>>(),
+        &nft::leases(&String::from_utf8_lossy(&leases)),
+    ));
+
+    let mut input = leases;
+    let lease_len = input.len().to_string();
+    input.extend_from_slice(script.as_bytes());
+    with_lock(
+        "locked-sync",
+        &[&generation.to_string(), &lease_len],
+        &input,
+    )
 }
 
-/// libvirt's qemu hook. It runs inside libvirtd, which waits for it, so it
-/// never asks libvirt anything, and it never fails the operation: a card
-/// it could not add stays red, which is the safe side.
-fn hook(name: &str, operation: &str) {
-    let started = match operation {
-        "started" | "reconnect" | "attach" => true,
-        "stopped" | "release" => false,
-        _ => return,
-    };
-    let mut xml = String::new();
-    if let Err(e) = std::io::stdin().read_to_string(&mut xml) {
-        tracing::warn!(machine = name, "cannot read the machine's definition: {e}");
-        return;
+/// Serializes a lifecycle update without making libvirt wait on a lock while
+/// the sync command is reading domain definitions.
+fn hook(operation: &str) -> miette::Result<()> {
+    if !matches!(
+        operation,
+        "prepare" | "started" | "reconnect" | "attach" | "stopped" | "release"
+    ) {
+        return Ok(());
     }
+    let mut xml = Vec::new();
+    std::io::stdin().read_to_end(&mut xml).into_diagnostic()?;
+    with_lock("locked-hook", &[operation], &xml)
+}
+
+/// Rejects a snapshot if any lifecycle hook or lease update made it stale.
+fn locked_sync(expected_generation: &str, lease_len: &str) -> miette::Result<()> {
+    let lease_len = lease_len
+        .parse::<usize>()
+        .map_err(|_| miette::miette!("invalid lease snapshot length"))?;
+    let mut input = Vec::new();
+    std::io::stdin().read_to_end(&mut input).into_diagnostic()?;
+    if input.len() < lease_len {
+        return Err(miette::miette!("truncated lease snapshot"));
+    }
+    let (expected_leases, script) = input.split_at(lease_len);
+    let expected_generation = expected_generation.parse::<u64>().into_diagnostic()?;
+    if read_generation()? != expected_generation || read_leases()? != expected_leases {
+        tracing::info!("discarding stale machine snapshot");
+        return Ok(());
+    }
+    advance_generation()?;
+    nft::apply(std::str::from_utf8(script).into_diagnostic()?).into_diagnostic()
+}
+
+/// Ensures every hook sees a baseline filter before it lets a machine start.
+fn locked_hook(operation: &str) -> miette::Result<()> {
+    advance_generation()?;
+    let mut xml = String::new();
+    std::io::stdin()
+        .read_to_string(&mut xml)
+        .into_diagnostic()?;
+    let baseline_missing = !nft::loaded();
+    if baseline_missing {
+        let mut baseline = nft::table();
+        baseline.push_str(&nft::current_gateways());
+        nft::apply(&baseline).into_diagnostic()?;
+    }
+    let started = matches!(operation, "started" | "reconnect" | "attach");
+    if matches!(operation, "prepare") {
+        let machine = match domain::read(&xml) {
+            Ok(machine) => machine,
+            Err(error) => {
+                tracing::warn!("{error}");
+                return Ok(());
+            }
+        };
+        nft::apply(&nft::unassign(&machine)).into_diagnostic()?;
+        let mut script = nft::mac_bindings(&machine);
+        script.push_str(&nft::arp_bindings(&machine, &hook_leases()));
+        match nft::apply(&script) {
+            Ok(()) => {}
+            Err(error) => tracing::warn!("cannot register machine ports: {error}"),
+        }
+        return Ok(());
+    }
+
     let machine = match domain::read(&xml) {
         Ok(machine) => machine,
-        Err(e) => {
-            tracing::warn!(machine = name, "{e}");
-            return;
+        Err(error) => {
+            tracing::warn!("{error}");
+            return Ok(());
         }
     };
-    let script = if started {
-        // Someone removed the table, or nftables was flushed: a machine
-        // starting puts it back rather than run unfiltered.
-        let mut script = if nft::loaded() {
-            String::new()
-        } else {
-            nft::table()
-        };
-        script.push_str(&nft::current_gateways());
+    if started {
+        nft::apply(&nft::unassign(&machine)).into_diagnostic()?;
+        let mut script = nft::current_gateways();
         script.push_str(&nft::started(&machine));
-        script
-    } else {
-        if !nft::loaded() {
-            return;
+        script.push_str(&nft::arp_bindings(&machine, &hook_leases()));
+        match nft::apply(&script) {
+            Ok(()) => tracing::info!(
+                group = machine.group.set(),
+                ports = ?machine.ports,
+                "added"
+            ),
+            Err(error) => tracing::warn!("cannot change the table: {error}"),
         }
+    } else {
         let mut script = nft::stopped(&machine);
         script.push_str(&nft::forget_gone());
-        script
-    };
-    match nft::apply(&script) {
-        Ok(()) => tracing::info!(
-            machine = name,
-            group = machine.group.set(),
-            ports = ?machine.ports,
-            "{}",
-            if started { "added" } else { "removed" }
-        ),
-        Err(e) => tracing::warn!(machine = name, "cannot change the table: {e}"),
+        match nft::apply(&script) {
+            Ok(()) => tracing::info!(
+                group = machine.group.set(),
+                ports = ?machine.ports,
+                "removed"
+            ),
+            Err(error) => tracing::warn!("cannot change the table: {error}"),
+        }
+    }
+    Ok(())
+}
+
+fn with_lock(mode: &str, arguments: &[&str], input: &[u8]) -> miette::Result<()> {
+    let executable = std::env::current_exe().into_diagnostic()?;
+    let mut child = Command::new("flock")
+        .args(["--exclusive", LOCK_FILE])
+        .arg(executable)
+        .arg(mode)
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .spawn()
+        .into_diagnostic()?;
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input)
+        .into_diagnostic()?;
+    let status = child.wait().into_diagnostic()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(miette::miette!("{mode} exited with {status}"))
+    }
+}
+
+fn read_generation() -> miette::Result<u64> {
+    match std::fs::read_to_string(GENERATION_FILE) {
+        Ok(generation) => generation.parse().into_diagnostic(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error).into_diagnostic(),
+    }
+}
+
+fn advance_generation() -> miette::Result<()> {
+    let generation = read_generation()?
+        .checked_add(1)
+        .ok_or_else(|| miette::miette!("machine generation counter overflow"))?;
+    let temporary = format!("{GENERATION_FILE}.tmp");
+    std::fs::write(&temporary, generation.to_string()).into_diagnostic()?;
+    std::fs::rename(temporary, GENERATION_FILE).into_diagnostic()
+}
+
+fn read_leases() -> miette::Result<Vec<u8>> {
+    match std::fs::read(LEASES_FILE) {
+        Ok(leases) => Ok(leases),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error).into_diagnostic(),
+    }
+}
+
+fn hook_leases() -> Vec<(String, std::net::Ipv4Addr)> {
+    match read_leases() {
+        Ok(leases) => nft::leases(&String::from_utf8_lossy(&leases)),
+        Err(error) => {
+            tracing::warn!("cannot read DHCP leases: {error}");
+            Vec::new()
+        }
     }
 }

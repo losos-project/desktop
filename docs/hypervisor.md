@@ -144,6 +144,11 @@ the machine's definition on stdin. It reads the label pm wrote into the
 machine's `<metadata>`, or the LosOS boxes template, and puts the
 machine's ports into that label's set.
 
+ARP is accepted only when the sender MAC and IPv4 address match the port's
+current libvirt DHCP lease. Lease changes refresh those bindings. The policy
+also carries a guest's label through host routing, so sending a peer's address
+via `192.168.122.1` does not bypass the bridge's label checks.
+
 The table fails closed. A port no hook has named, such as a card added to a
 running machine, is treated as red, and so is a label pm does not know. A
 machine started while the table was missing puts it back. `systemctl reload

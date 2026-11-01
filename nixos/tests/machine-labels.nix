@@ -30,15 +30,18 @@ in
   # neither changed.
   node.pkgsReadOnly = false;
 
-  nodes.internet = {
-    networking.firewall.enable = false;
-    networking.interfaces.eth1.ipv4.addresses = [
-      {
-        address = internetAddress;
-        prefixLength = 32;
-      }
-    ];
-  };
+  nodes.internet =
+    { pkgs, ... }:
+    {
+      networking.firewall.enable = false;
+      environment.systemPackages = [ pkgs.python3 ];
+      networking.interfaces.eth1.ipv4.addresses = [
+        {
+          address = internetAddress;
+          prefixLength = 32;
+        }
+      ];
+    };
 
   nodes.machine =
     { nodes, pkgs, ... }:
@@ -75,6 +78,7 @@ in
       environment.systemPackages = [
         pkgs.dnsutils
         pkgs.curl
+        pkgs.python3
         pkgs.losos-machine-labels
         # One lease on eth0, and nothing done with it.
         (pkgs.writeShellScriptBin "dhcp-once" ''
@@ -96,7 +100,7 @@ in
       lan = nodes.internet.networking.primaryIPAddress;
     in
     ''
-      def definition(label=None, template=None, port="vnet0"):
+      def definition(label=None, template=None, port="vnet0", mac=None):
           inside = ""
           if label:
               inside += f"<pm:label>{label}</pm:label>"
@@ -108,29 +112,56 @@ in
           ) if inside else ""
           return (
               f"<domain type='qemu'><name>m</name><metadata>{metadata}</metadata>"
-              f"<devices><interface type='network'><source network='default' bridge='virbr0'/>"
+              f"<devices><interface type='network'><mac address='{mac or mac_for(label or port)}'/>"
+              f"<source network='default' bridge='virbr0'/>"
               f"<target dev='{port}'/></interface></devices></domain>"
           )
+
+      macs = {
+          "red": "52:54:00:00:00:01",
+          "blue": "52:54:00:00:00:02",
+          "blue2": "52:54:00:00:00:03",
+          "green": "52:54:00:00:00:04",
+          "boxes": "52:54:00:00:00:05",
+          "unknown": "52:54:00:00:00:06",
+      }
+
+      def mac_for(name):
+          return macs.get(name, "52:54:00:00:00:ff")
 
       def hook(name, operation, xml):
           machine.succeed(f"echo \"{xml}\" | losos-machine-labels hook {name} {operation} begin -")
 
       # A stand-in machine: a namespace whose card's host end is `port`,
-      # on virbr0, at 192.168.122.<n>.
-      def stand_in(name, port, n, dhcp=False):
+      # on virbr0, using the lease dnsmasq gives its MAC.
+      def stand_in(name, port, mac):
           machine.succeed(
               f"ip netns add {name}",
               f"ip link add {port} type veth peer name eth0 netns {name}",
               f"ip link set {port} master virbr0 up",
               f"ip -n {name} link set lo up",
+              f"ip -n {name} link set eth0 address {mac}",
               f"ip -n {name} link set eth0 up",
+              f"ip netns exec {name} dhcp-once",
           )
-          if dhcp:
-              machine.succeed(f"ip netns exec {name} dhcp-once")
+          machine.wait_until_succeeds(
+              f"test -n \"$(awk -v mac='{mac}' 'tolower($2) == tolower(mac) {{print $3}}' "
+              "/var/lib/libvirt/dnsmasq/default.leases)\"",
+              timeout=30,
+          )
+          address = machine.succeed(
+              f"awk -v mac='{mac}' 'tolower($2) == tolower(mac) {{print $3}}' "
+              "/var/lib/libvirt/dnsmasq/default.leases"
+          ).strip()
+          machine.wait_until_succeeds(
+              f"nft list map bridge losos-machine-labels arp4 | grep -q '\"{port}\" : {address}'",
+              timeout=30,
+          )
           machine.succeed(
-              f"ip -n {name} addr add 192.168.122.{n}/24 dev eth0",
+              f"ip -n {name} addr add {address}/24 dev eth0",
               f"ip -n {name} route add default via 192.168.122.1",
           )
+          return address
 
       def reaches(name, address):
           machine.succeed(f"ip netns exec {name} ping -c1 -W3 {address}")
@@ -154,7 +185,7 @@ in
 
       with subtest("a red machine gets DHCP, DNS and the internet, and nothing else"):
           hook("red", "started", definition("red", port="lab-red"))
-          stand_in("red", "lab-red", 11, dhcp=True)
+          red_ip = stand_in("red", "lab-red", macs["red"])
           for tcp in ["", "+tcp"]:
               answer = machine.succeed(f"ip netns exec red dig {tcp} +short +tries=1 +time=3 @192.168.122.1 known.test")
               assert answer.strip() == "192.168.122.50", answer
@@ -162,48 +193,91 @@ in
           not_reaches("red", "${lan}")
           not_reaches("red", "192.168.122.1")
           machine.fail("ip netns exec red curl -sf --max-time 3 http://192.168.122.1:8000/")
+          internet.succeed(
+              "python3 -c 'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); "
+              f"s.bind((\"${lan}\",67)); s.settimeout(3); open(\"/tmp/udp67.ready\",\"w\").close(); "
+              "s.recvfrom(1024); open(\"/tmp/udp67.received\",\"w\").close()' >/dev/null 2>&1 &"
+          )
+          internet.wait_until_succeeds("test -e /tmp/udp67.ready")
+          machine.succeed(
+              f"ip netns exec red python3 -c 'import socket; "
+              f"socket.socket(socket.AF_INET,socket.SOCK_DGRAM).sendto(b\"probe\",(\"${lan}\",67))'"
+          )
+          internet.succeed("sleep 1")
+          internet.fail("test -e /tmp/udp67.received")
 
       with subtest("a blue machine reaches the host, the LAN and the internet"):
           hook("blue", "started", definition("blue", port="lab-blue"))
-          stand_in("blue", "lab-blue", 12)
+          blue_ip = stand_in("blue", "lab-blue", macs["blue"])
           reaches("blue", "192.168.122.1")
           reaches("blue", "${lan}")
           reaches("blue", "${internetAddress}")
           machine.succeed("ip netns exec blue curl -sf --max-time 3 http://192.168.122.1:8000/")
 
-      hook("blue2", "started", definition("blue", port="lab-blue2"))
-      stand_in("blue2", "lab-blue2", 13)
+      hook("blue2", "started", definition("blue", port="lab-blue2", mac=macs["blue2"]))
+      blue2_ip = stand_in("blue2", "lab-blue2", macs["blue2"])
       hook("green", "started", definition("green", port="lab-green"))
-      stand_in("green", "lab-green", 14)
-      hook("boxes", "started", definition("green", template="losos-boxes", port="lab-boxes"))
-      stand_in("boxes", "lab-boxes", 15)
-      stand_in("unknown", "lab-unknown", 16)
+      green_ip = stand_in("green", "lab-green", macs["green"])
+      hook(
+          "boxes",
+          "started",
+          definition("green", template="losos-boxes", port="lab-boxes", mac=macs["boxes"]),
+      )
+      boxes_ip = stand_in("boxes", "lab-boxes", macs["boxes"])
+      hook("unknown", "prepare", definition(port="lab-unknown", mac=macs["unknown"]))
+      unknown_ip = stand_in("unknown", "lab-unknown", macs["unknown"])
 
       with subtest("machines reach their own label's and the boxes machine, and no other"):
-          reaches("blue", "192.168.122.13")
-          reaches("blue2", "192.168.122.12")
-          not_reaches("blue", "192.168.122.14")
-          not_reaches("green", "192.168.122.12")
-          reaches("blue", "192.168.122.15")
-          reaches("green", "192.168.122.15")
-          reaches("boxes", "192.168.122.12")
+          reaches("blue", blue2_ip)
+          reaches("blue2", blue_ip)
+          not_reaches("blue", green_ip)
+          not_reaches("green", blue_ip)
+          reaches("blue", boxes_ip)
+          reaches("green", boxes_ip)
+          reaches("boxes", blue_ip)
 
       with subtest("red reaches no machine, and no machine reaches red"):
-          not_reaches("red", "192.168.122.12")
-          not_reaches("red", "192.168.122.15")
-          not_reaches("blue", "192.168.122.11")
-          not_reaches("boxes", "192.168.122.11")
+          not_reaches("red", blue_ip)
+          not_reaches("red", boxes_ip)
+          not_reaches("blue", red_ip)
+          not_reaches("boxes", red_ip)
+
+      with subtest("a red guest cannot claim another guest's ARP address"):
+          blue_mac = macs["blue"].replace(":", "")
+          forged = (
+              "import socket,struct; "
+              "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0)); "
+              f"src=bytes.fromhex('{macs['red'].replace(':', '')}'); "
+              f"sha=bytes.fromhex('{macs['red'].replace(':', '')}'); "
+              f"spa=socket.inet_aton('{blue_ip}'); "
+              "tha=b'\\x00'*6; tpa=socket.inet_aton('192.168.122.1'); "
+              "s.send(b'\\xff'*6+src+b'\\x08\\x06'+"
+              "struct.pack('!HHBBH',1,0x0800,6,4,1)+sha+spa+tha+tpa)"
+          )
+          machine.succeed(f"ip netns exec red python3 -c \"{forged}\"")
+          machine.wait_until_succeeds(
+              f"ip neigh show to {blue_ip} dev virbr0 | grep -i {blue_mac}",
+              timeout=5,
+          )
+
+      with subtest("trusted peer traffic routed through the gateway stays isolated"):
+          machine.succeed(f"ip -n blue route add {green_ip}/32 via 192.168.122.1")
+          not_reaches("blue", green_ip)
+          machine.succeed(f"ip -n blue route add {red_ip}/32 via 192.168.122.1")
+          not_reaches("blue", red_ip)
+          machine.succeed(f"ip -n blue route del {green_ip}/32")
+          machine.succeed(f"ip -n blue route del {red_ip}/32")
 
       with subtest("a card no hook named is red"):
           reaches("unknown", "${internetAddress}")
           not_reaches("unknown", "${lan}")
-          not_reaches("unknown", "192.168.122.12")
-          not_reaches("blue", "192.168.122.16")
+          not_reaches("unknown", blue_ip)
+          not_reaches("blue", unknown_ip)
 
       with subtest("a machine that stops leaves its label"):
           hook("blue2", "release", definition("blue", port="lab-blue2"))
           machine.fail("nft list set bridge losos-machine-labels blue | grep -q lab-blue2")
-          not_reaches("blue", "192.168.122.13")
+          not_reaches("blue", blue2_ip)
 
       with subtest("libvirt runs the hook for a real machine"):
           machine.succeed(

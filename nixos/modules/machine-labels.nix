@@ -35,15 +35,46 @@
   # back every running machine's ports.
   systemd.services.losos-machine-labels = {
     description = "Keep libvirt's machines apart by their label";
-    wantedBy = [ "libvirtd.service" ];
+    requiredBy = [ "libvirtd.service" ];
     before = [ "libvirtd.service" ];
     after = [ "nftables.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
+      # Hooks and sync share a private lock directory unavailable to sessions.
+      RuntimeDirectory = "losos-machine-labels";
+      RuntimeDirectoryMode = "0700";
+      RuntimeDirectoryPreserve = true;
       ExecStart = "${pkgs.losos-machine-labels}/bin/losos-machine-labels load";
       ExecReload = "${pkgs.losos-machine-labels}/bin/losos-machine-labels sync";
       # No ExecStop: a table taken away would leave every machine unfiltered.
+    };
+  };
+
+  systemd.paths.losos-machine-labels-leases = {
+    wantedBy = [ "multi-user.target" ];
+    after = [ "libvirtd.service" ];
+    pathConfig = {
+      PathChanged = "/var/lib/libvirt/dnsmasq/default.leases";
+      PathExists = "/var/lib/libvirt/dnsmasq/default.leases";
+      Unit = "losos-machine-labels-leases.service";
+    };
+  };
+
+  systemd.services.losos-machine-labels-leases = {
+    description = "Bind guest ARP addresses to their libvirt ports";
+    requires = [
+      "libvirt-defaults.service"
+      "losos-machine-labels.service"
+    ];
+    after = [
+      "libvirt-defaults.service"
+      "losos-machine-labels.service"
+      "libvirtd.service"
+    ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "${pkgs.losos-machine-labels}/bin/losos-machine-labels sync";
     };
   };
 }

@@ -54,6 +54,8 @@ pub struct Machine {
     pub group: Group,
     /// The host's ends of its cards, `vnet3` and the like.
     pub ports: Vec<String>,
+    /// Each card's guest MAC and the host's end of its port.
+    pub macs: Vec<(String, String)>,
 }
 
 /// Why a domain's XML could not be read.
@@ -87,15 +89,33 @@ pub fn read(xml: &str) -> Result<Machine, Error> {
         _ if child("label").is_some() => Group::Untrusted,
         _ => Group::Unlabelled,
     };
-    let ports = doc
+    let interfaces: Vec<_> = doc
         .descendants()
         .filter(|n| n.has_tag_name("interface"))
-        .filter_map(|n| n.children().find(|c| c.has_tag_name("target")))
-        .filter_map(|t| t.attribute("dev"))
-        .filter(|dev| is_port(dev))
-        .map(str::to_owned)
+        .filter_map(|interface| {
+            let port = interface
+                .children()
+                .find(|child| child.has_tag_name("target"))?
+                .attribute("dev")?;
+            is_port(port).then_some((interface, port))
+        })
         .collect();
-    Ok(Machine { group, ports })
+    let ports = interfaces
+        .iter()
+        .map(|(_, port)| (*port).to_owned())
+        .collect();
+    let macs = interfaces
+        .into_iter()
+        .filter_map(|(interface, port)| {
+            let mac = interface
+                .children()
+                .find(|child| child.has_tag_name("mac"))?
+                .attribute("address")?
+                .to_ascii_lowercase();
+            is_mac(&mac).then_some((mac, port.to_owned()))
+        })
+        .collect();
+    Ok(Machine { group, ports, macs })
 }
 
 /// Whether `name` can be a network interface's name, and so goes into an
@@ -106,6 +126,14 @@ pub fn is_port(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+pub fn is_mac(address: &str) -> bool {
+    let parts: Vec<_> = address.split(':').collect();
+    parts.len() == 6
+        && parts
+            .iter()
+            .all(|part| part.len() == 2 && part.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 #[cfg(test)]
@@ -133,6 +161,7 @@ mod tests {
             Machine {
                 group: Group::Label("blue"),
                 ports: vec!["vnet3".into(), "vnet4".into()],
+                macs: vec![("52:54:00:12:34:56".into(), "vnet3".into())],
             }
         );
     }
@@ -185,5 +214,12 @@ mod tests {
         assert!(is_port("vnet12"));
         assert!(!is_port("a-very-long-name0"));
         assert!(!is_port("\"vnet\""));
+    }
+
+    #[test]
+    fn mac_addresses_are_checked_before_they_enter_nft() {
+        assert!(is_mac("52:54:00:12:34:56"));
+        assert!(!is_mac("52:54:00:12:34:zz"));
+        assert!(!is_mac("52:54:00:12:34"));
     }
 }
