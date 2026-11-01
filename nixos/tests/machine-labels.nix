@@ -124,6 +124,7 @@ in
           "green": "52:54:00:00:00:04",
           "boxes": "52:54:00:00:00:05",
           "unknown": "52:54:00:00:00:06",
+          "untouched": "52:54:00:00:00:07",
       }
 
       def mac_for(name):
@@ -243,7 +244,7 @@ in
           not_reaches("boxes", red_ip)
 
       with subtest("a red guest cannot claim another guest's ARP address"):
-          blue_mac = macs["blue"].replace(":", "")
+          blue_mac = macs["blue"]
           forged = (
               "import socket,struct; "
               "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0)); "
@@ -260,6 +261,55 @@ in
               timeout=5,
           )
 
+      with subtest("a red guest cannot learn another guest's MAC with IP traffic"):
+          forged = (
+              "import socket,struct; "
+              "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0)); "
+              f"src=bytes.fromhex('{macs['blue'].replace(':', '')}'); "
+              "dst=b'\\xff'*6; "
+              "ip=struct.pack('!BBHHHBBH4s4s',0x45,0,28,0,0,64,17,0,"
+              "socket.inet_aton('192.168.122.20'),socket.inet_aton('203.0.113.1')); "
+              "udp=struct.pack('!HHHH',12345,9,8,0); "
+              "s.send(dst+src+b'\\x08\\x00'+ip+udp)"
+          )
+          machine.succeed(f"ip netns exec red python3 -c \"{forged}\"")
+          machine.wait_until_succeeds(
+              f"bridge fdb get {blue_mac} br virbr0 | grep -q 'dev lab-blue'",
+              timeout=5,
+          )
+
+      with subtest("a red guest cannot poison the IPv6 neighbor cache"):
+          target = "2001:db8::2"
+          machine.succeed(
+              f"ip -6 neigh replace {target} lladdr {macs['blue']} nud reachable dev virbr0"
+          )
+          forged = (
+              "import socket,struct\n"
+              "src=socket.inet_pton(socket.AF_INET6,'fe80::5054:ff:fe00:1')\n"
+              f"target=socket.inet_pton(socket.AF_INET6,'{target}')\n"
+              "dst=socket.inet_pton(socket.AF_INET6,'ff02::1')\n"
+              "payload=struct.pack('!BBHI',136,0,0,0x20000000)+target+"
+              "b'\\x02\\x01'+bytes.fromhex('"
+              f"{macs['red'].replace(':', '')}"
+              "')\n"
+              "pseudo=src+dst+struct.pack('!I3xB',len(payload),58)\n"
+              "data=pseudo+payload\n"
+              "if len(data)%2: data+=b'\\x00'\n"
+              "words=struct.unpack('!%dH'%(len(data)//2),data)\n"
+              "total=sum(words)\n"
+              "while total>>16: total=(total&0xffff)+(total>>16)\n"
+              "checksum=(~total)&0xffff\n"
+              "icmp=payload[:2]+struct.pack('!H',checksum)+payload[4:]\n"
+              "ip=struct.pack('!IHBB',6<<28,len(icmp),58,255)+src+dst\n"
+              "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0))\n"
+              "s.send(bytes.fromhex('333300000001"
+              f"{macs['red'].replace(':', '')}"
+              "86dd')+ip+icmp)"
+          )
+          machine.succeed(f"ip netns exec red python3 -c \"{forged}\"")
+          machine.succeed("sleep 1")
+          machine.succeed(f"ip -6 neigh show to {target} dev virbr0 | grep -qi {macs['blue']}")
+
       with subtest("trusted peer traffic routed through the gateway stays isolated"):
           machine.succeed(f"ip -n blue route add {green_ip}/32 via 192.168.122.1")
           not_reaches("blue", green_ip)
@@ -273,6 +323,21 @@ in
           not_reaches("unknown", "${lan}")
           not_reaches("unknown", blue_ip)
           not_reaches("blue", unknown_ip)
+
+      with subtest("a port without a hook binding stays blocked"):
+          machine.succeed(
+              "ip netns add untouched",
+              "ip link add lab-untouched type veth peer name eth0 netns untouched",
+              "ip link set lab-untouched master virbr0 up",
+              "ip -n untouched link set lo up",
+              f"ip -n untouched link set eth0 address {macs['untouched']}",
+              "ip -n untouched link set eth0 up",
+          )
+          machine.fail("ip netns exec untouched dhcp-once")
+          machine.fail(
+              f"awk -v mac='{macs['untouched']}' 'tolower($2) == tolower(mac)' "
+              "/var/lib/libvirt/dnsmasq/default.leases | grep -q ."
+          )
 
       with subtest("a machine that stops leaves its label"):
           hook("blue2", "release", definition("blue", port="lab-blue2"))

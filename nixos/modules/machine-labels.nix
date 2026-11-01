@@ -56,13 +56,13 @@
     after = [ "libvirtd.service" ];
     pathConfig = {
       PathChanged = "/var/lib/libvirt/dnsmasq/default.leases";
-      PathExists = "/var/lib/libvirt/dnsmasq/default.leases";
       Unit = "losos-machine-labels-leases.service";
     };
   };
 
   systemd.services.losos-machine-labels-leases = {
     description = "Bind guest ARP addresses to their libvirt ports";
+    wantedBy = [ "multi-user.target" ];
     requires = [
       "libvirt-defaults.service"
       "losos-machine-labels.service"
@@ -74,7 +74,7 @@
     ];
     serviceConfig = {
       Type = "oneshot";
-      ExecStart = "${pkgs.losos-machine-labels}/bin/losos-machine-labels sync";
+      ExecStart = "${pkgs.losos-machine-labels}/bin/losos-machine-labels refresh-arp";
     };
   };
 }

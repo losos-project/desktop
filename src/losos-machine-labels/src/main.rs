@@ -9,7 +9,8 @@
 //! pm's metadata, on stdin.
 //!
 //!     losos-machine-labels load      # load the table, its sets empty
-//!     losos-machine-labels sync      # load it, then add every running machine
+//!     losos-machine-labels sync      # rebuild it from running machines
+//!     losos-machine-labels refresh-arp # refresh registered ports' DHCP addresses
 //!     losos-machine-labels hook DOMAIN OPERATION ...   # libvirt's qemu hook
 
 mod domain;
@@ -22,7 +23,7 @@ use miette::IntoDiagnostic;
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str =
-    "usage: losos-machine-labels load|sync|hook DOMAIN OPERATION SUB-OPERATION EXTRA";
+    "usage: losos-machine-labels load|sync|refresh-arp|hook DOMAIN OPERATION SUB-OPERATION EXTRA";
 const LOCK_FILE: &str = "/run/losos-machine-labels/lock";
 const GENERATION_FILE: &str = "/run/losos-machine-labels/generation";
 const LEASES_FILE: &str = "/var/lib/libvirt/dnsmasq/default.leases";
@@ -49,9 +50,11 @@ fn run() -> miette::Result<()> {
     match args.first().map(String::as_str) {
         Some("load") => with_lock("locked-load", &[], &[]),
         Some("sync") => sync(),
+        Some("refresh-arp") => refresh_arp(),
         Some("hook") if args.len() >= 3 => hook(&args[2]),
         Some("locked-load") => locked_load(),
         Some("locked-sync") if args.len() == 3 => locked_sync(&args[1], &args[2]),
+        Some("locked-arp") if args.len() == 1 => locked_arp(),
         Some("locked-hook") if args.len() == 2 => locked_hook(&args[1]),
         _ => Err(miette::miette!(USAGE)),
     }
@@ -66,14 +69,10 @@ fn locked_load() -> miette::Result<()> {
     nft::apply(&script).into_diagnostic()
 }
 
-/// Adds every running machine, as their hooks would have.
+/// Rebuilds the table from the running machines, as their hooks would have.
 fn sync() -> miette::Result<()> {
     let generation = read_generation()?;
     let leases = read_leases()?;
-    let mut ports: std::collections::BTreeMap<_, _> = nft::current_port_macs()
-        .into_diagnostic()?
-        .into_iter()
-        .collect();
     let list = Command::new("virsh")
         .args(["-r", "list", "--name"])
         .output()
@@ -81,7 +80,9 @@ fn sync() -> miette::Result<()> {
     if !list.status.success() {
         return Err(miette::miette!("cannot list libvirt's machines"));
     }
-    let mut script = String::new();
+    let mut script = nft::table();
+    script.push_str(&nft::current_gateways());
+    let mut ports = std::collections::BTreeMap::new();
     for name in String::from_utf8_lossy(&list.stdout)
         .lines()
         .filter(|l| !l.is_empty())
@@ -95,7 +96,7 @@ fn sync() -> miette::Result<()> {
         }
         match domain::read(&String::from_utf8_lossy(&xml.stdout)) {
             Ok(machine) => {
-                script.push_str(&nft::started(&machine));
+                script.push_str(&nft::register(&machine));
                 ports.extend(
                     machine
                         .macs
@@ -120,6 +121,12 @@ fn sync() -> miette::Result<()> {
         &[&generation.to_string(), &lease_len],
         &input,
     )
+}
+
+/// Refreshes DHCP address bindings without deriving labels from live XML.
+fn refresh_arp() -> miette::Result<()> {
+    let leases = read_leases()?;
+    with_lock("locked-arp", &[], &leases)
 }
 
 /// Serializes a lifecycle update without making libvirt wait on a lock while
@@ -154,6 +161,25 @@ fn locked_sync(expected_generation: &str, lease_len: &str) -> miette::Result<()>
     }
     advance_generation()?;
     nft::apply(std::str::from_utf8(script).into_diagnostic()?).into_diagnostic()
+}
+
+/// Updates only the IPv4 ownership map for ports already registered by hooks
+/// or a full reload.
+fn locked_arp() -> miette::Result<()> {
+    let mut leases = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut leases)
+        .into_diagnostic()?;
+    if read_leases()? != leases {
+        tracing::info!("discarding stale DHCP lease snapshot");
+        return Ok(());
+    }
+    advance_generation()?;
+    let script = nft::arp_owners(
+        &nft::current_port_macs().into_diagnostic()?,
+        &nft::leases(&String::from_utf8_lossy(&leases)),
+    );
+    nft::apply(&script).into_diagnostic()
 }
 
 /// Ensures every hook sees a baseline filter before it lets a machine start.

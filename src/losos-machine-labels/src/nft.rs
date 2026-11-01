@@ -9,8 +9,7 @@
 //!
 //! Every rule fails closed. A card no hook has named yet, from a machine
 //! started before the table was loaded or one plugged into a running
-//! machine, is red until its machine next starts; the forward chain drops
-//! what no label lets through.
+//! machine, is blocked until its MAC is registered by the next hook.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -25,7 +24,7 @@ pub const TABLE: &str = "losos-machine-labels";
 pub const BRIDGE: &str = "virbr0";
 
 /// The sets beside the labels'.
-const OTHER_SETS: [&str; 3] = ["unlabelled", "boxes", "trusted"];
+const OTHER_SETS: [&str; 4] = ["unlabelled", "boxes", "trusted", "mac_bound"];
 
 /// Where a red machine may not send: everything that is not the internet.
 /// The host's addresses, the LAN, the other machines on any network and
@@ -92,6 +91,9 @@ map arp4 {{ type ifname : ipv4_addr; }}
   chain prerouting {{
     type filter hook prerouting priority filter; policy accept;
     meta ibrname != \"{BRIDGE}\" accept
+    iifname != @mac_bound drop
+    iifname map @macs != ether saddr drop
+    icmpv6 type nd-neighbor-advert drop
 {marks}    iifname map @macs == ether saddr iifname map @macs == arp saddr ether iifname map @arp4 == arp saddr ip accept
     iifname map @macs == ether saddr iifname map @macs == arp saddr ether arp saddr ip 0.0.0.0 accept
     ether type arp drop
@@ -100,7 +102,7 @@ map arp4 {{ type ifname : ipv4_addr; }}
     udp sport 68 udp dport 67 ip daddr 255.255.255.255 accept
     ip daddr @gateway4 udp dport 53 accept
     ip daddr @gateway4 tcp dport 53 accept
-    icmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} accept
+    icmpv6 type {{ nd-router-solicit, nd-neighbor-solicit }} accept
     ip6 daddr @gateway6 udp dport 53 accept
     ip6 daddr @gateway6 tcp dport 53 accept
     ip daddr {{ {PRIVATE4} }} drop
@@ -124,12 +126,12 @@ map arp4 {{ type ifname : ipv4_addr; }}
   chain output {{
     type filter hook output priority filter; policy accept;
     meta obrname != \"{BRIDGE}\" accept
-    oifname @red udp sport 67 udp dport 68 accept
+{output_rules}    oifname @red udp sport 67 udp dport 68 accept
     oifname @red ip saddr @gateway4 udp sport 53 accept
     oifname @red ip saddr @gateway4 tcp sport 53 accept
     oifname @red ip6 saddr @gateway6 udp sport 53 accept
     oifname @red ip6 saddr @gateway6 tcp sport 53 accept
-{output_rules}  }}
+  }}
 }}
 "
     )
@@ -155,7 +157,13 @@ fn forget(script: &mut String, ports: &[String]) {
 /// The changes for `machine` having started.
 pub fn started(machine: &Machine) -> String {
     let mut script = unassign(machine);
-    script.push_str(&mac_bindings(machine));
+    script.push_str(&register(machine));
+    script
+}
+
+/// Adds a machine to an empty table, as during a full reload.
+pub fn register(machine: &Machine) -> String {
+    let mut script = mac_bindings(machine);
     for port in &machine.ports {
         script.push_str(&format!(
             "add element bridge {TABLE} {} {{ \"{port}\" }}\n",
@@ -174,6 +182,9 @@ pub fn started(machine: &Machine) -> String {
 pub fn mac_bindings(machine: &Machine) -> String {
     let mut script = String::new();
     for (mac, port) in &machine.macs {
+        script.push_str(&format!(
+            "add element bridge {TABLE} mac_bound {{ \"{port}\" }}\n"
+        ));
         script.push_str(&format!(
             "add element bridge {TABLE} macs {{ \"{port}\" : {mac} }}\n"
         ));
@@ -431,6 +442,33 @@ mod tests {
     }
 
     #[test]
+    fn ownership_and_label_checks_precede_protocol_allowances() {
+        let table = table();
+        let source_mac = table.find("iifname map @macs != ether saddr drop").unwrap();
+        let arp = table.find("iifname map @macs == arp saddr ether").unwrap();
+        let advertisement = table.find("icmpv6 type nd-neighbor-advert drop").unwrap();
+        let discovery = table
+            .find("icmpv6 type { nd-router-solicit, nd-neighbor-solicit } accept")
+            .unwrap();
+        assert!(table.find("iifname != @mac_bound drop").unwrap() < source_mac);
+        assert!(source_mac < arp);
+        assert!(advertisement < table.find("iifname @trusted accept").unwrap());
+        assert!(advertisement < discovery);
+
+        let blue_drop = table
+            .find("meta mark & 0xffff0000 == 0x4c060000 drop")
+            .unwrap();
+        let red_dhcp = table
+            .find("oifname @red udp sport 67 udp dport 68 accept")
+            .unwrap();
+        let red_dns = table
+            .find("oifname @red ip saddr @gateway4 udp sport 53 accept")
+            .unwrap();
+        assert!(blue_drop < red_dhcp);
+        assert!(blue_drop < red_dns);
+    }
+
+    #[test]
     fn a_red_machine_is_not_trusted() {
         let red = Machine {
             group: Group::Untrusted,
@@ -441,6 +479,7 @@ mod tests {
         assert!(script.contains("add element bridge losos-machine-labels red { \"vnet1\" }"));
         assert!(!script.contains("add element bridge losos-machine-labels trusted"));
         assert!(script.contains("macs { \"vnet1\" : 52:54:00:00:00:01 }"));
+        assert!(script.contains("mac_bound { \"vnet1\" }"));
         // Whatever the port was in before goes first.
         assert!(script.find("destroy element").unwrap() < script.find("add element").unwrap());
 

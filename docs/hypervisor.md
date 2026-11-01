@@ -144,15 +144,19 @@ the machine's definition on stdin. It reads the label pm wrote into the
 machine's `<metadata>`, or the LosOS boxes template, and puts the
 machine's ports into that label's set.
 
-ARP is accepted only when the sender MAC and IPv4 address match the port's
-current libvirt DHCP lease. Lease changes refresh those bindings. The policy
-also carries a guest's label through host routing, so sending a peer's address
-via `192.168.122.1` does not bypass the bridge's label checks.
+Every frame must use the MAC registered for its port before the bridge can
+learn its source address. ARP is accepted only when the sender MAC and IPv4
+address match the port's current libvirt DHCP lease. Lease changes refresh
+those bindings without changing labels. Guest IPv6 neighbor advertisements are
+dropped until the network has an authoritative per-port IPv6 address binding.
+The policy also carries a guest's label through host routing, so sending a
+peer's address via `192.168.122.1` does not bypass the bridge's label checks.
 
 The table fails closed. A port no hook has named, such as a card added to a
-running machine, is treated as red, and so is a label pm does not know. A
-machine started while the table was missing puts it back. `systemctl reload
-losos-machine-labels` loads it afresh and adds every running machine again.
+running machine, has no registered MAC and is blocked until a hook registers
+it. A label pm does not know is treated as red. A machine started while the
+table was missing puts it back. `systemctl reload losos-machine-labels` builds
+a fresh table from the running machines.
 A label changed while a machine runs applies from its next start, since
 libvirt runs no hook for a change of metadata.
 
