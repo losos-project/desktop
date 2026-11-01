@@ -114,6 +114,7 @@ in
     description = "Offer the LosOS boxes on the host's networks as applications";
     wantedBy = [ "default.target" ];
     environment.LOSOS_BOXES_RESOLVE = hostResolve;
+    path = [ pkgs.losos ];
     serviceConfig = {
       ExecStart = "${pkgs.losos-boxes}/bin/losos-boxes watch --terminal";
       ExecStopPost = "${pkgs.losos-boxes}/bin/losos-boxes clear";

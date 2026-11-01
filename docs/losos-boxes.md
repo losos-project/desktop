@@ -18,10 +18,12 @@ has no machines, so there the session does the work itself, as described
 The computer makes it at its first boot, as `boxes`, framed in green, with
 1.5 GB of memory. It does not start then. The first time a box answers on
 one of the computer's networks, `losos-boxes-wake`, a service on the host,
-starts it, and stops watching. A machine you stop after that stays stopped
-until the next boot, and you can start it in the Machines app at any time.
-If you remove it, the computer does not make it again. Make it again in the
-Machines app from the **losos-boxes** template, or with
+starts it, and stops watching. On later boots, if it remembers a box reachable
+through its edge, it starts it without waiting for LAN discovery; an unpaired
+machine still waits for a box on the network. A machine you stop after that
+stays stopped until the next boot, and you can start it in the Machines app at
+any time. If you remove it, the computer does not make it again. Make it again
+in the Machines app from the **losos-boxes** template, or with
 
 ```sh
 pm machine create boxes --image /run/current-system/sw/share/losos/machines/losos-boxes.qcow2 --label green

@@ -34,6 +34,7 @@
 //! or TLS server name asks for, and refuses any other name.
 
 mod keyring;
+mod paired;
 mod wake;
 
 use std::collections::BTreeSet;
@@ -405,13 +406,16 @@ fn remembered(
                 .args(["--lang", "en", "hosts"])
                 .output()
             {
-                Ok(out) => {
+                Ok(out) if out.status.success() => {
                     let listed = String::from_utf8_lossy(&out.stdout);
                     let remembered: Vec<(LososBox, String, String)> =
                         losos_boxes::remembered_boxes(&listed)
                             .into_iter()
                             .filter_map(|(url, edge)| Some((LososBox::at(&url)?, url, edge)))
                             .collect();
+                    if let Err(e) = paired::report(!remembered.is_empty()) {
+                        warn!(error = ?e, "cannot update paired-box state on the host");
+                    }
                     let present = present.lock().unwrap_or_else(PoisonError::into_inner);
                     for (found, url, edge) in &remembered {
                         if present.contains(&found.host) {
@@ -432,13 +436,24 @@ fn remembered(
                         .cloned()
                         .collect();
                     for host in forgotten {
-                        away.remove(&host);
-                        if !present.contains(&host) {
+                        if present.contains(&host) {
+                            away.remove(&host);
+                        } else {
                             info!(%host, "box no longer remembered");
-                            let _ = remove(&dir.join(format!("{ENTRY_PREFIX}{host}.desktop")));
+                            match remove(&dir.join(format!("{ENTRY_PREFIX}{host}.desktop"))) {
+                                Ok(()) => {
+                                    away.remove(&host);
+                                }
+                                Err(e) => warn!(%host, "{e:?}"),
+                            }
                         }
                     }
                 }
+                Ok(out) => warn!(
+                    status = %out.status,
+                    error = %String::from_utf8_lossy(&out.stderr).trim(),
+                    "losos hosts failed; preserving away entries"
+                ),
                 Err(e) => debug!(error = %e, "cannot run losos"),
             }
         }
@@ -641,22 +656,25 @@ fn keyring_unlocked() -> bool {
 /// address, so the other machines' connections to a box go to it. The file
 /// goes when the machine hangs up: a stopped machine routes nothing.
 ///
-/// On a third it hands the machine its keyring's password (keyring.rs).
+/// On a third it hands the machine its keyring's password (keyring.rs), and
+/// on a fourth it remembers whether the machine has away boxes (paired.rs).
 fn relay() -> Result<()> {
     let listen = |port: u32| {
         vsock::VsockListener::bind(&vsock::VsockAddr::new(vsock::VMADDR_CID_ANY, port))
             .into_diagnostic()
             .wrap_err_with(|| format!("cannot listen on vsock port {port}"))
     };
-    let (lookups, names, keyrings) = (
+    let (lookups, names, keyrings, pairings) = (
         listen(RELAY_PORT)?,
         listen(NAMES_PORT)?,
         listen(keyring::KEYRING_PORT)?,
+        listen(paired::PAIRED_PORT)?,
     );
     info!(
         lookups = RELAY_PORT,
         names = NAMES_PORT,
         keyrings = keyring::KEYRING_PORT,
+        pairings = paired::PAIRED_PORT,
         "relaying resolved to the LosOS boxes machine"
     );
     std::thread::scope(|scope| {
@@ -664,6 +682,7 @@ fn relay() -> Result<()> {
             (&lookups, relay_one as fn(vsock::VsockStream) -> Result<()>),
             (&names, name_boxes),
             (&keyrings, keyring::serve),
+            (&pairings, paired::serve),
         ] {
             scope.spawn(move || {
                 std::thread::scope(|connections| {
