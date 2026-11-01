@@ -145,7 +145,7 @@ in
         print(entry)
         assert "\nComment=LosOS box box.local, away from home, through box.losos.cfd\n" in entry
         assert "losos-boxes terminal http://box.local\n" in entry
-        cloud = f"{apps}/losos-box-box.local-cloud.desktop"
+        cloud = f"{apps}/losos-box-box.local@cloud.desktop"
         desktop.wait_for_file(cloud, timeout=60)
         assert "Exec=xdg-open https://box.losos.cfd/cloud/" in desktop.succeed(
             f"cat {cloud}"
@@ -153,7 +153,7 @@ in
         listed = desktop.succeed(
             f"LOSOS_GUEST_APPLICATIONS={apps} losos-guest-run-test --list"
         )
-        assert "losos-box-box.local-cloud\tLosOS Cloud — box\n" in listed
+        assert "losos-box-box.local@cloud\tLosOS Cloud — box\n" in listed
 
         with subtest("a locked keyring preserves away entries"):
             desktop.succeed(

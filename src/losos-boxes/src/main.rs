@@ -473,7 +473,7 @@ fn remembered(
                                 continue;
                             }
                             if let Err(e) =
-                                remove(&dir.join(format!("{ENTRY_PREFIX}{host}-cloud.desktop")))
+                                remove(&dir.join(format!("{ENTRY_PREFIX}{host}@cloud.desktop")))
                             {
                                 warn!(%host, "{e:?}");
                                 continue;

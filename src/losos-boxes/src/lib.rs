@@ -402,9 +402,11 @@ impl LososBox {
         )
     }
 
-    /// The separate application entry for this box's LosOS Cloud.
+    /// The separate application entry for this box's LosOS Cloud. `@` is
+    /// not in any host [`LososBox::new`] takes, so no other box's entry can
+    /// have this name: `box-cloud`'s is `losos-box-box-cloud.desktop`.
     pub fn away_cloud_file_name(&self) -> String {
-        format!("{ENTRY_PREFIX}{}-cloud.desktop", self.host)
+        format!("{ENTRY_PREFIX}{}@cloud.desktop", self.host)
     }
 }
 
@@ -1262,7 +1264,11 @@ mod tests {
         );
         assert_eq!(
             found.away_cloud_file_name(),
-            "losos-box-mattbox.local-cloud.desktop"
+            "losos-box-mattbox.local@cloud.desktop"
         );
+        // A box named like another's Cloud entry keeps its own launcher.
+        let named_cloud = LososBox::at("http://mattbox.local-cloud").unwrap();
+        assert_ne!(named_cloud.file_name(), found.away_cloud_file_name());
+        assert!(LososBox::at("http://mattbox.local@cloud").is_none());
     }
 }
