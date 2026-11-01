@@ -36,7 +36,7 @@
 
 let
   addresses = import ./schizo-addresses.nix;
-  inherit (addresses) inside uplink;
+  inherit (addresses) inside uplink edge;
   libvirt = config.virtualisation.libvirtd.package;
   flag = "/var/lib/losos/schizo";
   name = "losos-tor-gateway";
@@ -189,12 +189,17 @@ let
   '';
   nmConf = "/run/NetworkManager/conf.d/90-losos-schizo.conf";
 
-  # The ad blocker's forwarder asks only these servers while the file is
-  # there (losos-adblock's serve.rs). Without it, resolved asks the gateway
-  # itself on its bridge, and its other links' servers are past the kill
-  # switch.
+  # The ad blocker's forwarder asks these servers while the file is there,
+  # and only these, without its encrypted DNS, while `forced` is there too
+  # (losos-adblock's serve.rs): DNS over TLS or HTTPS to one resolver would
+  # leave through the TransPort as one stream, without the DNSPort's
+  # isolation or its .onion names. Both on tmpfs, so a restart clears them
+  # with the person's own encrypted DNS setting untouched. Without the ad
+  # blocker, resolved asks the gateway itself on its bridge, and its other
+  # links' servers are past the kill switch.
   adblock = config.losos.adblock.enable;
   upstreams = "/run/losos-adblock/upstreams";
+  forced = "/run/losos-adblock/upstreams-forced";
 
   # Port 53 on the gateway's address is redirected to Tor's DNSPort there.
   dnsOn =
@@ -202,6 +207,7 @@ let
       ''
         mkdir -p "$(dirname ${upstreams})"
         echo "nameserver ${inside.gateway}" > ${upstreams}
+        touch ${forced}
         systemctl try-restart losos-adblock.service
       ''
     else
@@ -214,7 +220,7 @@ let
   dnsOff =
     if adblock then
       ''
-        rm -f ${upstreams}
+        rm -f ${upstreams} ${forced}
         systemctl try-restart losos-adblock.service
       ''
     else
@@ -270,6 +276,11 @@ let
             fi
           fi
           echo "tor=$tor"
+          # Set: connections leave Tor through the edge (losos-edge-chain
+          # in the gateway), and nowhere while it cannot be reached.
+          edge=none
+          [ -e ${edge.hostDir}/${edge.file} ] && edge=set
+          echo "edge=$edge"
           ;;
         *)
           echo "usage: losos-schizo [on|off|status]" >&2
@@ -400,6 +411,16 @@ in
       memory = 384;
       # Tor's guards and what it knows of the network: a few MiB.
       stateSize = "256M";
+      # The edge to leave Tor through, which whoever chose it writes here
+      # (docs/schizo-mode.md, "Through an edge"): read-only in the gateway,
+      # and the one directory of the host's it sees besides the store.
+      extraDevices = ''
+        <filesystem type='mount' accessmode='squash'>
+          <source dir='${edge.hostDir}'/>
+          <target dir='${edge.share}'/>
+          <readonly/>
+        </filesystem>
+      '';
       interfaces = [
         {
           network = uplink.bridge;
@@ -411,6 +432,8 @@ in
         }
       ];
     };
+    # Only root's: the file holds the edge's credentials.
+    systemd.tmpfiles.rules = [ "d ${edge.hostDir} 0700 root root -" ];
     systemd.services."losos-service-machine-${name}" = lib.recursiveUpdate partOf {
       requires = [ "losos-schizo-network.service" ];
       after = [ "losos-schizo-network.service" ];

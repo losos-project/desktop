@@ -25,23 +25,6 @@
 let
   base = config.boot.kernelPackages.nvidiaPackages.production;
 
-  # nixpkgs' open module for that driver, for its source and patches only:
-  # from the stock kernel's package set, since the kernel below is built
-  # from them and cannot depend on its own package set.
-  open = pkgs.linuxPackages.nvidiaPackages.production.open;
-
-  # What nixpkgs' nvidia-open passes NVIDIA's makefile, with the kernel's
-  # build tree in place of its dev output, which has no signing key.
-  # O= comes from the kernel's own makeFlags.
-  nvidiaFlags = lib.concatStringsSep " " [
-    "\"\${makeFlags[@]}\""
-    "IGNORE_PREEMPT_RT_PRESENCE=1"
-    "SYSSRC=\"$buildRoot/..\""
-    "SYSOUT=\"$buildRoot\""
-    "DATE="
-    "TARGET_ARCH=${pkgs.stdenv.hostPlatform.parsed.cpu.name}"
-  ];
-
   vramDir = "/run/nvidia-suspend";
 
   # The userspace half, less what nothing in a desktop session loads. Every
@@ -106,9 +89,11 @@ let
   };
 in
 {
-  # The module is built inside a kernel that signs it, and that kernel is
-  # kernel-hardening.nix's. base.nix imports it too; a module imported twice
-  # by path counts once.
+  # The kernel refuses a module without a signature it can check
+  # (kernel-hardening.nix). nixpkgs' nvidia-open signs its modules as it
+  # builds them, each with a certificate of its own, and the kernel image
+  # this OS boots carries every installed module's certificate, so NVIDIA's
+  # loads like the kernel's own.
   imports = [ ./kernel-hardening.nix ];
 
   # The only unfree package in the image. NVIDIA's licence lets it be
@@ -120,45 +105,14 @@ in
       "nvidia-x11"
     ];
 
-  # NVIDIA's open module is built inside the kernel's own build rather than
-  # as nixpkgs' nvidia-open package. The kernel refuses unsigned modules
-  # (kernel-hardening.nix), and the key that signs them exists only while
-  # the kernel builds, so a module built anywhere else could never load.
-  # There it is compiled against the kernel's build tree and installed with
-  # the kernel's own modules_install, which signs and compresses it like
-  # every other module. The source and patches are nixpkgs' nvidia-open's,
-  # for the same driver version as the userspace below.
-  boot.kernelPackages = pkgs.linuxPackages.extend (
-    final: prev: {
-      kernel = prev.kernel.overrideAttrs (old: {
-        postBuild = (old.postBuild or "") + ''
-          cp -r ${open.src} "$NIX_BUILD_TOP/nvidia-open"
-          chmod -R u+w "$NIX_BUILD_TOP/nvidia-open"
-          for p in ${lib.escapeShellArgs open.patches}; do
-            patch -d "$NIX_BUILD_TOP/nvidia-open" -p1 < "$p"
-          done
-          make -C "$NIX_BUILD_TOP/nvidia-open" -j"$NIX_BUILD_CORES" modules ${nvidiaFlags}
-        '';
-        postInstall = (old.postInstall or "") + ''
-          # INSTALL_MOD_PATH, not MODLIB: the kernel derives MODLIB from it,
-          # and depmod.sh gets its -b root only from INSTALL_MOD_PATH, so
-          # with MODLIB alone depmod searched the build's /lib/modules.
-          make -C "$NIX_BUILD_TOP/nvidia-open" modules_install ${nvidiaFlags} \
-            INSTALL_MOD_PATH="$modules" \
-            INSTALL_MOD_STRIP=1
-          # modules_install signs an out-of-tree module with `|| true`, so a
-          # failed signature would pass unnoticed until the module failed to
-          # load. Every one must carry the marker sign-file appends.
-          kos=$(find "$modules" -name 'nvidia*.ko*')
-          test -n "$kos"
-          for ko in $kos; do
-            xz -dc "$ko" | tail -c 28 | grep -q '~Module signature appended~' \
-              || { echo "$ko is not signed" >&2; exit 1; }
-          done
-        '';
-      });
-    }
-  );
+  # NVIDIA's open module, for the same driver version as the userspace below.
+  #
+  # It used to be compiled inside the kernel's own build, when the kernel
+  # signed its modules with a key it generated and threw away, so nothing
+  # built afterwards could be signed. nixpkgs' kernel signs with kmodigest
+  # now, which any module build can run, so the module is nixpkgs' package
+  # again.
+  boot.extraModulePackages = [ base.open ];
 
   boot.extraModprobeConfig = ''
     # KMS, and a framebuffer console on it, which the compositor's GBM scanout
