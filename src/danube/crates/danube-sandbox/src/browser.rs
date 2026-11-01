@@ -104,6 +104,10 @@ fn s(path: &Path) -> String {
 /// The browser's sandbox for `session`. Danube's own directories are
 /// created first, so they can be bound.
 pub fn plan(session: &Session) -> Plan {
+    plan_with_gpu(session, gpu_draws(Path::new("/dev/dri")))
+}
+
+fn plan_with_gpu(session: &Session, gpu_can_draw: bool) -> Plan {
     let home = &session.home;
     let run = &session.runtime_dir;
     let mut plan = Plan {
@@ -143,7 +147,7 @@ pub fn plan(session: &Session) -> Plan {
     ] {
         bind(&mut plan, Path::new(path), Access::Read, true);
     }
-    if gpu_draws(Path::new("/dev/dri")) {
+    if gpu_can_draw {
         bind(&mut plan, Path::new("/dev/dri"), Access::Device, true);
     } else {
         info!("the GPU cannot draw; pages render in software");
@@ -246,6 +250,10 @@ pub fn plan(session: &Session) -> Plan {
 /// pages over in shared memory, which works anywhere. A render node of any
 /// other kind, or a machine with only primary nodes, keeps the GPU.
 fn gpu_draws(dri: &Path) -> bool {
+    gpu_draws_with(dri, virtio_3d_features)
+}
+
+fn gpu_draws_with(dri: &Path, mut probe: impl FnMut(&Path) -> Option<libc::c_int>) -> bool {
     let Ok(entries) = std::fs::read_dir(dri) else {
         return true;
     };
@@ -253,7 +261,7 @@ fn gpu_draws(dri: &Path) -> bool {
         .filter_map(Result::ok)
         .filter(|e| e.file_name().to_string_lossy().starts_with("renderD"))
         .peekable();
-    nodes.peek().is_none() || nodes.any(|e| !virtio_without_3d(&e.path()))
+    nodes.peek().is_none() || nodes.any(|e| !matches!(probe(&e.path()), Some(0)))
 }
 
 /// The kernel's `struct drm_version`.
@@ -283,8 +291,8 @@ const fn drm_iowr(nr: libc::c_ulong, size: usize) -> libc::c_ulong {
     (3 << 30) | ((size as libc::c_ulong) << 16) | ((b'd' as libc::c_ulong) << 8) | nr
 }
 
-/// Whether `node` is virtio-gpu's render node on a host that gives it no 3D.
-fn virtio_without_3d(node: &Path) -> bool {
+/// Virtio-gpu's 3D features, or `None` if the node is not a working virtio-gpu node.
+fn virtio_3d_features(node: &Path) -> Option<libc::c_int> {
     const DRM_IOCTL_VERSION: libc::c_ulong = drm_iowr(0x00, size_of::<DrmVersion>());
     // DRM_COMMAND_BASE + DRM_VIRTGPU_GETPARAM.
     const DRM_IOCTL_VIRTGPU_GETPARAM: libc::c_ulong =
@@ -292,7 +300,7 @@ fn virtio_without_3d(node: &Path) -> bool {
     const VIRTGPU_PARAM_3D_FEATURES: u64 = 1;
 
     let Ok(file) = OpenOptions::new().read(true).write(true).open(node) else {
-        return false;
+        return None;
     };
     let mut name = [0u8; 16];
     let mut version = DrmVersion {
@@ -309,10 +317,10 @@ fn virtio_without_3d(node: &Path) -> bool {
     // SAFETY: the kernel writes at most name_len bytes into `name` and
     // nothing into the empty date and description.
     if unsafe { libc::ioctl(file.as_raw_fd(), DRM_IOCTL_VERSION, &mut version) } != 0 {
-        return false;
+        return None;
     }
     if name.get(..version.name_len) != Some(b"virtio_gpu".as_slice()) {
-        return false;
+        return None;
     }
     let mut features: libc::c_int = 0;
     let mut param = VirtgpuGetparam {
@@ -320,24 +328,94 @@ fn virtio_without_3d(node: &Path) -> bool {
         value: &mut features as *mut libc::c_int as u64,
     };
     // SAFETY: the kernel writes one int to `features`.
-    let ok = unsafe { libc::ioctl(file.as_raw_fd(), DRM_IOCTL_VIRTGPU_GETPARAM, &mut param) } == 0;
-    ok && features == 0
+    (unsafe { libc::ioctl(file.as_raw_fd(), DRM_IOCTL_VIRTGPU_GETPARAM, &mut param) } == 0)
+        .then_some(features)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn session(root: &Path) -> Session {
+        Session {
+            home: root.join("home"),
+            runtime_dir: root.join("run"),
+            wayland_display: "wayland-0".into(),
+            bus_proxy: None,
+            keys: None,
+            adblock_state: "/var/lib/losos-adblock".into(),
+            read_only: vec![],
+            program: vec!["/bin/danube".into()],
+        }
+    }
+
+    fn has_dri_bind(plan: &Plan) -> bool {
+        plan.ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::Bind {
+                    src,
+                    dest,
+                    dev: true,
+                    ..
+                } if src == "/dev/dri" && dest == "/dev/dri"
+            )
+        })
+    }
+
     #[test]
-    fn a_gpu_is_kept_unless_known_not_to_draw() {
+    fn virtio_gpu_without_3d_uses_software_and_omits_dri_bind() {
+        let root = std::env::temp_dir().join(format!("danube-no-3d-{}", std::process::id()));
+        let dri = root.join("dri");
+        std::fs::create_dir_all(&dri).unwrap();
+        std::fs::write(dri.join("renderD128"), "").unwrap();
+
+        let gpu_can_draw = gpu_draws_with(&dri, |_| Some(0));
+        assert!(!gpu_can_draw);
+        assert!(!has_dri_bind(&plan_with_gpu(&session(&root), gpu_can_draw)));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn virtio_gpu_with_3d_is_kept() {
+        let dir = std::env::temp_dir().join(format!("danube-3d-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("renderD128"), "").unwrap();
+
+        assert!(gpu_draws_with(&dir, |_| Some(1)));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_drawable_render_node_keeps_a_mixed_gpu_setup() {
+        let dir = std::env::temp_dir().join(format!("danube-mixed-gpu-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("renderD128"), "").unwrap();
+        std::fs::write(dir.join("renderD129"), "").unwrap();
+
+        assert!(gpu_draws_with(&dir, |node| {
+            match node.file_name().unwrap().to_str().unwrap() {
+                "renderD128" => Some(0),
+                "renderD129" => None,
+                _ => unreachable!(),
+            }
+        }));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_gpu_is_kept_when_no_render_node_is_known_not_to_draw() {
         let dir = std::env::temp_dir().join(format!("danube-dri-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // No render node: primary nodes or none, Mesa manages either way.
-        assert!(gpu_draws(&dir));
+        assert!(gpu_draws_with(&dir, |_| Some(0)));
         // A render node that answers no DRM ioctl is not virtio-gpu.
         std::fs::write(dir.join("renderD128"), "").unwrap();
-        assert!(gpu_draws(&dir));
-        assert!(gpu_draws(&dir.join("missing")));
+        assert!(gpu_draws_with(&dir, |_| None));
+        assert!(gpu_draws_with(&dir.join("missing"), |_| Some(0)));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
