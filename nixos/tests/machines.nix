@@ -382,6 +382,9 @@
         lanbox.succeed("systemctl stop avahi-daemon.service")
         machine.succeed("systemctl start losos-boxes-wake.service")
         machine.wait_until_succeeds(f"{virsh} domstate boxes | grep -qx running", timeout=120)
+        machine.wait_until_succeeds(
+            f"{virsh} qemu-agent-command boxes '{{\"execute\":\"guest-ping\"}}'", timeout=900
+        )
         machine.succeed(
             "journalctl -u losos-boxes-wake --no-pager | grep -q 'remembered away boxes'"
         )
@@ -400,6 +403,9 @@
         lanbox.succeed("systemctl start avahi-daemon.service")
         machine.succeed("systemctl start losos-boxes-wake.service")
         machine.wait_until_succeeds(f"{virsh} domstate boxes | grep -qx running", timeout=120)
+        machine.wait_until_succeeds(
+            f"{virsh} qemu-agent-command boxes '{{\"execute\":\"guest-ping\"}}'", timeout=900
+        )
 
     with subtest("the LosOS boxes machine's keyring opens with the password the host keeps"):
         uuid = machine.succeed(f"{virsh} domuuid boxes").strip()
