@@ -11,6 +11,7 @@
   pkg-config,
   wpewebkit,
   libseccomp,
+  udev,
   libxkbcommon,
   wayland,
   libGL,
@@ -56,6 +57,9 @@ rustPlatform.buildRustPackage {
     wpewebkit
     # Hakoniwa's seccomp filters.
     libseccomp
+    # The authenticator crate finds security keys through libudev
+    # (src/danube's webauthn.rs).
+    udev
     libxkbcommon
     wayland
   ];

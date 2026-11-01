@@ -18,11 +18,17 @@
 # installs starts on one (modules/bios.nix): GRUB's hybrid MBR on a stick,
 # its El Torito image on a disc, and either starts the UKI's own kernel and
 # initrd with the UKI's command line, kept beside it in boot/.
+#
+# With LosOS's Secure Boot key, the FAT partition starts Microsoft-signed
+# shim instead, which starts GRUB signed with that key, and the UKI is signed
+# too (modules/shim.nix). A PC with Secure Boot on that has not enrolled the
+# key yet stops in MokManager, where the certificate beside shim enrolls it.
 {
   config,
   lib,
   pkgs,
   modulesPath,
+  losos,
   ...
 }:
 
@@ -85,10 +91,27 @@ let
     inherit modules;
   };
 
-  # GRUB alone, as the removable-media boot path: the UKI it starts is on
-  # the ISO 9660 filesystem with the rest of the medium. Sized from its
-  # contents as nixpkgs sizes its own EFI image: a tenth more for FAT's own
-  # overhead, rounded up to a whole MiB.
+  # shim, MokManager and the certificate, when there is a key to sign GRUB
+  # and the UKI with (modules/shim.nix).
+  sb = import ../modules/shim.nix {
+    inherit pkgs;
+    inherit (losos.secureBoot) privateKey certificate;
+  };
+  grub = if sb.enable then sb.sign "grub${efiArch}.efi" "${efi}/grub.efi" else "${efi}/grub.efi";
+  # The UKI GRUB starts, signed as the installed system's are
+  # (modules/secure-boot.nix).
+  uki =
+    if sb.enable then
+      sb.sign "installer.efi" "${config.system.build.uki}/${ukiFile}"
+    else
+      "${config.system.build.uki}/${ukiFile}";
+  starters = sb.removable grub;
+
+  # What starts GRUB at the removable-media boot path: GRUB alone, or shim
+  # with GRUB beside it. The UKI GRUB starts is on the ISO 9660 filesystem
+  # with the rest of the medium. Sized from its contents as nixpkgs sizes
+  # its own EFI image: a tenth more for FAT's own overhead, rounded up to a
+  # whole MiB.
   esp =
     pkgs.runCommand "losos-installer-esp.img"
       {
@@ -98,12 +121,16 @@ let
         ];
       }
       ''
-        size=$(du --block-size=1 --apparent-size ${efi}/grub.efi | cut -f1)
+        size=$(du --block-size=1 --apparent-size --total ${toString (lib.attrValues starters)} | tail -n 1 | cut -f1)
         size=$(( (size * 110 / 100 / 1048576 + 1) * 1048576 ))
         truncate --size=$size $out
         mkfs.vfat --invariant -i 4c4f534f -n LOSOS-EFI $out
         mmd -i $out ::/EFI ::/EFI/BOOT
-        mcopy -i $out ${efi}/grub.efi ::/EFI/BOOT/BOOT${lib.toUpper efiArch}.EFI
+        ${lib.concatStrings (
+          lib.mapAttrsToList (target: source: ''
+            mcopy -i $out ${source} ::${target}
+          '') starters
+        )}
         fsck.vfat -n $out
       '';
 
@@ -210,7 +237,7 @@ in
           -graft-points \
           -output $out \
           nix-store.squashfs=${squashfs} \
-          boot/installer.efi=${config.system.build.uki}/${ukiFile} \
+          boot/installer.efi=${uki} \
           ${lib.optionalString (bios != { }) ''
             boot/eltorito.img=${bios.image}/eltorito.img \
             boot/linux=${config.boot.uki.settings.UKI.Linux} \

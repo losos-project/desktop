@@ -54,6 +54,13 @@ in
     ../modules/home-folders.nix
     # uutils, sudo-rs's su and Sequoia's gpg, as on the host.
     ../modules/userland.nix
+    # The host's security keys and smart card readers.
+    ./tokens.nix
+    # The Slovak eID klient, downloaded on its first start.
+    ./eid.nix
+    # The portals' dialogs, from the portal machine.
+    ../modules/portal-backend.nix
+    # The host's security keys and smart card readers.
   ];
 
   options.losos.guest.name = lib.mkOption {
@@ -201,21 +208,51 @@ in
         Restart = "always";
       };
     };
-    # Every unit of the user's manager draws on that socket: the apps
+    # X11 for the apps built only for it, such as the eID klient (eid.nix):
+    # xwayland-satellite is an X server that makes each X11 window a
+    # Wayland one, which waypipe then carries like any other.
+    systemd.user.services.xwayland-satellite = {
+      description = "Show this machine's X11 apps through its waypipe";
+      wantedBy = [ "default.target" ];
+      after = [ "waypipe.service" ];
+      bindsTo = [ "waypipe.service" ];
+      serviceConfig = {
+        ExecStart = "${lib.getExe pkgs.xwayland-satellite} :0";
+        Restart = "always";
+        RestartSec = 1;
+      };
+    };
+    # Every unit of the user's manager draws on those sockets: the apps
     # losos-guest-run starts and the portal's dialogs alike.
     systemd.user.settings.Manager.DefaultEnvironment =
-      "WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland";
+      "WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 XDG_SESSION_TYPE=wayland";
 
     # Mesa's software renderers, OpenGL and Vulkan: the guest has no GPU, and
     # derisk's GPUI apps need Vulkan.
     hardware.graphics.enable = true;
 
-    # A portal for the apps' dialogs (open a file, pick an app), which GTK's
-    # draws through the guest's waypipe like any other window.
+    # Portals for the apps. The ones with a dialog that sees the person's
+    # files or screen (opening and saving a file, saying yes to an app, a
+    # screenshot, the wallpaper) are the portal machine's, through the
+    # host, which copies the files picked for an app in here and writes
+    # them back when it saves (docs/portal-machine.md). GTK's backend,
+    # drawn through the guest's waypipe, does the rest, such as picking an
+    # app of this machine's to open a file in.
+    losos.portalBackend = {
+      enable = true;
+      inMachine = true;
+    };
     xdg.portal = {
       enable = true;
       extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
-      config.common.default = "gtk";
+      config.common = {
+        default = "gtk";
+        "org.freedesktop.impl.portal.FileChooser" = "losos";
+        "org.freedesktop.impl.portal.Access" = "losos";
+        "org.freedesktop.impl.portal.Account" = "losos";
+        "org.freedesktop.impl.portal.Screenshot" = "losos";
+        "org.freedesktop.impl.portal.Wallpaper" = "losos";
+      };
     };
 
     # A captive portal is the host's to deal with: the guest is behind

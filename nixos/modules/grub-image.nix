@@ -97,6 +97,17 @@ let
       ++ lib.optional (target == "x86_64-efi") "efi_uga"
   );
 
+  # The generations shim checks before it starts an EFI GRUB with Secure
+  # Boot on (shim.nix). shim refuses any GRUB without them, and any whose
+  # "grub" line is older than its revocation list, which asks for 5 since
+  # GRUB's February 2025 fixes; 2.14 has those. "grub.losos" is the line
+  # this project would raise if it ever had to revoke its own builds.
+  sbat = pkgs.writeText "grub-sbat.csv" ''
+    sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md
+    grub,5,Free Software Foundation,grub,${pkgs.grub2_efi.version},https://www.gnu.org/software/grub/
+    grub.losos,1,LosOS Desktop,grub,${pkgs.grub2_efi.version},https://github.com/losos-project/desktop
+  '';
+
   graphics = [
     "font"
     "gfxterm"
@@ -130,5 +141,6 @@ pkgs.runCommand "losos-grub-${target}"
     ${early}
     EOF
     grub-mkimage -O ${target} -d ${dir} -m memdisk.tar -c early.cfg -p / \
+      ${lib.optionalString (!bios) "--sbat ${sbat}"} \
       -o $out/${output} ${toString (lib.unique (common ++ modules ++ graphics))}
   ''

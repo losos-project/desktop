@@ -151,7 +151,13 @@ cited.
 
 ## CI
 
-`.github/workflows/ci.yml` is the main workflow. `prebuild` builds every
+`.github/workflows/ci.yml` is the main workflow. `changes` runs first and
+reads the paths a change touches through `tools/ci-changes`, and every other
+job runs only when that says it can be affected: a pull request that edits
+only `docs/` builds the offline documentation (`docs`) instead of the
+image, one that edits only the proxy runs `proxy`, a draft builds no image,
+and a push to main that changes the image runs everything. A path the
+script does not name counts as the image's. `prebuild` builds every
 package the release needs (the patched GTK and Qt, WPE WebKit, what links them, and this
 repository's programs) for each architecture first. Nothing lists them:
 `tools/nix-prebuild-plan` keeps the derivations that do not change when
@@ -177,7 +183,8 @@ takes a `cadence` and an optional `title` (`docs/releases.md`).
 nightly's tag for each cadence due a release; only a yearly release is marked
 latest (`docs/releases.md`, "Release cadences").
 `proxy` tests the proxy and deploys nothing. `ci` is the check branch
-protection reads. `docs.yml` builds the site and the wiki pages on a pull
+protection reads; it fails when a job `changes` asked for did not pass, and
+accepts the skipped rest. `docs.yml` builds the site and the wiki pages on a pull
 request, and from main deploys the site to Pages and pushes the wiki.
 
 ## Conventions

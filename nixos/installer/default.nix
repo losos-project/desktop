@@ -272,6 +272,12 @@ in
           losos.baseUrl
           "--local-source"
           releaseDisk
+          # Root, /home and swap, for an install that asks for a PIN at
+          # startup (docs/installer.md, "Asking for a PIN at startup").
+          "--root-definitions"
+          losos.rootDefinitions
+          "--swap"
+          losos.swap
         ]
         # Which GitHub release assets make up each of the channel's files,
         # when the OS updates through that index (update-source.nix), so an

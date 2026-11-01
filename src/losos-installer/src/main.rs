@@ -7,10 +7,19 @@
 //! ISO's session, and joins networks itself the way an installed system
 //! does, so only what is particular to LosOS stays here: which disks may be
 //! installed onto, and repart and sysupdate run in order.
-use std::io::IsTerminal;
-use std::path::PathBuf;
+//!
+//! `losos-installer encrypt` is an install's last step on its own: root,
+//! /home and swap made on a disk whose /usr is already there, root
+//! encrypted with the PIN read from stdin, and the recovery key printed.
+//! nixos/tests/installer-boot.nix runs it, as the test has no release to
+//! download.
+use std::io::{IsTerminal, Read};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::mpsc;
 
+use losos_installer::encrypt::{self, Layout};
+use losos_installer::install::Event;
 use losos_installer::serve::{self, Config};
 use miette::miette;
 use tracing_subscriber::EnvFilter;
@@ -20,7 +29,8 @@ use tracing_subscriber::EnvFilter;
 // only drift from it.
 const USAGE: &str = "usage: losos-installer serve --name NAME --repart-definitions DIR --sysupdate-definitions DIR \
 --esp DIR --medium DIR --work DIR [--source URL] [--index URL] [--local-source DIR] [--release-repo OWNER/NAME --release-version VERSION [--release-channel CHANNEL]] \
-[--bios-boot PROGRAM] [--report-client-id ID [--report-repo OWNER/NAME] [--report-login URL] [--report-api URL]]";
+[--bios-boot PROGRAM] [--root-definitions DIR --swap PROGRAM] [--report-client-id ID [--report-repo OWNER/NAME] [--report-login URL] [--report-api URL]]
+       losos-installer encrypt --root-definitions DIR --swap PROGRAM --work DIR DISK < PIN";
 
 fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
     if args.next().as_deref() != Some("serve") {
@@ -32,6 +42,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
     let mut medium = None;
     let mut work = None;
     let mut name = None;
+    let mut root_definitions = None;
+    let mut swap = None;
     let mut config = Config {
         name: String::new(),
         repart_definitions: PathBuf::new(),
@@ -50,6 +62,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
         report_client_id: None,
         report_login: None,
         report_api: None,
+        encryption: None,
     };
     while let Some(flag) = args.next() {
         let value = args
@@ -74,6 +87,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
             "--report-login" => config.report_login = Some(value),
             "--report-api" => config.report_api = Some(value),
             "--name" => name = Some(value),
+            "--root-definitions" => root_definitions = Some(PathBuf::from(value)),
+            "--swap" => swap = Some(PathBuf::from(value)),
             _ => return Err(miette!(help = USAGE, "unknown argument {flag}")),
         }
     }
@@ -86,7 +101,63 @@ fn parse(mut args: impl Iterator<Item = String>) -> miette::Result<Config> {
     config.esp = required(esp, "--esp")?.into();
     config.medium = required(medium, "--medium")?;
     config.work = required(work, "--work")?.into();
+    config.encryption = layout(root_definitions, swap)?;
     Ok(config)
+}
+
+/// Both of encryption's paths, or neither.
+fn layout(definitions: Option<PathBuf>, swap: Option<PathBuf>) -> miette::Result<Option<Layout>> {
+    match (definitions, swap) {
+        (Some(definitions), Some(swap)) => Ok(Some(Layout { definitions, swap })),
+        (None, None) => Ok(None),
+        _ => Err(miette!(
+            help = USAGE,
+            "--root-definitions and --swap go together"
+        )),
+    }
+}
+
+/// `encrypt`: its flags, then the disk.
+fn encrypt_command(mut args: impl Iterator<Item = String>) -> miette::Result<()> {
+    let (mut definitions, mut swap, mut work, mut disk) = (None, None, None, None);
+    while let Some(arg) = args.next() {
+        let mut value = || {
+            args.next()
+                .ok_or_else(|| miette!(help = USAGE, "{arg} needs a value"))
+        };
+        match arg.as_str() {
+            "--root-definitions" => definitions = Some(PathBuf::from(value()?)),
+            "--swap" => swap = Some(PathBuf::from(value()?)),
+            "--work" => work = Some(PathBuf::from(value()?)),
+            _ if disk.is_none() && arg.starts_with("/dev/") => disk = Some(arg),
+            _ => return Err(miette!(help = USAGE, "unknown argument {arg}")),
+        }
+    }
+    let layout = layout(definitions, swap)?
+        .ok_or_else(|| miette!(help = USAGE, "--root-definitions and --swap are required"))?;
+    let work = work.ok_or_else(|| miette!(help = USAGE, "--work is required"))?;
+    let disk = disk.ok_or_else(|| miette!(help = USAGE, "which disk?"))?;
+    let mut pin = String::new();
+    std::io::stdin()
+        .read_to_string(&mut pin)
+        .map_err(|e| miette!("cannot read the PIN: {e}"))?;
+    let pin = pin.strip_suffix('\n').unwrap_or(&pin);
+
+    // The steps' output to stderr, as the installer's log would show it.
+    let (tx, rx) = mpsc::channel();
+    let shown = std::thread::spawn(move || {
+        for event in rx {
+            if let Event::Line(line) = event {
+                eprintln!("{line}");
+            }
+        }
+    });
+    let result = encrypt::run(&layout, &disk, Path::new(&work), pin, &tx);
+    drop(tx);
+    let _ = shown.join();
+    let key = result.map_err(|e| miette!("{e}"))?;
+    println!("{key}");
+    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -98,7 +169,18 @@ fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
         .init();
-    match parse(std::env::args().skip(1)) {
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().map(String::as_str) == Some("encrypt") {
+        args.next();
+        return match encrypt_command(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(report) => {
+                eprintln!("{report:?}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    match parse(args) {
         Ok(config) => {
             serve::serve_stdio(&config);
             ExitCode::SUCCESS
