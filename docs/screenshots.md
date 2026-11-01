@@ -35,9 +35,9 @@ sources.
 1. **The screen's text.** [ocrs](https://github.com/robertknight/ocrs), a
    pure-Rust OCR engine, reads every line of the screenshot. Patterns find
    the secrets in each line, and each secret's own characters give the box
-   to black out. The patterns forgive what OCR gets wrong. An underscore read
-   as a space, an `@` read as a letter, or a `?` for a character it could not
-   read still matches.
+   to black out. Some patterns tolerate OCR errors, such as an underscore
+   read as a space after a token prefix or `?` characters in a long key-like
+   string. A misread `@` can prevent an email address from being blacked out.
 2. **The accessibility tree's password fields.** derisk asks the
    compositor for the tree in the same frame as the screenshot. Password
    fields are blacked out whatever they show, and so are the windows of the
