@@ -271,12 +271,9 @@
           "losos-adblock"
           "losos-backup"
           "losos-boxes"
-<<<<<<< HEAD
           "losos-machine-labels"
-=======
           "losos-login-bridge"
           "losos-tokens"
->>>>>>> origin/main
           "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
@@ -329,12 +326,10 @@
           # apps and sends an app's window to the host over vsock
           # (machines.nix).
           machines = pkgs.testers.runNixOSTest ./nixos/tests/machines.nix;
-<<<<<<< HEAD
           # A red machine reaches the host's DHCP and DNS and the internet and
           # nothing else, and the others only their own label's machines and
           # the LosOS boxes machine (machine-labels.nix).
           machine-labels = pkgs.testers.runNixOSTest ./nixos/tests/machine-labels.nix;
-=======
           # Encrypted DNS: names over HTTPS and no plain query leaving while
           # it is on, failing closed when the server is gone (adblock.nix).
           encrypted-dns = pkgs.testers.runNixOSTest ./nixos/tests/encrypted-dns.nix;
@@ -370,9 +365,6 @@
           # to a Tor network of the test's own, and nothing out with the
           # gateway down (schizo.nix).
           schizo = pkgs.testers.runNixOSTest ./nixos/tests/schizo.nix;
-          # A security key and a smart card reader on the host, used from a
-          # machine's half of the relay over vsock's loopback (tokens.nix).
->>>>>>> origin/main
           # derisk-terminal draws in software with no GPU and through GL when
           # asked, and both show its text and Nerd Font icons (terminal.nix).
           terminal = pkgs.testers.runNixOSTest ./nixos/tests/terminal.nix;

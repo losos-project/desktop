@@ -378,20 +378,17 @@
   rules apply in Danube alone. Other browsers and apps get only whole
   [blocked domains](adblock.md), and a program
   with its own DNS over HTTPS skips it entirely.
-<<<<<<< HEAD
 - **Labels on the network cover `virbr0` only.** A machine on a network
   someone made in virt-manager is not filtered by its label. Neither is a
   red machine kept from the host's public address, on a PC that has one
   rather than a LAN address. A machine's new label takes effect when it
   next starts ([labels on the network](hypervisor.md#labels-on-the-network)).
-=======
 - **Encrypted DNS moves trust rather than removing it.** With
   [encrypted DNS](adblock.md#encrypted-dns) on, the network no longer sees
   the names, but the resolver does, Quad9 or Mullvad by default. Queries are
   not padded (RFC 8467), so their sizes still hint at the names, and the
   TLS connection's fingerprint is rustls', not a browser's. Only Tor
   hides the names from both.
->>>>>>> origin/main
 - **The LosOS boxes machine passes on names, not everything.** It routes the
   other machines' connections to a box only on ports 80 and 443, by the name
   they ask for. An app's own port on a box is reached directly, and nothing
