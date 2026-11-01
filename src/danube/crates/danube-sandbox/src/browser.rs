@@ -4,10 +4,12 @@
 //! read-only; the GPU, when it can draw ([`gpu_draws`]); its own profile, cache
 //! and settings directories, and Downloads, writable; the fonts, themes and
 //! icons a user installs, read-only; the Wayland, PipeWire and PulseAudio
-//! sockets and derisk's; the compiled filter lists. The session bus only
-//! through xdg-dbus-proxy, filtered to the portals, notifications and
-//! accessibility. Nothing else in the home directory exists in there, so a
-//! compromised browser cannot read SSH keys or other programs' data.
+//! sockets and derisk's; the compiled filter lists. The session bus is only
+//! available through xdg-dbus-proxy, filtered to the portals, notifications
+//! and accessibility; the launcher answers security key requests on its
+//! own socket.
+//! Nothing else in the home directory exists in there, so a compromised
+//! browser cannot read SSH keys or other programs' data.
 //!
 //! A seccomp filter refuses the system calls a browser never needs.
 //! Network access is shared: it is a browser. There is no Landlock ruleset
@@ -80,6 +82,12 @@ pub struct Session {
     /// The filtered session bus socket xdg-dbus-proxy listens on, bound
     /// into the sandbox as the session bus.
     pub bus_proxy: Option<PathBuf>,
+    /// The socket the launcher, outside the sandbox, asks security keys
+    /// through for the browser (danube's webauthn.rs), bound in as
+    /// `danube-keys`. The keys' device nodes come and go as they are
+    /// plugged in, which a bind made at start cannot follow, and the whole
+    /// of /dev would hand the browser every device the person may open.
+    pub keys: Option<PathBuf>,
     /// Where losos-adblock compiles its lists.
     pub adblock_state: PathBuf,
     /// More to show read-only: the folder of a page shown as the desktop
@@ -211,6 +219,18 @@ pub fn plan(session: &Session) -> Plan {
         bind(&mut plan, path, Access::Read, true);
     }
 
+    if let Some(keys) = &session.keys {
+        let inside = run.join("danube-keys");
+        plan.ops.push(Op::Bind {
+            src: s(keys),
+            dest: s(&inside),
+            ro: false,
+            dev: false,
+            optional: false,
+        });
+        plan.env.push(("DANUBE_KEYS".into(), Some(s(&inside))));
+    }
+
     // Marks the inside, so the browser does not try to sandbox itself again.
     plan.env.push(("DANUBE_SANDBOXED".into(), Some("1".into())));
     plan
@@ -329,6 +349,7 @@ mod tests {
             runtime_dir: root.join("run"),
             wayland_display: "wayland-0".into(),
             bus_proxy: None,
+            keys: None,
             adblock_state: "/var/lib/losos-adblock".into(),
             read_only: vec![root.join("home/Pictures/page")],
             program: vec!["/bin/danube".into()],

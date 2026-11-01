@@ -1,5 +1,6 @@
-//! LosOS Git, the box's Forgejo at `/forgejo/`: signing in for an access
-//! token, a private repository per repository in the home, and the push.
+//! LosOS Git, the box's Git server at `/git/`: a private repository per
+//! repository in the home, and the push. Its API has Forgejo's shapes for
+//! what this uses, so a box still on Forgejo answered the same.
 //!
 //! Each repository's branches and tags are pushed as they are, forced, and
 //! a branch deleted at home is deleted on the box, so the box's copy is a
@@ -34,75 +35,33 @@ use crate::{boxes::Route, cloud::basic, encode_segment, walk::Repo, Error};
 /// The branch uncommitted work is pushed to.
 pub const UNCOMMITTED: &str = "losos-backup/uncommitted";
 
-/// The scopes the token gets: pushing to the person's repositories, and
-/// making them, which Forgejo counts as changing the user.
-pub const SCOPES: [&str; 2] = ["write:repository", "write:user"];
-
 /// LosOS Git's address on `box_name`.
 pub fn base(box_name: &str) -> String {
-    format!("https://{box_name}/forgejo")
+    format!("https://{box_name}/git")
 }
 
-/// The token's name, which says which computer it is for, so a second
-/// sign-in from the same computer replaces it.
-pub fn token_name(host: &str) -> String {
-    format!("LosOS Desktop backups ({host})")
-}
+// There was a sign-in with a name and password here, which asked Forgejo
+// for a token. LosOS Git, which replaced Forgejo on the box, takes no
+// passwords: the token comes from LosOS Login's sign-in (`crate::login`),
+// or is made in LosOS Git's own settings and checked by `check_token`.
 
-/// Trades the person's password for an access token named for this
-/// computer, replacing one of that name. Returns it with the account's
-/// user name.
+/// The account `token` belongs to, which also says LosOS Git took it.
 // ureq's error carries the whole response, so it is large wherever it goes.
 #[allow(clippy::result_large_err)]
-pub fn sign_in(
-    agent: &ureq::Agent,
-    base: &str,
-    login: &str,
-    password: &str,
-    host: &str,
-) -> Result<(String, String), Error> {
-    let auth = basic(login, password);
-    let name = token_name(host);
-    let tokens = format!("{base}/api/v1/users/{}/tokens", encode_segment(login));
-    let create = || {
-        agent
-            .post(&tokens)
-            .set("Authorization", &auth)
-            .send_json(json!({ "name": name, "scopes": SCOPES }))
-    };
-    let reply = match create() {
-        Err(ureq::Error::Status(401, _)) => {
-            return Err(Error::new(
-                "LosOS Git did not accept that name and password.",
-            ))
-        }
-        // A token of that name is there from an earlier sign-in.
-        Err(ureq::Error::Status(400 | 422, _)) => {
-            agent
-                .delete(&format!("{tokens}/{}", encode_segment(&name)))
-                .set("Authorization", &auth)
-                .call()?;
-            create()?
-        }
-        reply => reply?,
-    };
-    let reply: Value = reply.into_json()?;
-    let token = reply
-        .get("sha1")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("LosOS Git gave no token."))?
-        .to_owned();
+pub fn check_token(agent: &ureq::Agent, base: &str, token: &str) -> Result<String, Error> {
     let user: Value = agent
         .get(&format!("{base}/api/v1/user"))
         .set("Authorization", &format!("token {token}"))
-        .call()?
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(401 | 403, _) => Error::new("LosOS Git did not accept that token."),
+            e => Error::from(e),
+        })?
         .into_json()?;
-    let user = user
-        .get("login")
+    user.get("login")
         .and_then(Value::as_str)
-        .unwrap_or(login)
-        .to_owned();
-    Ok((token, user))
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new("LosOS Git did not say whose token it is."))
 }
 
 /// A Forgejo repository name for `rel`, not among `taken`: the

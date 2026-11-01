@@ -108,10 +108,13 @@ Five things are set up once, outside the repository:
    fingerprint, from `gpg --show-keys --with-colons
    nixos/keys/update-signing.asc`, in `UPDATE_SIGNING_FPR` in `ci.yml`. The
    `push` job fails without the secret, or with a secret for a different key,
-   instead of publishing a release the images would refuse. Keep an offline
-   copy of the secret half. An image only ever trusts the key it shipped
-   with, so if the key is lost, every installed machine stops taking updates
-   until it is reinstalled.
+   instead of publishing a release the images would refuse, and the
+   `format` job fails a pull request whose `UPDATE_SIGNING_FPR` is not the
+   key in `nixos/keys/update-signing.asc`. Keep an offline copy of the
+   secret half. An image trusts only the keys it shipped with, so if the key
+   is lost, every installed machine stops taking updates until it is
+   reinstalled. A key that is still at hand can be replaced, as the next
+   section says.
 
 > [!WARNING]
 > Before setting `LOSOS_PROXY_URL`, check the public deployment without a
@@ -121,3 +124,29 @@ Five things are set up once, outside the repository:
 > deployment alone does not prove GHCR access works. The variable also changes
 > the pm image's update source, so leave it unset while the registry is
 > inaccessible. Vercel deployment protection must allow anonymous clients.
+
+## Replacing the update key
+
+A machine checks an update against the keys of the version it is running,
+not the one it is installing. So a new key reaches machines inside a
+release the old key signed, and only then may it sign one itself:
+
+1. Make the new key as in step 5 above, but write its public half to
+   `nixos/keys/update-signing-next.asc`, and keep its secret half offline
+   for now. Merge that. `losos.update.pubring` reads both files, so every
+   release from then on trusts both keys, and the old key still signs them.
+2. Wait until the machines have installed one of those releases. A machine
+   takes the newest release of its
+   [cadence](releases.md#release-cadences), so each cadence
+   has to publish one, the yearly one last.
+3. In one pull request, move `update-signing-next.asc` over
+   `update-signing.asc` and put the new fingerprint in `UPDATE_SIGNING_FPR`
+   in `ci.yml`. Once it merges, put the new secret half in
+   `UPDATE_SIGNING_KEY`. A run in between fails at `push`, which compares
+   the secret with the fingerprint, and publishes nothing.
+
+> [!WARNING]
+> A machine that installed none of the releases from step 1 refuses every
+> release after step 3, and only a reinstall from a new
+> [installer](installer.md) brings it back. Leave enough time in step 2 for
+> the machines that update least often.

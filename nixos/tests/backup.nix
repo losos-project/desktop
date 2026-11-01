@@ -1,11 +1,13 @@
 # Backups to a LosOS box (backup.nix, docs/backup.md).
 #
 # `box` is a LosOS box as far as the backups can tell: Nextcloud at
-# /nextcloud and Forgejo at /forgejo/ behind one nginx with a self-signed
+# /nextcloud and Forgejo at /git/, where LosOS Git has Forgejo's shapes for
+# what the backups use, behind one nginx with a self-signed
 # certificate for testbox.local, made the way the box makes its own
 # (modules/tls.nix in the LosOS repository), and the certificate with its
 # fingerprint under /setup/. `desktop` is a person's session with the
-# backups module, which signs in to both, backs up a home with files and a
+# backups module, which signs in to both (to LosOS cloud with a password,
+# to LosOS Git with a token made on the box), backs up a home with files and a
 # repository, and backs up again after changing them. Then it reaches the
 # box as a PC with a LosOS boxes machine does, through the address the
 # relay's hosts file names, and skips the run once no machine names it.
@@ -74,7 +76,7 @@ in
       services.forgejo = {
         enable = true;
         settings.server = {
-          ROOT_URL = "https://${boxName}/forgejo/";
+          ROOT_URL = "https://${boxName}/git/";
           HTTP_ADDR = "127.0.0.1";
           HTTP_PORT = 3000;
         };
@@ -100,7 +102,7 @@ in
               proxy_request_buffering off;
             '';
           };
-          locations."/forgejo/".proxyPass = "http://127.0.0.1:3000/";
+          locations."/git/".proxyPass = "http://127.0.0.1:3000/";
         };
       };
     };
@@ -181,10 +183,17 @@ in
           ).strip()
           assert fingerprint == expected, (fingerprint, expected)
 
-      with subtest("signing in trades each password for a token of this computer's"):
+      with subtest("signing in to LosOS cloud with a password and to LosOS Git with a token"):
           desktop.fail("su - alice -c 'printf wrong | losos-backup sign-in cloud alice'")
           alice("printf ${cloudPassword} | losos-backup sign-in cloud alice")
-          alice("printf ${gitPassword} | losos-backup sign-in git alice")
+          # LosOS Git takes no passwords: a token made in its settings.
+          token = box.succeed(
+              "su -s /bin/sh forgejo -c '${forgejo} --work-path /var/lib/forgejo"
+              " --config /var/lib/forgejo/custom/conf/app.ini admin user generate-access-token"
+              " --username alice --token-name backups --scopes write:repository,write:user --raw'"
+          ).strip().splitlines()[-1]
+          desktop.fail("su - alice -c 'printf wrong | losos-backup sign-in git'")
+          alice(f"printf {token} | losos-backup sign-in git")
           alice("losos-backup on")
           status = json.loads(alice("losos-backup status"))
           assert status["cloud"] == "alice" and status["git"] == "alice" and status["enabled"], status

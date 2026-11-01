@@ -1,0 +1,25 @@
+[package]
+name = "losos-focus"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_focus"
+path = "src/lib.rs"
+
+[[bin]]
+name = "losos-focus"
+path = "src/main.rs"
+
+[dependencies]
+# Logs go through tracing to stderr, `RUST_LOG` choosing the level, and
+# failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

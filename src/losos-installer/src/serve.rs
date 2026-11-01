@@ -12,7 +12,10 @@
 //!   release disk left out;
 //! - `install` runs [`crate::install`] on the disk named, reporting `steps`,
 //!   then a `step` and `line`s as it goes, and ends with `installed` or
-//!   `failed`;
+//!   `failed`. With a `pin`, root is encrypted and the TPM asks for that PIN
+//!   at every start ([`crate::encrypt`]), and a `recovery_key` event comes
+//!   before `installed`; `hello` says `encryption` when this PC can have
+//!   that, and derisk offers it only then;
 //! - `reboot` and `power_off` ask systemd;
 //! - after a failed install, `report` writes up the failure
 //!   ([`crate::report`]) and answers it as a `report` event for derisk to
@@ -35,7 +38,8 @@ use std::thread;
 use serde_json::{Value, json};
 
 use crate::disks::{self, Disk};
-use crate::install::{self, Plan, Step};
+use crate::encrypt;
+use crate::install::{self, Pin, Plan, Step};
 use crate::report::{self, Failure, Progress, Target};
 
 /// What the backend was started with.
@@ -71,6 +75,9 @@ pub struct Config {
     pub report_client_id: Option<String>,
     /// [`Target::login`], `https://github.com` when not given.
     pub report_login: Option<String>,
+    /// How root, /home and swap are made when root is encrypted. Without
+    /// it, nothing is offered.
+    pub encryption: Option<encrypt::Layout>,
     /// [`Target::api`], `https://api.github.com` when not given.
     pub report_api: Option<String>,
 }
@@ -125,7 +132,18 @@ pub fn hello(config: &Config) -> Value {
     if let Some(target) = report_target(config) {
         hello["report"] = json!(target.repo);
     }
+    if encryption(config).is_some() {
+        hello["encryption"] = json!(true);
+    }
     hello
+}
+
+/// How root is encrypted, when this ISO and this PC can.
+pub fn encryption(config: &Config) -> Option<&encrypt::Layout> {
+    config
+        .encryption
+        .as_ref()
+        .filter(|_| encrypt::possible(Path::new("/sys"), Path::new("/dev")))
 }
 
 /// How the disk list names `disk`, for a report.
@@ -164,19 +182,19 @@ pub fn disks_event(disks: &[Disk]) -> Value {
     json!({"event": "disks", "disks": disks})
 }
 
-pub fn steps_event() -> Value {
-    let labels: Vec<&str> = Step::ALL.iter().map(|s| s.title()).collect();
+pub fn steps_event(steps: &[Step]) -> Value {
+    let labels: Vec<&str> = steps.iter().map(|s| s.title()).collect();
     json!({"event": "steps", "labels": labels})
 }
 
-/// A `step` event, with how far a download is when `percent` has a
-/// reading from sysupdate's output.
-pub fn step_event(step: Step, fraction: Option<f32>) -> Value {
-    let index = Step::ALL.iter().position(|s| *s == step).unwrap_or(0);
+/// A `step` event, among an install's `steps`, with how far a download is
+/// when `percent` has a reading from sysupdate's output.
+pub fn step_event(steps: &[Step], step: Step, fraction: Option<f32>) -> Value {
+    let index = steps.iter().position(|s| *s == step).unwrap_or(0);
     json!({
         "event": "step",
         "index": index,
-        "count": Step::ALL.len(),
+        "count": steps.len(),
         "label": step.title(),
         "fraction": fraction,
     })
@@ -203,7 +221,9 @@ pub fn percent(line: &str) -> Option<f32> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Request {
     Disks,
-    Install(String),
+    /// The disk, and the PIN root is encrypted with if the person asked
+    /// for one.
+    Install(String, Option<Pin>),
     Reboot,
     PowerOff,
     Report,
@@ -219,7 +239,10 @@ pub fn parse_request(line: &str) -> Result<Request, String> {
         Some("install") => value["disk"]
             .as_str()
             .filter(|d| d.starts_with("/dev/"))
-            .map(|d| Request::Install(d.to_owned()))
+            .map(|d| {
+                let pin = value["pin"].as_str().map(|p| Pin(p.to_owned()));
+                Request::Install(d.to_owned(), pin)
+            })
             .ok_or_else(|| "install needs a disk under /dev".to_owned()),
         Some("reboot") => Ok(Request::Reboot),
         Some("power_off") => Ok(Request::PowerOff),
@@ -308,10 +331,10 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
                 }
                 let _ = events.send(disks_event(&current_disks(config).collect::<Vec<_>>()));
             }
-            Request::Install(_) if busy => {
+            Request::Install(..) if busy => {
                 let _ = events.send(failed("An install is already running."));
             }
-            Request::Install(disk) => {
+            Request::Install(disk, pin) => {
                 // Only a disk this backend offered, which the person picked
                 // from the list: never the medium, never a partition.
                 if !current_disks(config).any(|d| d.path == Path::new(&disk)) {
@@ -324,6 +347,22 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
                     .find(|d| d.path == Path::new(&disk))
                     .map(|d| describe(&d))
                     .unwrap_or_default();
+                let encrypt = match (pin, encryption(config)) {
+                    (None, _) => None,
+                    (Some(_), None) => {
+                        let _ = events.send(failed(
+                            "This PC cannot ask for a PIN at startup: it needs a TPM 2.0 and UEFI.",
+                        ));
+                        continue;
+                    }
+                    (Some(pin), Some(layout)) => {
+                        if let Err(e) = encrypt::check_pin(&pin.0) {
+                            let _ = events.send(failed(e));
+                            continue;
+                        }
+                        Some((layout.clone(), pin))
+                    }
+                };
                 *failure.lock().expect("never poisoned") = None;
                 let plan = Plan {
                     disk: PathBuf::from(disk),
@@ -336,6 +375,7 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
                     local: config.local_source.clone(),
                     release: github(config),
                     bios_boot: config.bios_boot.clone(),
+                    encrypt,
                 };
                 let events = events.clone();
                 let failure = Arc::clone(&failure);
@@ -430,7 +470,8 @@ fn install_reporting(
     events: &mpsc::Sender<Value>,
     failure: &Mutex<Option<Failure>>,
 ) {
-    let _ = events.send(steps_event());
+    let steps = plan.steps();
+    let _ = events.send(steps_event(&steps));
     let (tx, rx) = mpsc::channel();
     let plan = plan.clone();
     let worker = thread::spawn(move || install::run(&plan, &tx));
@@ -440,13 +481,13 @@ fn install_reporting(
         let out = match event {
             install::Event::Step(s) => {
                 step = s;
-                step_event(s, None)
+                step_event(&steps, s, None)
             }
             install::Event::Line(text) => {
                 if step == Step::Download
                     && let Some(fraction) = percent(&text)
                 {
-                    let _ = events.send(step_event(step, Some(fraction)));
+                    let _ = events.send(step_event(&steps, step, Some(fraction)));
                 }
                 // A download's progress lines would push out everything
                 // that says why it stopped.
@@ -458,12 +499,14 @@ fn install_reporting(
                 }
                 json!({"event": "line", "text": text})
             }
+            // Never in the log a report carries.
+            install::Event::RecoveryKey(key) => json!({"event": "recovery_key", "key": key}),
             install::Event::Finished(Ok(())) => json!({"event": "installed"}),
             install::Event::Finished(Err(e)) => {
-                let index = Step::ALL.iter().position(|s| *s == step).unwrap_or(0);
+                let index = steps.iter().position(|s| *s == step).unwrap_or(0);
                 *failure.lock().expect("never poisoned") = Some(Failure {
                     step: step.title().to_owned(),
-                    position: (index + 1, Step::ALL.len()),
+                    position: (index + 1, steps.len()),
                     message: e.clone(),
                     log: std::mem::take(&mut log),
                     disk: disk.to_owned(),

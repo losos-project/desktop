@@ -15,7 +15,7 @@ Which systemd component does which job:
 | Session | derisk as the display manager, with its lock screen as the login screen, `systemd-logind` seats, and the user manager driving `derisk-session.target` and `graphical-session.target` |
 | File search | `derisk-index.service`, a user service started on its socket, `derisk-index.socket`, at idle priority and with home read-only, indexing the names and text of each person's files for the command palette |
 | Network | NetworkManager with NixOS's defaults, `systemd-resolved`, `systemd-timesyncd` |
-| Memory | `systemd-oomd`, zswap in front of a RAM-sized encrypted swap partition, and GrapheneOS's hardened_malloc as every process's allocator on PCs |
+| Memory | `systemd-oomd`, zswap in front of a RAM-sized encrypted swap partition, and GrapheneOS's hardened_malloc as every process's allocator |
 | Sleep | `systemd-sleep` suspends on a laptop's lid; nothing hibernates under the locked-down kernel ([Hibernation](hibernation.md)) |
 
 ![A machine's life: the installer lays out the disk with systemd-repart and fills slot A with systemd-sysupdate; first boot creates slot B, root, home and swap; derisk setup creates the first account with homectl; homed opens each person's home at login; sysupdate writes the idle slot and boot counting keeps or gives up the new version; a factory reset empties root and home](images/systemd.svg)

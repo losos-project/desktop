@@ -48,6 +48,13 @@ in
   # ext4. Declaring it brings e2fsprogs and the module; mkswap comes alone,
   # because the rest of util-linux has no business in the initrd.
   boot.initrd.supportedFilesystems.ext4 = true;
+
+  # Root is LUKS2 on a PC whose installer was asked for a PIN at startup
+  # (src/losos-installer's encrypt.rs). systemd-gpt-auto-generator then
+  # unlocks it through the TPM, which asks for the PIN, but NixOS puts
+  # cryptsetup and dm-crypt into the initrd only for volumes it was told of
+  # in boot.initrd.luks.devices, and gpt-auto's are found at boot.
+  boot.initrd.luks.forceLuksSupportInInitrd = true;
   boot.initrd.systemd.extraBin.mkswap = "${pkgs.util-linux}/bin/mkswap";
 
   boot.initrd.systemd.services.systemd-repart = {
