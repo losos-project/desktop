@@ -39,10 +39,13 @@ use crate::ffi::{
 use crate::input::Input;
 use crate::notify::{self, Card, Notifier};
 use crate::permissions::{self, Kind};
-use crate::shared::{Command, DownloadCommand, Event, Events, ExtCommand, PermissionAsk, Tab, TabId};
+use crate::shared::{
+    Command, DownloadCommand, Event, Events, ExtCommand, KeyAsk, PermissionAsk, Tab, TabId,
+};
+use crate::webauthn::{self, Refusal};
 use crate::webkit::{
-    self, Buffer, Display, Download, FilterStore, MainLoop, NetworkSession, PermissionRequest,
-    PolicyDecision, UserContentManager, View, WebView,
+    self, Buffer, Display, Download, FilterStore, Frames, MainLoop, NetworkSession,
+    PermissionRequest, PolicyDecision, Reply, UserContentManager, UserScript, View, WebView,
 };
 
 /// How the engine starts.
@@ -110,6 +113,9 @@ pub(crate) struct Engine {
     pending: HashMap<u64, (PermissionRequest, String, Kind)>,
     next_permission: u64,
     permissions: permissions::Store,
+    /// Sites asking for a security key, by the bar's id (webauthn.rs).
+    keys: HashMap<u64, Asking>,
+    next_key: u64,
     home: String,
     desktop_agent: String,
     started: Instant,
@@ -125,6 +131,17 @@ pub(crate) struct Engine {
     downloads: Downloads,
     /// Each download's notification, shared with WebKit's download signals.
     notifier: Rc<RefCell<Notifier>>,
+}
+
+/// A security key request under way: the thread asking the keys has the
+/// request, and the page's promise waits here, on WebKit's thread.
+struct Asking {
+    tab: TabId,
+    /// webauthn.js's own number for the call, which a cancel names.
+    call: u64,
+    reply: Reply,
+    pins: Sender<String>,
+    cancel: Sender<()>,
 }
 
 /// The downloads under way, by Danube's id for them.
@@ -330,6 +347,8 @@ pub fn run(commands: Receiver<Command>, events: Events, options: Options) {
         pending: HashMap::new(),
         next_permission: 1,
         permissions: permissions::Store::open(options.permissions.clone()),
+        keys: HashMap::new(),
+        next_key: 1,
         home: options.settings.home.clone(),
         desktop_agent,
         started: Instant::now(),
@@ -477,6 +496,23 @@ impl Engine {
                 }
                 emit(Event::PermissionDone(id));
             }
+            Command::KeyPin(id, pin) => {
+                if let Some(asking) = self.keys.get(&id) {
+                    let _ = asking.pins.try_send(pin.0);
+                }
+            }
+            Command::KeyCancel(id) => {
+                if let Some(asking) = self.keys.get(&id) {
+                    let _ = asking.cancel.try_send(());
+                }
+            }
+            Command::KeyStatus(id, status) => emit(Event::KeyStatus(id, status)),
+            Command::KeyDone(id, answer) => {
+                if let Some(asking) = self.keys.remove(&id) {
+                    asking.reply.value(&answer);
+                }
+                emit(Event::KeyDone(id));
+            }
             Command::Phone(phone) => {
                 let agent = if phone {
                     // What phone sites look for: "Mobile", and "Android"
@@ -526,6 +562,19 @@ impl Engine {
         if let Some(filters) = &self.filters {
             filters.borrow_mut().attach(id, &content);
         }
+        // Security keys, in the top frame only (webauthn.rs).
+        content.add_script(&UserScript::new(webauthn::PAGE_SCRIPT, Frames::Top, true, None, &[], &[]));
+        content.add_script(&UserScript::new(
+            webauthn::BRIDGE_SCRIPT,
+            Frames::Top,
+            true,
+            Some(webauthn::WORLD),
+            &[],
+            &[],
+        ));
+        content.register_message_handler(webauthn::HANDLER, Some(webauthn::WORLD), move |text, reply| {
+            security_key(id, &text, reply)
+        });
         let page = match related {
             // A popup shares its opener's process, display and session.
             Some(related) => WebView::related(related, &self.settings, &content),
@@ -540,6 +589,8 @@ impl Engine {
             debug!(tab = id, event, "load changed");
             if event == WEBKIT_LOAD_STARTED {
                 emit(Event::LoadStarted(id));
+                // The page that asked for a key is going.
+                try_with(|e| e.stop_keys(id, None));
             }
             emit(Event::Changed(refresh(page, id)));
             // The extensions hear of it now, or once the engine is free.
@@ -624,6 +675,7 @@ impl Engine {
         let Some(index) = self.tabs.iter().position(|e| e.id == id) else {
             return;
         };
+        self.stop_keys(id, None);
         // Dropping the entry drops the view's last reference.
         drop(self.tabs.remove(index));
         if let Some(filters) = &self.filters {
@@ -845,6 +897,117 @@ fn decide(decision: &PolicyDecision, kind: u32) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+impl Engine {
+    /// Starts asking the keys for tab `tab`'s page, on a thread of its own
+    /// (webauthn.rs blocks until the key answers), and puts up the bar.
+    fn ask_keys(
+        &mut self,
+        tab: TabId,
+        call: u64,
+        (message, uri): (String, String),
+        request: webauthn::Request,
+        reply: Reply,
+    ) {
+        // One at a time per tab, as other browsers do: the person can
+        // only be touching a key for one of them.
+        if self.keys.values().any(|a| a.tab == tab) {
+            reply.value(&Refusal::not_allowed("A request is already pending.").to_json());
+            return;
+        }
+        let Some(commands) = LINK.with(|l| l.borrow().as_ref().map(Events::commands)) else {
+            reply.value(&Refusal::cancelled().to_json());
+            return;
+        };
+        let id = self.next_key;
+        self.next_key += 1;
+        let (pins, typed) = crossbeam_channel::bounded(1);
+        let (cancel, cancelled) = crossbeam_channel::bounded(1);
+        emit(Event::Key(KeyAsk {
+            id,
+            tab,
+            host: config::host(&request.origin),
+            op: request.op,
+            status: webauthn::Status::Touch,
+        }));
+        self.keys.insert(
+            id,
+            Asking {
+                tab,
+                call,
+                reply,
+                pins,
+                cancel,
+            },
+        );
+        let spawned = std::thread::Builder::new()
+            .name("security-key".into())
+            .spawn(move || {
+                let answer = webauthn::answer(
+                    &message,
+                    &uri,
+                    request,
+                    |status| commands.send(Command::KeyStatus(id, status)),
+                    &typed,
+                    &cancelled,
+                );
+                commands.send(Command::KeyDone(id, answer));
+            });
+        if let Err(error) = spawned {
+            warn!(%error, "cannot start asking the security keys");
+            if let Some(asking) = self.keys.remove(&id) {
+                asking.reply.value(&Refusal::cancelled().to_json());
+            }
+            emit(Event::KeyDone(id));
+        }
+    }
+
+    /// Stops tab `tab`'s request, or only the call `call` of it: the
+    /// thread hears the cancel, and its answer then ends the request.
+    fn stop_keys(&self, tab: TabId, call: Option<u64>) {
+        for asking in self.keys.values() {
+            if asking.tab == tab && call.is_none_or(|c| c == asking.call) {
+                let _ = asking.cancel.try_send(());
+            }
+        }
+    }
+}
+
+/// A message from webauthn-bridge.js in tab `tab`: a call to start, or one
+/// the page aborted. The page is checked against the address WebKit has
+/// for the tab, never against what it says of itself.
+fn security_key(tab: TabId, text: &str, reply: Reply) {
+    let call = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|m| Some((m.get("id")?.as_u64()?, m.get("op")?.as_str()? == "cancel")));
+    let Some((call, cancel)) = call else {
+        reply.value(&Refusal::cancelled().to_json());
+        return;
+    };
+    if cancel {
+        try_with(|e| e.stop_keys(tab, Some(call)));
+        reply.value("{}");
+        return;
+    }
+    let mut unanswered = Some(reply);
+    try_with(|e| {
+        let reply = unanswered.take().expect("taken once");
+        let uri = e.page(tab).map(WebView::uri).unwrap_or_default();
+        match webauthn::parse(text, &uri) {
+            Ok(request) => e.ask_keys(tab, call, (text.to_owned(), uri), request, reply),
+            Err(refusal) => {
+                debug!(tab, ?refusal, "a security key request was refused");
+                reply.value(&refusal.to_json());
+            }
+        }
+    });
+    // The engine is busy only inside a call of its own that ran the loop,
+    // which a page's message never comes from; the site can ask again.
+    if let Some(reply) = unanswered {
+        warn!(tab, "a security key request arrived while the engine was busy");
+        reply.value(&Refusal::not_allowed("Danube was busy. Try again.").to_json());
     }
 }
 

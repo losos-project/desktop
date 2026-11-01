@@ -15,7 +15,11 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && format('{0} release of
 on:
   push:
     branches: [main]
+  # ready_for_review as well as the defaults, because a draft skips the jobs
+  # that build and boot the image (tools/ci-changes) and needs them when it
+  # stops being one.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # A run started by hand publishes like a main run, as a release of the
   # cadence it names (`publish`). cadence.yml starts one on the newest
   # nightly's tag for each weekly, monthly or yearly release that is due.
@@ -60,6 +64,53 @@ env:
   LOSOS_CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'nightly' }}
 
 jobs:
+  # Which of the jobs below this change needs, from the paths it touches
+  # (tools/ci-changes says what each path can change). A pull request is
+  # compared with the base it merges into, a push with the commit main was
+  # at before it; a run started by hand, or a push whose earlier commit is
+  # not in the history, runs everything. A job left out is skipped, which
+  # `ci` accepts only when this job said so.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      image: ${{ steps.changes.outputs.image }}
+      android: ${{ steps.changes.outputs.android }}
+      android-desktop: ${{ steps.changes.outputs.android-desktop }}
+      docs: ${{ steps.changes.outputs.docs }}
+      format: ${{ steps.changes.outputs.format }}
+      proxy: ${{ steps.changes.outputs.proxy }}
+    steps:
+      # The whole history, so a push's earlier commit is there to compare
+      # with. A pull request's checkout is the merge of its branch into the
+      # base, whose first parent is that base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft || false }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case $EVENT in
+            pull_request) base=HEAD^1 ;;
+            push) base=$BEFORE ;;
+            *) base= ;;
+          esac
+          if [ -n "$base" ] && git rev-parse -q --verify "$base^{commit}" > /dev/null; then
+            git diff --name-only "$base" HEAD | tools/ci-changes 2> why.txt
+          else
+            tools/ci-changes --all 2> why.txt
+          fi >> "$GITHUB_OUTPUT"
+          cat why.txt
+          {
+            echo "### What this change runs"
+            echo
+            echo '```'
+            cat why.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Every package the release needs, built on each architecture before the
   # image is assembled: the patched GTK and Qt, everything that links them,
   # and this repository's own programs. Nothing lists them:
@@ -76,6 +127,8 @@ jobs:
   # is kept, running out of time passes with a warning, a failed derivation
   # turns it red. A retry of either job starts from what the cache holds.
   prebuild:
+    needs: [changes]
+    if: needs.changes.outputs.image == 'true'
     strategy: &arches
       fail-fast: false
       matrix:
@@ -130,9 +183,12 @@ jobs:
           echo "$NIX_INSTALLER_SHA256  install-nix" | sha256sum -c -
           sh install-nix --daemon --yes --no-channel-add
           # Ubuntu 24.04's AppArmor stops unprivileged processes making user
-          # namespaces, and a Nix build user is one. Test suites that run
-          # bwrap inside the build, such as xdg-desktop-portal's icon and
-          # sound validators, then fail on this runner and nowhere else.
+          # namespaces, and a Nix build user is one. The image's
+          # systemd-repart runs under `unshare --map-root-user`
+          # (modules/image.nix), and xdg-desktop-portal's icon and sound
+          # validators are tested inside bwrap; the overlay tests those
+          # unsandboxed on a host that refuses, but here they are tested as
+          # the image runs them.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           features="nixos-test benchmark big-parallel"
           if [ -e /dev/kvm ]; then
@@ -149,6 +205,10 @@ jobs:
             echo "system-features = $features"
             echo "max-jobs = auto"
             echo "extra-sandbox-paths = /var/cache/losos-ccache=/var/lib/losos-ccache"
+            # The Secure Boot signing steps read their key outside the
+            # sandbox (nixos/modules/shim.nix, __noChroot); every other
+            # build is sandboxed as before.
+            echo "sandbox = relaxed"
             if [ -n "$NIX_CACHE_URL" ] && [ -n "$NIX_CACHE_PUBLIC_KEY" ]; then
               echo "substituters = https://cache.nixos.org/ $NIX_CACHE_URL"
               echo "trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= $NIX_CACHE_PUBLIC_KEY"
@@ -165,6 +225,38 @@ jobs:
       - &checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false, submodules: true }
+
+      # The key that signs GRUB and the UKIs for Secure Boot
+      # (docs/secure-boot.md), from the repository secret, where the Nix
+      # build users can read it. Only the signing steps do: they run outside
+      # the sandbox, and every other build keeps its own, so no package's
+      # build or fetch ever sees the key. Without the secret the images are
+      # unsigned and start with Secure Boot off. Once the certificate is
+      # committed, a run outside a pull request without the secret fails
+      # instead of publishing a release Secure Boot would refuse.
+      - &secure-boot-key
+        name: Give the build the Secure Boot key
+        env:
+          SECURE_BOOT_KEY: ${{ secrets.SECURE_BOOT_KEY }}
+        run: |
+          if [ -z "$SECURE_BOOT_KEY" ]; then
+            if [ -f nixos/keys/secure-boot.crt ] && [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+              echo "::error::nixos/keys/secure-boot.crt is committed, but the SECURE_BOOT_KEY secret is not set, so nothing could be signed for Secure Boot."
+              exit 1
+            fi
+            echo "::notice::No SECURE_BOOT_KEY secret, so the images start only with Secure Boot off."
+            exit 0
+          fi
+          # The secret can be set before its certificate is committed, and
+          # the build would refuse a key with no certificate (secure-boot.nix).
+          if [ ! -f nixos/keys/secure-boot.crt ]; then
+            echo "::notice::SECURE_BOOT_KEY is set, but nixos/keys/secure-boot.crt is not committed yet, so nothing is signed."
+            exit 0
+          fi
+          sudo install -d -m 0750 -g nixbld /var/lib/losos-secure-boot
+          printf '%s\n' "$SECURE_BOOT_KEY" \
+            | sudo install -m 0640 -g nixbld /dev/stdin /var/lib/losos-secure-boot/key.pem
+          echo "LOSOS_SECURE_BOOT_KEY=/var/lib/losos-secure-boot/key.pem" >> "$GITHUB_ENV"
 
       # The proxy's handler, run by node on this runner at NIX_CACHE_URL,
       # before anything asks Nix to substitute. The GHCR packages are public,
@@ -363,8 +455,8 @@ jobs:
   # with it ignores the run being cancelled, so a pull request's newer push
   # waited hours for the older run's flake check and VM tests to finish.
   flake:
-    needs: [prebuild]
-    if: ${{ !cancelled() && needs.prebuild.result != 'cancelled' }}
+    needs: [changes, prebuild]
+    if: ${{ !cancelled() && needs.changes.outputs.image == 'true' && needs.prebuild.result != 'cancelled' }}
     strategy: *arches
     runs-on: ${{ matrix.runner }}
     timeout-minutes: &flake-minutes 355
@@ -386,6 +478,7 @@ jobs:
       - *free-disk
       - *install-nix
       - *checkout
+      - *secure-boot-key
       - *serve-cache
       - *serve-cache-start
 
@@ -584,9 +677,11 @@ jobs:
   # Pushes each architecture's release to GHCR. This is the only job that
   # holds packages: write next to release files, and it checks out and builds
   # nothing, so no code from the branch runs beside the token.
+  # A push to main that left the image alone (tools/ci-changes) skips `flake`,
+  # and so this and `publish`: there is no new image to release.
   push:
     needs: [flake]
-    if: always() && github.event_name != 'pull_request' && needs.flake.result != 'cancelled'
+    if: always() && github.event_name != 'pull_request' && needs.flake.result != 'cancelled' && needs.flake.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -716,6 +811,8 @@ jobs:
   # nothing, and neither waits for nor holds back the build or the release;
   # `ci` still requires it. `nix fmt` locally rewrites what this rejects.
   format:
+    needs: [changes]
+    if: needs.changes.outputs.format == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -743,10 +840,33 @@ jobs:
             echo "::error::Run \`nix fmt\` and commit the result."
             exit 1
           fi
+      # push signs with the key UPDATE_SIGNING_FPR names, and the images
+      # trust nixos/keys/update-signing.asc. push checks out no code, so the
+      # two are compared here, where a pull request that changes one without
+      # the other fails before a release is signed with a key nothing
+      # trusts. While a replacement is under way (docs/binary-cache.md), the
+      # next key is in update-signing-next.asc and the current one still
+      # signs.
+      - name: Check the update signing key
+        run: |
+          fpr=$(sed -n 's/^ *UPDATE_SIGNING_FPR: "\([0-9A-F]*\)".*/\1/p' .github/workflows/ci.yml)
+          trusted=$(gpg --batch --show-keys --with-colons nixos/keys/update-signing.asc \
+            | awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }')
+          if [ -z "$fpr" ] || ! printf '%s\n' "$trusted" | grep -qx "$fpr"; then
+            echo "::error::UPDATE_SIGNING_FPR is ${fpr:-unset}, but nixos/keys/update-signing.asc holds ${trusted:-no key}."
+            exit 1
+          fi
+          if [ -f nixos/keys/update-signing-next.asc ]; then
+            next=$(gpg --batch --show-keys --with-colons nixos/keys/update-signing-next.asc \
+              | awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }')
+            echo "::notice::Replacing the update key: releases carry $next beside $fpr, which still signs them."
+          fi
 
   # The GHCR proxy: its decisions in Rust, then the handler against a fake
   # registry. Nothing is deployed from here.
   proxy:
+    needs: [changes]
+    if: needs.changes.outputs.proxy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -773,6 +893,8 @@ jobs:
   # downloads Android from Google as a person's setup does, so it builds
   # nothing big and needs neither the image nor the project's cache.
   android:
+    needs: [changes]
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -831,6 +953,8 @@ jobs:
   # which the runner's own KVM passes on to it. The image builds from the
   # project's cache like `flake`'s, compiling only what this change touched.
   android-desktop:
+    needs: [changes]
+    if: needs.changes.outputs.android-desktop == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     env: *nix-env
@@ -862,29 +986,76 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # The one check branch protection looks for, so a skipped or cancelled job
-  # never reads as green.
+  # The offline documentation the image carries (nixos/pkgs/losos-docs.nix),
+  # for a pull request that changes docs/ or website/ and nothing else of the
+  # image's: the page build docs.yml runs is the online site's, and this is
+  # the copy derisk's error dialogs open. Anything else builds it in
+  # `flake`, with the release.
+  docs:
+    needs: [changes]
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NIX_VERSION: "2.34.8"
+      NIX_INSTALLER_SHA256: "96c10e102c88809dd9ec0bee89200c4a51eae4c9f6d8698c26b16788d131e078"
+    steps:
+      - name: Install Nix
+        run: |
+          curl -sSfL --proto '=https' \
+            "https://releases.nixos.org/nix/nix-$NIX_VERSION/install" -o install-nix
+          echo "$NIX_INSTALLER_SHA256  install-nix" | sha256sum -c -
+          sh install-nix --daemon --yes --no-channel-add
+          echo "experimental-features = nix-command flakes" | sudo tee -a /etc/nix/nix.conf
+          sudo systemctl restart nix-daemon
+          echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, submodules: true }
+      - name: Build the offline documentation
+        run: nix build -L --no-link .#legacyPackages.x86_64-linux.losos-docs
+
+  # The one check branch protection looks for, so a cancelled job, or one
+  # skipped that `changes` said should run, never reads as green.
   ci:
-    needs: [prebuild, flake, format, proxy, android, android-desktop]
+    needs: [changes, prebuild, flake, format, proxy, android, android-desktop, docs]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every job
+      - name: Require every job the change needs
         env:
-          PREBUILD: ${{ needs.prebuild.result }}
-          FLAKE: ${{ needs.flake.result }}
-          FORMAT: ${{ needs.format.result }}
-          PROXY: ${{ needs.proxy.result }}
-          ANDROID: ${{ needs.android.result }}
-          ANDROID_DESKTOP: ${{ needs.android-desktop.result }}
+          CHANGES: ${{ needs.changes.result }}
+          IMAGE: ${{ needs.changes.outputs.image }}
+          ANDROID: ${{ needs.changes.outputs.android }}
+          ANDROID_DESKTOP: ${{ needs.changes.outputs.android-desktop }}
+          DOCS: ${{ needs.changes.outputs.docs }}
+          FORMAT: ${{ needs.changes.outputs.format }}
+          PROXY: ${{ needs.changes.outputs.proxy }}
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          test "$PREBUILD" = success
-          test "$FLAKE" = success
-          test "$FORMAT" = success
-          test "$PROXY" = success
-          test "$ANDROID" = success
-          test "$ANDROID_DESKTOP" = success
+          test "$CHANGES" = success
+          status=0
+          need() {
+            local result
+            result=$(jq -r --arg j "$2" '.[$j].result' <<< "$RESULTS")
+            if [ "$1" = true ] && [ "$result" != success ]; then
+              echo "::error::$2 had to pass and is $result."
+              status=1
+            elif [ "$1" != true ] && [ "$result" != skipped ] && [ "$result" != success ]; then
+              echo "::error::$2 was not needed, ran anyway and is $result."
+              status=1
+            else
+              echo "$2: $result"
+            fi
+          }
+          need "$IMAGE" prebuild
+          need "$IMAGE" flake
+          need "$FORMAT" format
+          need "$PROXY" proxy
+          need "$ANDROID" android
+          need "$ANDROID_DESKTOP" android-desktop
+          need "$DOCS" docs
+          exit "$status"
 
   # release-name checked a tag given to a run started by hand, back when a
   # release could have any name. Every tag is now `<cadence>-<stamp>`, made

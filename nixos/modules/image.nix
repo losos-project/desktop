@@ -132,38 +132,37 @@ in
   # partition UUIDs repart derived from the verity root hash, because that is
   # how the initrd finds /usr from usrhash= on the command line, and
   # sysupdate gives a partition the UUID its source's name carries (@u).
-  # The image with what a BIOS boot needs added (bios.nix): GRUB in the
-  # MBR and the BIOS boot partition, and the image's own version's kernel,
-  # initrd and command line on the ESP beside its UKI. Added afterwards
+  # The image with the image's own version's kernel, initrd and command
+  # line on the ESP beside its UKI (uki-files.nix), and on x86_64 GRUB
+  # in the MBR and the BIOS boot partition (bios.nix). Added afterwards
   # rather than given to repart, because the command line carries the
   # usrhash= repart only reports once /usr is built, and the ESP is made
   # in that same run; nixpkgs' verity-store module gets the UKI onto the
-  # ESP the same way. Elsewhere this is the repart image as it is.
+  # ESP the same way.
   system.build.disk =
     let
       image = config.system.build.image;
       raw = "${config.image.baseName}.raw";
     in
-    if config.system.build ? biosBootFiles then
-      pkgs.runCommand "${id}_${version}-disk"
-        {
-          nativeBuildInputs = with pkgs.buildPackages; [
-            jq
-            mtools
-          ];
-        }
-        ''
-          mkdir $out
-          cp ${image}/repart-output.json $out/
-          cp --sparse=always ${image}/${raw} $out/${raw}
-          chmod u+w $out/${raw}
-          esp=$(jq -er '.[] | select(.type=="esp") | .offset' $out/repart-output.json)
-          MTOOLS_SKIP_CHECK=1 mcopy -i "$out/${raw}@@$esp" \
-            ${config.system.build.biosBootFiles}/* ::/EFI/Linux/
+    pkgs.runCommand "${id}_${version}-disk"
+      {
+        nativeBuildInputs = with pkgs.buildPackages; [
+          jq
+          mtools
+        ];
+      }
+      ''
+        mkdir $out
+        cp ${image}/repart-output.json $out/
+        cp --sparse=always ${image}/${raw} $out/${raw}
+        chmod u+w $out/${raw}
+        esp=$(jq -er '.[] | select(.type=="esp") | .offset' $out/repart-output.json)
+        MTOOLS_SKIP_CHECK=1 mcopy -i "$out/${raw}@@$esp" \
+          ${config.system.build.ukiFiles}/* ::/EFI/Linux/
+        ${lib.optionalString (config.system.build ? grubBiosInstall) ''
           ${lib.getExe config.system.build.grubBiosInstall} $out/${raw}
-        ''
-    else
-      image;
+        ''}
+      '';
 
   system.build.releaseArtifacts =
     let
@@ -209,11 +208,9 @@ in
         echo "/usr is $(numfmt --to=iec "$usr") of its ${cfg.usrSize} slot"
 
         cp ${config.system.build.uki}/${ukiFile} ${prefix}_${arch.name}.efi
-        ${lib.optionalString (config.system.build ? biosBootFiles) ''
-          # What GRUB starts this version from on a BIOS PC (bios.nix),
-          # named as sysupdate installs them.
-          cp ${config.system.build.biosBootFiles}/* .
-        ''}
+        # What GRUB starts this version from on a BIOS PC or for the
+        # recovery shell (uki-files.nix), named as sysupdate fetches them.
+        cp ${config.system.build.ukiReleaseFiles}/* .
         extract ${arch.usr}
         extract ${arch.usrVerity}
 

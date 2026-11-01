@@ -89,8 +89,8 @@ ESP
   EFI/losos/grubx64.efi             the same, where a boot entry can name it
   EFI/losos/grubenv                 GRUB's boot counter
   EFI/Linux/losos-desktop_<v>.efi     the UKI, version <v>
-  EFI/Linux/losos-desktop_<v>.linux   its kernel (x86_64, for a BIOS)
-  EFI/Linux/losos-desktop_<v>.initrd  its initrd (x86_64, for a BIOS)
+  EFI/Linux/losos-desktop_<v>.linux   its kernel (x86_64 only)
+  EFI/Linux/losos-desktop_<v>.initrd  its initrd (x86_64 only)
   EFI/Linux/losos-desktop_<v>.grub    its command line, as a line of GRUB script
 ```
 
@@ -107,19 +107,21 @@ variables systemd-boot used to set, `LoaderDevicePartUUID` and
 `LoaderInfo`. `systemd-gpt-auto-generator` reads them to find the root disk
 and mount the ESP, as before.
 
-BIOS GRUB cannot run a UKI, because a UKI is an EFI program. So every release
-also carries each UKI's kernel, initrd and command line as separate files,
-cut from the finished UKI. sysupdate installs them beside the UKI as part of
-the same version, through the transfers in `bios.nix`. The command line is
+BIOS GRUB cannot run a UKI, because a UKI is an EFI program. So every x86_64
+release also carries each UKI's kernel, initrd and command line as separate
+files, cut from the finished UKI. sysupdate installs them beside the UKI as
+part of the same version, through the transfers in `uki-files.nix`. An
+aarch64 release carries only the command line, which the recovery shell
+below needs. The command line is
 the UKI's with one change. systemd finds the root partition from
 `LoaderDevicePartUUID`, and a BIOS has no EFI variables. Instead, GRUB passes
 the partition UUID of the ESP it started the kernel from as `losos.esp=`,
 the way `bli` would set that variable. `root=gpt-auto` becomes
 `root=/dev/disk/by-loader/root`. A udev rule in the initrd links that path
-to the partition labelled `root-x86-64` on the same disk as that ESP, so a
-second LosOS disk in the machine is never mounted by mistake. A GRUB older
-than `losos.esp=` passes nothing, and the command line falls back to
-`root=PARTLABEL=root-x86-64`. `systemd-gpt-auto-generator` mounts the root
+to the partition labelled `root-x86-64` (`root-arm64` on aarch64) on the
+same disk as that ESP, so a second LosOS disk in the machine is never
+mounted by mistake. A GRUB older than `losos.esp=` passes nothing, and the
+command line falls back to `root=PARTLABEL=root-x86-64`. `systemd-gpt-auto-generator` mounts the root
 disk's ESP at `/efi` only under UEFI, so a small generator does the same on
 a BIOS boot.
 
@@ -180,7 +182,18 @@ kernel beside them. It then offers:
 > Kernel arguments typed at GRUB's prompt into `losos_extra`, and exported,
 > are added to whichever entry starts next, on x86_64 under UEFI as on a BIOS.
 > That is the recovery shell ([When something goes
-> wrong](troubleshooting.md#no-one-can-administer-the-machine)).
+> wrong](troubleshooting.md#no-one-can-administer-the-machine)). With Secure
+> Boot on, GRUB ignores them ([Secure Boot](secure-boot.md#while-secure-boot-is-on)).
+
+A UKI takes kernel arguments only in place of its whole command line, so on
+UEFI, GRUB puts the UKI's own command line from the `.grub` file in front of
+`losos_extra`. On x86_64 it then starts the kernel and initrd beside the UKI
+with them, as a BIOS boot does. aarch64 has no copies beside its UKI. Its
+kernel is an uncompressed Image of about 70 MiB, and two versions of it
+beside two UKIs would nearly fill the 512 MiB ESP. So GRUB chainloads the
+UKI and passes the line to it, and systemd-stub starts the kernel with that
+line instead of its own. systemd-stub ignores such a line while Secure Boot
+is on.
 
 ## Boot counting
 
@@ -227,10 +240,15 @@ starting" until the installer takes the screen.
 
 ## Secure Boot
 
+A release signed with LosOS's key starts with Secure Boot on. Microsoft-signed
+shim goes in front of GRUB on the ESP, GRUB and every UKI are signed, and
+the key is enrolled once in shim's MokManager. [Secure Boot](secure-boot.md)
+has the details, and how to enroll the key. Secure Boot is UEFI's and does
+not apply to a BIOS boot.
+
 > [!IMPORTANT]
-> Secure Boot is UEFI's and does not apply to a BIOS boot. On UEFI neither
-> GRUB nor the UKIs are signed, so Secure Boot must be off
-> ([What is not done](not-done.md)).
+> An image built without the key, such as a fork's or a local build's, has
+> GRUB alone on the ESP, unsigned, and starts only with Secure Boot off.
 
 ## Tested
 
@@ -253,3 +271,5 @@ SeaBIOS, from a disk holding two versions, one of them on trial. Each drew
 the themed menu, counted the trial down in `grubenv` and honoured a one-shot
 request. On UEFI each left `LoaderInfo` as "GRUB 2.14" and
 `LoaderDevicePartUUID` as the ESP's for the UKI it chainloaded.
+`secure-boot` boots the image with Secure Boot on ([Secure
+Boot](secure-boot.md#tested)).

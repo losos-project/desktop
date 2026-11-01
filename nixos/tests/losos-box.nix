@@ -19,12 +19,13 @@
 #   * finds the box by its `_losos._tcp` announcement, with its release;
 #   * signs the losos client in with a token the box made for that key, and
 #     reads the box's state through the signed, encrypted envelope;
-#   * pins the box's certificate for the backups, signs in to LosOS Cloud
-#     with matus's LosOS Login password, and backs a home up to it.
-#
-# LosOS Git is on, and the backups' Git sign-in is expected to fail against
-# it: it takes no passwords (docs/not-done.md, "Backups"). The repositories
-# go to LosOS Cloud as files until the backups sign in through LosOS Login.
+#   * pins the box's certificate for the backups and signs in to LosOS
+#     Cloud with matus's LosOS Login password, the fallback;
+#   * signs the backups in through LosOS Login with a device code, which
+#     matus approves on LosOS Login's consent page in a browser, and gets
+#     a LosOS Cloud app password and a LosOS Git token of the desktop's;
+#   * backs a home up to both: files to LosOS Cloud, a repository to LosOS
+#     Git.
 #
 # Not the whole image, only what the desktop side needs, so it boots the
 # test driver's kernel and runs without KVM too, slowly.
@@ -102,9 +103,14 @@ in
     };
 
   nodes.desktop =
-    { pkgs, ... }:
+    { pkgs, lib, ... }:
     {
-      imports = [ ../modules/backup.nix ];
+      imports = [
+        ../modules/backup.nix
+        # The box's own browser for VM tests, which signs in to LosOS
+        # Login and presses Accept on the consent page as matus would.
+        (import "${src}/nix/tests/screens" { inherit pkgs; }).browser
+      ];
       # The programs this test needs from the OS's overlay, not the overlay whole: its
       # GTK and Qt would rebuild the keychain for nothing this test reads.
       nixpkgs.overlays = [
@@ -143,7 +149,8 @@ in
         settings.Resolve.MulticastDNS = true;
       };
       networking.firewall.allowedUDPPorts = [ 5353 ];
-      virtualisation.memorySize = 1536;
+      # Chromium under TCG beside the backups.
+      virtualisation.memorySize = lib.mkForce 2560;
     };
 
   testScript = ''
@@ -224,14 +231,59 @@ in
         served = box.succeed("curl -s http://127.0.0.1/setup/state.json | jq -r .fingerprint").strip()
         assert "sha256:" + pinned.replace(":", "").lower() == served.lower(), (pinned, served)
         desktop.fail(f"su - alice -c 'printf wrong | losos-backup sign-in cloud matus'")
+        # The fallback: a password, for LosOS Cloud only.
         alice(f"printf %s {PASSWORD} | losos-backup sign-in cloud matus")
-        # LosOS Git holds no passwords: this is what the backups' sign-in
-        # through LosOS Login replaces.
-        _, said = alice(f"printf %s {PASSWORD} | losos-backup sign-in git matus 2>&1", check=False)
-        print(said)
-        alice("losos-backup on")
         status = json.loads(alice("losos-backup status"))
-        assert status["cloud"] and status["enabled"], status
+        assert status["cloud"], status
+
+    with subtest("backups sign in through LosOS Login, approved in a browser"):
+        alice("setsid nohup losos-backup sign-in box >/tmp/sign-in.out 2>/tmp/sign-in.err &")
+        desktop.wait_until_succeeds("test -s /tmp/sign-in.out", timeout=300)
+        prompt = json.loads(desktop.succeed("head -n1 /tmp/sign-in.out"))
+        print(prompt)
+        link = prompt["link"]
+        assert link.startswith(f"{URL}/auth/consent/openid/device-authorization?user_code="), link
+        assert link.endswith(prompt["code"]), prompt
+        plan = {
+            "width": 1280,
+            "height": 800,
+            "shots": [
+                {
+                    "name": "backups-consent",
+                    "path": link[len(URL):],
+                    "waitFor": {"text": "LosOS Desktop backups"},
+                    "steps": [
+                        {"click": {"selector": "button:has-text('Accept')"}},
+                        {"waitText": "Consent has been accepted and processed"},
+                    ],
+                },
+            ],
+        }
+        desktop.succeed(f"echo {shlex.quote(json.dumps(plan))} > /tmp/plan.json")
+        _, said = desktop.execute(
+            f"losos-capture --base {URL} --plan /tmp/plan.json"
+            f" --out /tmp/screens --user matus --password '{PASSWORD}' 2>&1",
+            timeout=1800,
+        )
+        print(said)
+        desktop.copy_from_machine("/tmp/screens", "")
+        # The token is traded for this computer's credentials, and the
+        # command prints which accounts it signed in to.
+        desktop.wait_until_succeeds("test $(wc -l < /tmp/sign-in.out) -ge 2", timeout=300)
+        print(desktop.succeed("cat /tmp/sign-in.err"))
+        made = json.loads(desktop.succeed("tail -n1 /tmp/sign-in.out"))
+        print(made)
+        assert made["cloud"] and made["git"] and not made["problems"], made
+        status = json.loads(alice("losos-backup status"))
+        assert status["cloud"] and status["git"], status
+        # The token is LosOS Git's own, named for this computer.
+        token = alice("cat ~/.config/losos-backup/secrets.json | jq -r .git").strip()
+        who = json.loads(desktop.succeed(
+            f"curl -sk -H 'Authorization: token {token}' {URL}/git/api/v1/user"
+        ))
+        assert who["login"] == made["git"], (who, made)
+        # And the LosOS Login token was good for nothing else.
+        alice("losos-backup on")
 
     with subtest("a home reaches LosOS Cloud"):
         desktop.succeed("systemctl --user -M alice@ start losos-backup-now.service")
@@ -245,5 +297,12 @@ in
             f" {URL}/nextcloud/remote.php/dav/files/{user}/Backups/desktop/"
         )
         assert "letter.txt" in listing and "big.bin" in listing, listing
+        # The repository went to LosOS Git, not to LosOS Cloud as files.
+        assert report["repos"] >= 1, report
+        repos = json.loads(desktop.succeed(
+            f"curl -sk -H 'Authorization: token {token}' {URL}/git/api/v1/user/repos"
+        ))
+        print([r["name"] for r in repos])
+        assert any("notes" in r["name"] for r in repos), repos
   '';
 }

@@ -16,6 +16,16 @@
 let
   inherit (pkgs.stdenv.hostPlatform) isx86;
   pc = config.boot.kernel.enable;
+
+  inherit (config.system.boot.loader) kernelFile;
+
+  # The kernel image with the certificate of every module the system
+  # installs, the kernel's own and nvidia.nix's, from the same tree modprobe
+  # loads them from.
+  kernelImage = config.boot.kernelPackages.rebuildImage {
+    target = kernelFile;
+    inherit (config.system) modulesTree;
+  };
 in
 {
   boot = {
@@ -33,20 +43,19 @@ in
     # systemd loads, and those cost too little to compile to be worth sparing.
     kernel.sysctl."net.core.bpf_jit_harden" = 2;
 
-    # nixpkgs builds its kernel without the lockdown LSM and without module
-    # signatures, so both are added here, and that kernel and every module
+    # nixpkgs' kernel has the lockdown LSM and module signatures but enforces
+    # neither, so both are forced here, and that kernel and every module
     # package built against it come from this project's CI rather than
     # cache.nixos.org.
     #
     # Lockdown keeps root from changing the running kernel: no /dev/mem, no
     # unsigned kexec, no raw PCI or MSR writes, and no unsigned modules,
-    # which is the part that matters, since a module is kernel code. The
-    # build signs every module it makes with a key it generates and then
-    # throws away (nixpkgs keeps the build tree out of the kernel's dev
-    # output), so no module made after it can be signed, and nvidia.nix
-    # builds NVIDIA's open module inside the same build for that reason.
-    # That key is also why nixpkgs leaves signing off: two builds of this
-    # kernel are never bit-for-bit the same.
+    # which is the part that matters, since a module is kernel code. nixpkgs
+    # signs every module with kmodigest, which makes each one a certificate
+    # of its own from the module's contents, so a build is the same each
+    # time and a module package built later is signed the same way
+    # (nvidia.nix). The kernel trusts those certificates only once they are
+    # in its image, which is what the image below is for.
     #
     # Integrity mode is forced in the build rather than set with lockdown=
     # on the command line: systemd-stub takes a command line from the boot
@@ -61,7 +70,8 @@ in
       {
         name = "losos-lockdown";
         patch = null;
-        # Forced where nixpkgs' common-config.nix says no.
+        # mkForce where nixpkgs' common-config.nix said no until October
+        # 2026, so that it cannot again.
         structuredExtraConfig = with lib.kernel; {
           SECURITY_LOCKDOWN_LSM = lib.mkForce yes;
           # Before the other LSMs and the rest of early boot, so nothing the
@@ -78,6 +88,11 @@ in
         };
       }
     ];
+
+    # The kernel image as built carries no module certificates: nixpkgs
+    # leaves room for them and puts them in only when asked. Without them
+    # this kernel would load no module at all, its own included.
+    uki.settings.UKI.Linux = lib.mkIf pc "${kernelImage}/${kernelFile}";
 
     kernelParams = lib.mkIf pc (
       [
@@ -98,4 +113,15 @@ in
       ++ lib.optional isx86 "intel_iommu=on"
     );
   };
+
+  # The same image for what boots this kernel without the UKI: the system's
+  # own kernel link, which QEMU boots in the VM tests (NixOS links the plain
+  # build first), and service machines (service-machines.nix).
+  system.build.kernelImage = lib.mkIf pc "${kernelImage}/${kernelFile}";
+
+  system.systemBuilderCommands = lib.mkIf pc (
+    lib.mkAfter ''
+      ln -sf ${kernelImage}/${kernelFile} $out/kernel
+    ''
+  );
 }

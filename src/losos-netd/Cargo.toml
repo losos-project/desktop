@@ -1,0 +1,36 @@
+[package]
+name = "losos-netd"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "losos_netd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "losos-netd"
+path = "src/main.rs"
+
+[dependencies]
+# Logs go through tracing to the machine's console, `RUST_LOG` choosing the
+# level, and failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# PID 1's reaping and power-off, wpa_supplicant's datagram socket, and the
+# power button's input events.
+libc = "0.2"
+# The edge its traffic leaves through (src/edge.rs): chosen by the rule a
+# LosOS box goes by, from LosOS's own crate, pinned like the components;
+# asked over HTTPS (webpki's roots, no C but ring) or through Tor's SOCKS;
+# and answered in JSON.
+losos-edge-path = { git = "https://github.com/dasmatus/losos", rev = "e9e0c30ff1123ba114eb43c0f6a4ec4ac33a658b" }
+ureq = { version = "3.4", default-features = false, features = ["rustls", "socks-proxy", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
