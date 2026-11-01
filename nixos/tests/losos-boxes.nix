@@ -79,6 +79,18 @@ in
         environment.systemPackages = [
           pkgs.losos-boxes
           pkgs.curl
+          (pkgs.writeShellApplication {
+            name = "losos-guest-run-test";
+            runtimeInputs = with pkgs; [
+              coreutils
+              gawk
+              gnused
+              systemd
+            ];
+            text = builtins.replaceStrings [ "@user@" "@display@" ] [ "user" "wayland-0" ] (
+              builtins.readFile ../guest/losos-guest-run.sh
+            );
+          })
         ];
 
         # network.nix's mDNS: resolved with MulticastDNS on the link and in
@@ -113,23 +125,78 @@ in
         assert len(found.strip().splitlines()) == 2, "a machine that is not a box was listed"
 
     with subtest("watch writes an entry per box"):
-        desktop.succeed(
-            "mkdir -p /tmp/data && (XDG_DATA_HOME=/tmp/data losos-boxes watch >/tmp/watch.log 2>&1 &)"
-        )
+        box.succeed("systemctl stop avahi-daemon.service")
+        desktop.succeed("""
+            mkdir -p /tmp/data /tmp/mock-bin
+            printf '%s\\n' '#!/bin/sh' 'echo poll >>/tmp/keyring-polls' \\
+              "if [ -e /tmp/keyring-locked ]; then echo 'b true'; else echo 'b false'; fi" \\
+              >/tmp/mock-bin/busctl
+            printf '%s\\n' '#!/bin/sh' 'cat /tmp/losos-hosts' >/tmp/mock-bin/losos
+            chmod +x /tmp/mock-bin/busctl /tmp/mock-bin/losos
+            printf 'http://box.local  box\\n  away from home: https://box.losos.cfd\\n' >/tmp/losos-hosts
+            PATH=/tmp/mock-bin:/run/current-system/sw/bin \\
+              LOSOS_BOXES_REMEMBER_EVERY_SECS=1 XDG_DATA_HOME=/tmp/data \\
+              losos-boxes watch >/tmp/watch.log 2>&1 &
+        """)
         apps = "/tmp/data/applications"
         desktop.wait_for_file(f"{apps}/losos-box-box.local.desktop", timeout=60)
         desktop.wait_for_file(f"{apps}/losos-box-oldbox.local.desktop", timeout=60)
         entry = desktop.succeed(f"cat {apps}/losos-box-box.local.desktop")
         print(entry)
-        assert "\nExec=xdg-open http://box.local/\n" in entry
-        assert "\nComment=LosOS v0.4.0 box at box.local\n" in entry
+        assert "\nComment=LosOS box box.local, away from home, through box.losos.cfd\n" in entry
         assert "losos-boxes terminal http://box.local\n" in entry
-        # The name resolves for the browser and losos, and the box answers.
-        desktop.succeed("curl -sf http://box.local/ | grep -qx 'admin pages'")
+        cloud = f"{apps}/losos-box-box.local@cloud.desktop"
+        desktop.wait_for_file(cloud, timeout=60)
+        assert "Exec=xdg-open https://box.losos.cfd/cloud/" in desktop.succeed(
+            f"cat {cloud}"
+        )
+        listed = desktop.succeed(
+            f"LOSOS_GUEST_APPLICATIONS={apps} losos-guest-run-test --list"
+        )
+        assert "losos-box-box.local@cloud\tLosOS Cloud — box\n" in listed
 
-    with subtest("a box that leaves loses its entry, and clear removes the rest"):
-        box.succeed("systemctl stop avahi-daemon.service")
-        desktop.wait_until_fails(f"test -e {apps}/losos-box-box.local.desktop", timeout=60)
+        with subtest("a locked keyring preserves away entries"):
+            desktop.succeed(
+                "touch /tmp/keyring-locked; : >/tmp/losos-hosts; "
+                "wc -l </tmp/keyring-polls >/tmp/polls-before"
+            )
+            desktop.wait_until_succeeds(
+                "test $(wc -l </tmp/keyring-polls) -gt $(cat /tmp/polls-before)",
+                timeout=10,
+            )
+            desktop.succeed(f"test -e {apps}/losos-box-box.local.desktop && test -e {cloud}")
+
+        with subtest("away entries become a LAN entry, then return when the box leaves"):
+            desktop.succeed(
+                "rm /tmp/keyring-locked; "
+                "printf 'http://box.local  box\\n  away from home: https://box.losos.cfd\\n' "
+                ">/tmp/losos-hosts"
+            )
+            box.succeed("systemctl start avahi-daemon.service")
+            desktop.wait_until_succeeds(
+                f"grep -q 'Comment=LosOS v0.4.0 box at box.local' {apps}/losos-box-box.local.desktop",
+                timeout=60,
+            )
+            lan_entry = desktop.succeed(f"cat {apps}/losos-box-box.local.desktop")
+            assert "\nExec=xdg-open http://box.local/\n" in lan_entry
+            assert "losos-boxes terminal http://box.local\n" in lan_entry
+            desktop.succeed("curl -sf http://box.local/ | grep -qx 'admin pages'")
+            desktop.wait_until_fails(f"test -e {cloud}", timeout=10)
+            box.succeed("systemctl stop avahi-daemon.service")
+            desktop.wait_until_succeeds(
+                f"grep -q 'away from home' {apps}/losos-box-box.local.desktop",
+                timeout=60,
+            )
+            desktop.wait_for_file(cloud, timeout=10)
+
+        with subtest("logging out removes the away entries"):
+            desktop.succeed(": >/tmp/losos-hosts")
+            desktop.wait_until_fails(
+                f"test -e {apps}/losos-box-box.local.desktop || test -e {cloud}",
+                timeout=10,
+            )
+
+    with subtest("clear removes the remaining LAN entry"):
         desktop.succeed(f"test -e {apps}/losos-box-oldbox.local.desktop")
         desktop.succeed("pkill -f 'losos-boxes watch'")
         desktop.succeed("XDG_DATA_HOME=/tmp/data losos-boxes clear")

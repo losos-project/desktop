@@ -128,8 +128,7 @@ in
         (import ../guest/kicksecure-settings.nix {
           inherit (pkgs.stdenv.hostPlatform) isx86;
           falseProgram = "/bin/false";
-        })
-        .disabledModules.filesystems
+        }).disabledModules.filesystems
         ++ [
           "cdrom"
           "sr_mod"
