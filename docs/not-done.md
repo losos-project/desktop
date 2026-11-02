@@ -374,6 +374,11 @@
   rules apply in Danube alone. Other browsers and apps get only whole
   [blocked domains](adblock.md), and a program
   with its own DNS over HTTPS skips it entirely.
+- **Labels on the network cover `virbr0` only.** A machine on a network
+  someone made in virt-manager is not filtered by its label. Neither is a
+  red machine kept from the host's public address, on a PC that has one
+  rather than a LAN address. A machine's new label takes effect when it
+  next starts ([labels on the network](hypervisor.md#labels-on-the-network)).
 - **Encrypted DNS moves trust rather than removing it.** With
   [encrypted DNS](adblock.md#encrypted-dns) on, the network no longer sees
   the names, but the resolver does, Quad9 or Mullvad by default. Queries are
@@ -390,7 +395,10 @@
   machine automatically either, and its owner makes it from the template.
   The machine itself has not met a real box on a real LAN yet: the machines
   test boots a stand-in box beside the host, and the real box in
-  `nixos/tests/losos-box.nix` is found by a desktop with no machine.
+  `nixos/tests/losos-box.nix` is found by a desktop with no machine. Away
+  from home only `losos`, the palette's search and LosOS Cloud's link reach a
+  box, through its edge; backups and the other machines' connections still
+  need the box's own network.
 - **Backups to a LosOS box keep one copy.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A

@@ -8,6 +8,7 @@
     ./base.nix
     ./boot.nix
     ./grub.nix
+    ./uki-files.nix
     ./secure-boot.nix
     ./bios.nix
     ./splash.nix
@@ -15,6 +16,7 @@
     ./hardware.nix
     ./nvidia.nix
     ./libvirt.nix
+    ./machine-labels.nix
     ./machines.nix
     ./service-machines.nix
     ./schizo.nix
@@ -42,6 +44,7 @@
     ./eid-signin.nix
     ./allocator.nix
     ./image.nix
+    ./uki-files.nix
     ./disk.nix
     # hibernate.nix is gone: the kernel is locked down (kernel-hardening.nix),
     # and a locked-down kernel refuses to hibernate. It sealed the swap's key
