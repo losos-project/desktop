@@ -1945,7 +1945,10 @@ pub enum Var {
     Strings(Vec<String>),
     /// `a{sv}`
     Dict(Vec<(String, Var)>),
-    /// The call's arguments.
+    /// An array of the given element type (`(us)`), which an empty one
+    /// still needs.
+    Array(&'static str, Vec<Var>),
+    /// The call's arguments, or a struct inside them.
     Tuple(Vec<Var>),
 }
 
@@ -1981,6 +1984,11 @@ impl Var {
                         children.len() as gsize,
                     )
                 }
+                Var::Array(element, items) => {
+                    let children: Vec<*mut GVariant> = items.iter().map(|v| v.to_gvariant()).collect();
+                    let element = cstring(element);
+                    g_variant_new_array(element.as_ptr().cast(), children.as_ptr(), children.len() as gsize)
+                }
                 Var::Tuple(items) => {
                     let children: Vec<*mut GVariant> = items.iter().map(|v| v.to_gvariant()).collect();
                     g_variant_new_tuple(children.as_ptr(), children.len() as gsize)
@@ -1990,13 +1998,69 @@ impl Var {
     }
 }
 
-/// A D-Bus value received: the two kinds the notification signals and
-/// replies carry, and anything else.
+/// A D-Bus value received: the kinds the notification signals and the
+/// portals' replies carry, and anything else.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Arg {
     U32(u32),
     Str(String),
+    /// `as`
+    Strings(Vec<String>),
+    /// `a{sv}`, each value unwrapped from its variant.
+    Dict(Vec<(String, Arg)>),
     Other,
+}
+
+impl Arg {
+    /// The value under `key` in a [`Arg::Dict`].
+    pub fn get(&self, key: &str) -> Option<&Arg> {
+        match self {
+            Arg::Dict(entries) => entries.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+}
+
+/// One GVariant as an [`Arg`]; `value` stays the caller's.
+unsafe fn arg(value: *mut GVariant) -> Arg {
+    unsafe {
+        let kind = CStr::from_ptr(g_variant_get_type_string(value)).to_bytes();
+        let child = |n| g_variant_get_child_value(value, n);
+        match kind {
+            b"u" => Arg::U32(g_variant_get_uint32(value)),
+            b"s" | b"o" => Arg::Str(string(g_variant_get_string(value, ptr::null_mut())).unwrap_or_default()),
+            b"v" => {
+                let inner = g_variant_get_variant(value);
+                let parsed = arg(inner);
+                g_variant_unref(inner);
+                parsed
+            }
+            b"as" => Arg::Strings(
+                (0..g_variant_n_children(value))
+                    .map(|n| {
+                        let s = child(n);
+                        let text = string(g_variant_get_string(s, ptr::null_mut())).unwrap_or_default();
+                        g_variant_unref(s);
+                        text
+                    })
+                    .collect(),
+            ),
+            b"a{sv}" => Arg::Dict(
+                (0..g_variant_n_children(value))
+                    .map(|n| {
+                        let entry = child(n);
+                        let (key, value) = (g_variant_get_child_value(entry, 0), g_variant_get_child_value(entry, 1));
+                        let pair = (string(g_variant_get_string(key, ptr::null_mut())).unwrap_or_default(), arg(value));
+                        g_variant_unref(key);
+                        g_variant_unref(value);
+                        g_variant_unref(entry);
+                        pair
+                    })
+                    .collect(),
+            ),
+            _ => Arg::Other,
+        }
+    }
 }
 
 /// The children of a tuple GVariant (a reply's or a signal's arguments).
@@ -2008,14 +2072,9 @@ unsafe fn args(tuple: *mut GVariant) -> Vec<Arg> {
     (0..count)
         .map(|n| unsafe {
             let child = g_variant_get_child_value(tuple, n);
-            let kind = CStr::from_ptr(g_variant_get_type_string(child)).to_bytes();
-            let arg = match kind {
-                b"u" => Arg::U32(g_variant_get_uint32(child)),
-                b"s" | b"o" => Arg::Str(string(g_variant_get_string(child, ptr::null_mut())).unwrap_or_default()),
-                _ => Arg::Other,
-            };
+            let parsed = arg(child);
             g_variant_unref(child);
-            arg
+            parsed
         })
         .collect()
 }
@@ -2058,6 +2117,24 @@ impl Bus {
         args: &Var,
         done: F,
     ) {
+        // The bus's default timeout.
+        self.call_waiting(dest, path, interface, method, args, -1, done);
+    }
+
+    /// As [`Self::call`], waiting up to `timeout_ms` for the reply: for a
+    /// service D-Bus starts on this call, which on a slow machine takes
+    /// longer than the bus's default 25 seconds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn call_waiting<F: FnOnce(Replied) + 'static>(
+        &self,
+        dest: &str,
+        path: &str,
+        interface: &str,
+        method: &str,
+        args: &Var,
+        timeout_ms: i32,
+        done: F,
+    ) {
         let (dest, path, interface, method) = (cstring(dest), cstring(path), cstring(interface), cstring(method));
         let (callback, data) = boxed(move |CallFinish(reply)| done(reply));
         unsafe {
@@ -2070,8 +2147,7 @@ impl Bus {
                 args.to_gvariant(),
                 ptr::null(),
                 G_DBUS_CALL_FLAGS_NONE,
-                // The bus's default timeout.
-                -1,
+                timeout_ms,
                 ptr::null_mut(),
                 callback,
                 data,
@@ -2082,22 +2158,34 @@ impl Bus {
     /// Calls `f` with the name and arguments of every signal `sender`
     /// emits on `interface` at `path`, for as long as the connection lives.
     pub fn on_signal<F: Fn(&str, Vec<Arg>) + 'static>(&self, sender: &str, interface: &str, path: &str, f: F) {
-        unsafe extern "C" fn trampoline<F: Fn(&str, Vec<Arg>)>(
+        self.subscribe(sender, interface, Some(path), move |_, signal, args| f(signal, args));
+    }
+
+    /// As [`Self::on_signal`], at any path, which `f` is told: a portal
+    /// answers each request on an object of its own.
+    pub fn on_signal_anywhere<F: Fn(&str, &str, Vec<Arg>) + 'static>(&self, sender: &str, interface: &str, f: F) {
+        self.subscribe(sender, interface, None, f);
+    }
+
+    fn subscribe<F: Fn(&str, &str, Vec<Arg>) + 'static>(&self, sender: &str, interface: &str, path: Option<&str>, f: F) {
+        unsafe extern "C" fn trampoline<F: Fn(&str, &str, Vec<Arg>)>(
             _: *mut GDBusConnection,
             _sender: *const c_char,
-            _path: *const c_char,
+            path: *const c_char,
             _interface: *const c_char,
             signal: *const c_char,
             parameters: *mut GVariant,
             data: gpointer,
         ) {
+            let path = unsafe { string(path) }.unwrap_or_default();
             let signal = unsafe { string(signal) }.unwrap_or_default();
-            unsafe { (*(data as *const F))(&signal, args(parameters)) }
+            unsafe { (*(data as *const F))(&path, &signal, args(parameters)) }
         }
         unsafe extern "C" fn free<F>(data: gpointer) {
             drop(unsafe { Box::from_raw(data as *mut F) });
         }
-        let (sender, interface, path) = (cstring(sender), cstring(interface), cstring(path));
+        let (sender, interface) = (cstring(sender), cstring(interface));
+        let path = path.map(cstring);
         let data = Box::into_raw(Box::new(f)) as gpointer;
         unsafe {
             g_dbus_connection_signal_subscribe(
@@ -2105,7 +2193,7 @@ impl Bus {
                 sender.as_ptr(),
                 interface.as_ptr(),
                 ptr::null(),
-                path.as_ptr(),
+                path.as_ref().map_or(ptr::null(), |p| p.as_ptr()),
                 ptr::null(),
                 G_DBUS_SIGNAL_FLAGS_NONE,
                 Some(trampoline::<F>),
@@ -2127,5 +2215,228 @@ impl WebView {
     /// Whether `other` is this same view.
     pub fn is(&self, other: &WebView) -> bool {
         self.as_ptr() == other.as_ptr()
+    }
+}
+
+// A page's file upload, its notifications, and finding text in it.
+
+object!(
+    /// A page's `<input type=file>` asking for files, kept until it is
+    /// answered: dropping the last reference unanswered cancels it.
+    FileChooserRequest(WebKitFileChooserRequest)
+);
+
+impl FileChooserRequest {
+    /// The MIME types the input accepts, empty for any.
+    pub fn mime_types(&self) -> Vec<String> {
+        let list = unsafe { webkit_file_chooser_request_get_mime_types(self.as_ptr()) };
+        unsafe { strings(list) }
+    }
+
+    pub fn select_multiple(&self) -> bool {
+        unsafe { webkit_file_chooser_request_get_select_multiple(self.as_ptr()) != FALSE }
+    }
+
+    /// Answers with `paths`, which WebKit copies.
+    pub fn select_files(&self, paths: &[String]) {
+        let owned: Vec<CString> = paths.iter().map(|p| cstring(p)).collect();
+        let mut pointers: Vec<*const c_char> = owned.iter().map(|s| s.as_ptr()).collect();
+        pointers.push(ptr::null());
+        unsafe { webkit_file_chooser_request_select_files(self.as_ptr(), pointers.as_ptr()) }
+    }
+
+    pub fn cancel(&self) {
+        unsafe { webkit_file_chooser_request_cancel(self.as_ptr()) }
+    }
+}
+
+/// A NULL-terminated array of C strings WebKit keeps, copied out.
+unsafe fn strings(list: *const *const c_char) -> Vec<String> {
+    let mut out = Vec::new();
+    if list.is_null() {
+        return out;
+    }
+    let mut at = list;
+    while let Some(s) = unsafe { string(*at) } {
+        out.push(s);
+        at = unsafe { at.add(1) };
+    }
+    out
+}
+
+object!(
+    /// A notification a page asked to show.
+    Notification(WebKitNotification)
+);
+
+impl Notification {
+    pub fn title(&self) -> String {
+        unsafe { string(webkit_notification_get_title(self.as_ptr())) }.unwrap_or_default()
+    }
+
+    pub fn body(&self) -> String {
+        unsafe { string(webkit_notification_get_body(self.as_ptr())) }.unwrap_or_default()
+    }
+
+    /// The page's tag for it: a new notification with the same tag
+    /// replaces the old one.
+    pub fn tag(&self) -> Option<String> {
+        unsafe { string(webkit_notification_get_tag(self.as_ptr())) }.filter(|t| !t.is_empty())
+    }
+
+    /// The person clicked it: the page's `onclick` runs.
+    pub fn clicked(&self) {
+        unsafe { webkit_notification_clicked(self.as_ptr()) }
+    }
+
+    /// The person dismissed it: the page's `onclose` runs.
+    pub fn close(&self) {
+        unsafe { webkit_notification_close(self.as_ptr()) }
+    }
+
+    /// `closed`: the page closed it, or [`Self::close`] did.
+    pub fn on_closed<F: Fn(&Notification) + 'static>(&self, f: F) {
+        unsafe extern "C" fn trampoline<F: Fn(&Notification)>(
+            notification: *mut WebKitNotification,
+            data: gpointer,
+        ) {
+            unsafe { (*(data as *const F))(&Notification::passing(notification)) }
+        }
+        self.connect("closed", trampoline::<F> as *const (), f);
+    }
+}
+
+object!(
+    /// Finding text in a page: one search at a time, highlighted in it.
+    FindController(WebKitFindController)
+);
+
+/// The most matches a search counts and highlights.
+const MATCHES: u32 = 1000;
+
+impl FindController {
+    /// Highlights every match of `text`, case-insensitively, wrapping round
+    /// the page, and goes to the first; `found-text` or
+    /// `failed-to-find-text` says how it went.
+    pub fn search(&self, text: &str) {
+        let text = cstring(text);
+        let options = WEBKIT_FIND_OPTIONS_CASE_INSENSITIVE | WEBKIT_FIND_OPTIONS_WRAP_AROUND;
+        unsafe { webkit_find_controller_search(self.as_ptr(), text.as_ptr(), options, MATCHES) }
+    }
+
+    pub fn next(&self) {
+        unsafe { webkit_find_controller_search_next(self.as_ptr()) }
+    }
+
+    pub fn previous(&self) {
+        unsafe { webkit_find_controller_search_previous(self.as_ptr()) }
+    }
+
+    /// Ends the search and takes the highlights away.
+    pub fn finish(&self) {
+        unsafe { webkit_find_controller_search_finish(self.as_ptr()) }
+    }
+
+    /// `found-text`, with how many matches there are.
+    pub fn on_found<F: Fn(u32) + 'static>(&self, f: F) {
+        unsafe extern "C" fn trampoline<F: Fn(u32)>(
+            _: *mut WebKitFindController,
+            count: guint,
+            data: gpointer,
+        ) {
+            unsafe { (*(data as *const F))(count) }
+        }
+        self.connect("found-text", trampoline::<F> as *const (), f);
+    }
+
+    /// `failed-to-find-text`.
+    pub fn on_not_found<F: Fn() + 'static>(&self, f: F) {
+        unsafe extern "C" fn trampoline<F: Fn()>(_: *mut WebKitFindController, data: gpointer) {
+            unsafe { (*(data as *const F))() }
+        }
+        self.connect("failed-to-find-text", trampoline::<F> as *const (), f);
+    }
+}
+
+impl WebView {
+    /// `run-file-chooser`. The request is handed over for keeping; `f`
+    /// returns `true` when it will be answered, `false` to let WebKit
+    /// cancel it.
+    pub fn on_run_file_chooser<F: Fn(&WebView, FileChooserRequest) -> bool + 'static>(&self, f: F) {
+        unsafe extern "C" fn trampoline<F: Fn(&WebView, FileChooserRequest) -> bool>(
+            view: *mut WebKitWebView,
+            request: *mut WebKitFileChooserRequest,
+            data: gpointer,
+        ) -> gboolean {
+            let request = unsafe { FileChooserRequest::borrowed(request) }
+                .expect("a signal never passes NULL");
+            gbool(unsafe { (*(data as *const F))(&WebView::passing(view), request) })
+        }
+        self.connect("run-file-chooser", trampoline::<F> as *const (), f);
+    }
+
+    /// `show-notification`, the notification handed over for keeping; `f`
+    /// returns `true` when it was shown, `false` to let WebKit drop it.
+    pub fn on_show_notification<F: Fn(&WebView, Notification) -> bool + 'static>(&self, f: F) {
+        unsafe extern "C" fn trampoline<F: Fn(&WebView, Notification) -> bool>(
+            view: *mut WebKitWebView,
+            notification: *mut WebKitNotification,
+            data: gpointer,
+        ) -> gboolean {
+            let notification = unsafe { Notification::borrowed(notification) }
+                .expect("a signal never passes NULL");
+            gbool(unsafe { (*(data as *const F))(&WebView::passing(view), notification) })
+        }
+        self.connect("show-notification", trampoline::<F> as *const (), f);
+    }
+
+    pub fn find_controller(&self) -> FindController {
+        unsafe { FindController::borrowed(webkit_web_view_get_find_controller(self.as_ptr())) }
+            .expect("a web view has a find controller")
+    }
+}
+
+impl WebContext {
+    /// Lets every web process see `path`, read-only or not. Only before
+    /// the first one starts.
+    pub fn add_path_to_sandbox(&self, path: &Path, read_only: bool) {
+        let path = cpath(path);
+        unsafe { webkit_web_context_add_path_to_sandbox(self.as_ptr(), path.as_ptr(), gbool(read_only)) }
+    }
+}
+
+impl Bus {
+    /// This connection's own name on the bus (`:1.42`), which the portals
+    /// put in the path of each request they answer.
+    pub fn unique_name(&self) -> String {
+        unsafe { string(g_dbus_connection_get_unique_name(self.as_ptr())) }.unwrap_or_default()
+    }
+
+    /// Calls `method` and waits for its reply, for a caller with no main
+    /// loop running.
+    pub fn call_sync(&self, dest: &str, path: &str, interface: &str, method: &str, arguments: &Var) -> Replied {
+        let (dest, path, interface, method) = (cstring(dest), cstring(path), cstring(interface), cstring(method));
+        let mut error = ptr::null_mut();
+        let reply = unsafe {
+            g_dbus_connection_call_sync(
+                self.as_ptr(),
+                dest.as_ptr(),
+                path.as_ptr(),
+                interface.as_ptr(),
+                method.as_ptr(),
+                arguments.to_gvariant(),
+                ptr::null(),
+                G_DBUS_CALL_FLAGS_NONE,
+                -1,
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        if reply.is_null() {
+            return Err(unsafe { take_error(error) });
+        }
+        let parsed = unsafe { args(reply) };
+        unsafe { g_variant_unref(reply) };
+        Ok(parsed)
     }
 }

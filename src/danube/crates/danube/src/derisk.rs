@@ -16,6 +16,9 @@
 //! open. Registering again replaces the data, and derisk drops it when
 //! the connection closes.
 //!
+//! The history and the bookmarks are two more menus (library.rs), which
+//! the palette searches as it does every menu's items.
+//!
 //! derisk names windows by its own ids, so Danube finds its window in
 //! derisk's `state` by app id and title. The window sends an [`Update`]
 //! whenever its title or tabs change, and this thread runs until the
@@ -34,6 +37,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
 use serde_json::{json, Value};
 use tracing::warn;
 
+use crate::library::Page;
 use crate::shared::{Command, Commands, ExtCommand, ExtensionInfo, Tab, TabId};
 
 pub const APP_ID: &str = "org.losos.Danube";
@@ -52,6 +56,9 @@ pub struct Update {
     pub filters: usize,
     pub palette: u64,
     pub extensions: Vec<ExtensionInfo>,
+    /// The newest pages in the history, and the bookmarks.
+    pub history: Vec<Page>,
+    pub bookmarks: Vec<Page>,
 }
 
 /// The menus for a window showing `tabs`, `active` the one in front, with
@@ -88,6 +95,7 @@ pub fn menus(tabs: &[Tab], active: Option<TabId>, filters: usize, extensions: &[
     page.push(json!({"kind": "separator"}));
     page.push(json!({"kind": "item", "id": ADDRESS, "label": "Open Address\u{2026}", "shortcut": "Ctrl+L"}));
     page.push(json!({"kind": "item", "id": format!("{PREFIX}copy"), "label": "Copy Address", "enabled": current.is_some_and(|t| !t.uri.is_empty())}));
+    page.push(json!({"kind": "item", "id": format!("{PREFIX}find"), "label": "Find in Page\u{2026}", "shortcut": "Ctrl+F", "enabled": current.is_some()}));
     let mut switch = vec![
         json!({"kind": "item", "id": format!("{PREFIX}new"), "label": "New Tab", "shortcut": "Ctrl+T"}),
         json!({"kind": "separator"}),
@@ -146,6 +154,63 @@ pub fn menus(tabs: &[Tab], active: Option<TabId>, filters: usize, extensions: &[
     ])
 }
 
+/// `menus` with Bookmarks and History after Navigate: bookmarking the
+/// active tab's page, then each bookmark; the newest pages, then clearing
+/// them. Picking a page loads it in the active tab.
+pub fn with_library(mut menus: Value, tabs: &[Tab], active: Option<TabId>, history: &[Page], bookmarks: &[Page]) -> Value {
+    let current = active.and_then(|id| tabs.iter().find(|t| t.id == id));
+    let marked = current.is_some_and(|t| bookmarks.iter().any(|b| b.uri == t.uri));
+    let markable = current.is_some_and(|t| ["https://", "http://", "file://"].iter().any(|s| t.uri.starts_with(s)));
+    let mut marks = vec![json!({
+        "kind": "item",
+        "id": format!("{PREFIX}bookmark"),
+        "label": if marked { "Remove Bookmark" } else { "Bookmark This Page" },
+        "shortcut": "Ctrl+D",
+        "enabled": markable,
+    })];
+    if !bookmarks.is_empty() {
+        marks.push(json!({"kind": "separator"}));
+    }
+    for page in bookmarks {
+        marks.push(json!({"kind": "item", "id": format!("{PREFIX}bookmarks.{}", page.uri), "label": page.label()}));
+    }
+    let mut recent: Vec<Value> = history
+        .iter()
+        .map(|page| json!({"kind": "item", "id": format!("{PREFIX}history.{}", page.uri), "label": page.label()}))
+        .collect();
+    if recent.is_empty() {
+        recent.push(json!({"kind": "item", "id": format!("{PREFIX}info.history"), "label": "No pages visited yet", "enabled": false}));
+    }
+    recent.push(json!({"kind": "separator"}));
+    recent.push(json!({"kind": "item", "id": format!("{PREFIX}clearhistory"), "label": "Clear History", "enabled": !history.is_empty()}));
+    if let Some(list) = menus.as_array_mut() {
+        let at = list.iter().position(|m| m["title"] == "Navigate").map_or(list.len(), |n| n + 1);
+        list.insert(at, json!({"title": "History", "entries": recent}));
+        list.insert(at, json!({"title": "Bookmarks", "entries": marks}));
+    }
+    menus
+}
+
+/// The command for a picked Bookmarks or History item; `None` for any
+/// other.
+pub fn library_command(item: &str, active: Option<TabId>) -> Option<Command> {
+    let rest = item.strip_prefix(PREFIX)?;
+    let load = |uri: &str| match active {
+        Some(tab) => Command::Load(tab, uri.to_owned()),
+        None => Command::NewTab {
+            uri: Some(uri.to_owned()),
+            activate: true,
+        },
+    };
+    Some(match rest.split_once('.') {
+        Some(("bookmarks", uri)) if !uri.is_empty() => load(uri),
+        Some(("history", uri)) if !uri.is_empty() => load(uri),
+        None if rest == "bookmark" => Command::Bookmark(active?),
+        None if rest == "clearhistory" => Command::ClearHistory,
+        _ => return None,
+    })
+}
+
 /// The tab after (or before) `tab` in the strip's order, wrapping round;
 /// `None` when it is the only one or unknown.
 pub fn neighbour(tabs: &[Tab], tab: TabId, forward: bool) -> Option<TabId> {
@@ -191,6 +256,7 @@ pub fn command(item: &str, tabs: &[Tab], active: Option<TabId>, extensions: &[Ex
             "reload" => Command::Reload(active?),
             "stop" => Command::Stop(active?),
             "copy" => Command::CopyAddress(active?),
+            "find" => Command::ShowFind,
             _ => return None,
         },
         _ => return None,
@@ -375,7 +441,9 @@ fn talk(
                 if !send(stream, show_palette(), Asked::Palette, &mut asked) {
                     return Ok(());
                 }
-            } else if let Some(command) = command(item, &current.tabs, current.active, &current.extensions) {
+            } else if let Some(command) = library_command(item, current.active)
+                .or_else(|| command(item, &current.tabs, current.active, &current.extensions))
+            {
                 commands.send(command);
             }
             continue;
@@ -390,7 +458,13 @@ fn talk(
         }
         match asked.pop_front() {
             Some(Asked::State) if message["ok"] == true => {
-                let menus = menus(&current.tabs, current.active, current.filters, &current.extensions);
+                let menus = with_library(
+                    menus(&current.tabs, current.active, current.filters, &current.extensions),
+                    &current.tabs,
+                    current.active,
+                    &current.history,
+                    &current.bookmarks,
+                );
                 let window = message["result"]["windows"].as_array().and_then(|windows| {
                     windows
                         .iter()
@@ -502,6 +576,47 @@ mod tests {
             command("danube.previous", &two, Some(4), &[]),
             Some(Command::Activate(7))
         ));
+    }
+
+    #[test]
+    fn bookmarks_and_history_have_menus() {
+        let tabs = vec![Tab {
+            id: 4,
+            uri: "https://a.example/".into(),
+            ..Tab::default()
+        }];
+        let page = |uri: &str, title: &str| Page {
+            uri: uri.into(),
+            title: title.into(),
+            time: 0,
+        };
+        let history = vec![page("https://b.example/", "B"), page("https://c.example/", "")];
+        let bookmarks = vec![page("https://a.example/", "A")];
+        let all = with_library(menus(&tabs, Some(4), 0, &[]), &tabs, Some(4), &history, &bookmarks);
+        let titles: Vec<_> = all.as_array().unwrap().iter().map(|m| m["title"].as_str().unwrap()).collect();
+        assert_eq!(titles, ["Page", "Tabs", "Navigate", "Bookmarks", "History", "Close Tab", "Extensions"]);
+        assert_eq!(all[3]["entries"][0]["label"], "Remove Bookmark");
+        assert_eq!(all[3]["entries"][2]["label"], "A");
+        assert_eq!(all[4]["entries"][1]["label"], "https://c.example/");
+        assert_eq!(
+            all[4]["entries"][1]["id"],
+            "danube.history.https://c.example/"
+        );
+        assert!(matches!(
+            library_command(all[4]["entries"][1]["id"].as_str().unwrap(), Some(4)),
+            Some(Command::Load(4, uri)) if uri == "https://c.example/"
+        ));
+        assert!(matches!(
+            library_command("danube.bookmarks.https://a.example/", None),
+            Some(Command::NewTab { uri: Some(uri), activate: true }) if uri == "https://a.example/"
+        ));
+        assert!(matches!(library_command("danube.bookmark", Some(4)), Some(Command::Bookmark(4))));
+        assert!(library_command("danube.history.", Some(4)).is_none());
+        assert!(library_command("danube.tab.4", Some(4)).is_none());
+        let empty = with_library(menus(&[], None, 0, &[]), &[], None, &[], &[]);
+        assert_eq!(empty[3]["entries"][0]["enabled"], false);
+        assert_eq!(empty[4]["entries"][0]["label"], "No pages visited yet");
+        assert!(matches!(command("danube.find", &tabs, Some(4), &[]), Some(Command::ShowFind)));
     }
 
     #[test]

@@ -7,7 +7,7 @@
     "test": "sh build.sh && node --experimental-strip-types --test test/*.test.ts"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2"
   }
 }

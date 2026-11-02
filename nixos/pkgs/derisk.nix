@@ -16,6 +16,8 @@
 {
   lib,
   rustPlatform,
+  fetchurl,
+  linkFarm,
   pkg-config,
   lld,
   libxkbcommon,
@@ -54,6 +56,28 @@ let
     name = "derisk-source";
     src = lib.cleanSource ../../components/derisk;
   };
+
+  # ocrs' two models, with which derisk reads every screenshot's text to
+  # black out its secrets (docs/screenshots.md): one finds the words, the
+  # other reads each line. ocrs publishes them at unversioned URLs, so the
+  # hashes are the pin (docs/trust.md). derisk looks for them in
+  # share/derisk/ocr beside its bin.
+  ocrModels = linkFarm "ocrs-models" [
+    {
+      name = "text-detection.onnx";
+      path = fetchurl {
+        url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.onnx";
+        hash = "sha256-qReyPb2VJLRl336SJkGz/ymBYj303tWgI0AE7y/ufP4=";
+      };
+    }
+    {
+      name = "text-recognition.onnx";
+      path = fetchurl {
+        url = "https://ocrs-models.s3-accelerate.amazonaws.com/text-recognition.onnx";
+        hash = "sha256-hsFFwu25bIyu1bHruPRNcGQIkiIRRRwwnGJRV91gYcU=";
+      };
+    }
+  ];
 
   cargoHash = "sha256-C2KKSvXym5lF9Po/7bDV8Y1//fgArG65tRFvQ3E7i5Y=";
 
@@ -356,6 +380,19 @@ rustPlatform.buildRustPackage {
     # (derisk's host::gpui_apps, derisk-portal's access::dialog_program).
     ln -s ${gpui}/bin/derisk-gpui $out/bin/derisk-gpui
 
+    # The OCR models screenshots are redacted with, where derisk looks.
+    install -Dm644 -t $out/share/derisk/ocr ${ocrModels}/*
+
+    # The Text Editor's and Files' desktop entries, which otherwise live
+    # only inside the binary: on disk, their MimeType= lines are what lets
+    # xdg-open hand them a text file or a folder (desktop.nix's defaults).
+    # derisk lists core apps itself and skips these copies.
+    for app in editor files store; do
+      install -Dm644 -t $out/share/applications crates/derisk-apps/data/org.derisk.$app.desktop
+      substituteInPlace $out/share/applications/org.derisk.$app.desktop \
+        --replace-fail "Exec=derisk " "Exec=$out/bin/derisk "
+    done
+
     install -Dm644 -t $out/lib/systemd/user crates/derisk/data/systemd/user/* crates/derisk-portal/data/systemd/user/*
     substituteInPlace $out/lib/systemd/user/derisk-agent.service \
       --replace-fail "ExecStart=derisk " "ExecStart=$out/bin/derisk "
@@ -373,6 +410,7 @@ rustPlatform.buildRustPackage {
 
   passthru = {
     inherit
+      ocrModels
       gpui
       terminal
       index

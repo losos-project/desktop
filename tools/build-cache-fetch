@@ -48,7 +48,23 @@ else
     echo "No $name build cache yet; this build starts cold."
     exit 0
   fi
-  oras pull "$ref" --output "$work"
+  # GHCR drops a long pull with an HTTP/2 PROTOCOL_ERROR often enough that
+  # one failure turned the required prebuild check red. A missing cache only
+  # means a cold build, so a pull that still fails starts cold too.
+  pulled=0
+  for attempt in 1 2 3; do
+    if oras pull "$ref" --output "$work"; then
+      pulled=1
+      break
+    fi
+    echo "build-cache-fetch: pull of $ref failed (attempt $attempt)" >&2
+    rm -f "$work"/ccache.tar.zst.part-*
+    sleep $((attempt * 10))
+  done
+  if [ "$pulled" != 1 ]; then
+    echo "Could not download the $name build cache; this build starts cold." >&2
+    exit 0
+  fi
   echo "Restored $name's cache from GHCR."
 fi
 cat "$work"/ccache.tar.zst.part-* | sudo tar --zstd -x -C "$dir"
