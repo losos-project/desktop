@@ -62,6 +62,8 @@
 
   systemd.services.losos-machine-labels-leases = {
     description = "Bind guest ARP addresses to their libvirt ports";
+    # DHCP lease bursts must not exhaust the per-service start limit.
+    startLimitIntervalSec = 0;
     wantedBy = [ "multi-user.target" ];
     requires = [
       "libvirt-defaults.service"
