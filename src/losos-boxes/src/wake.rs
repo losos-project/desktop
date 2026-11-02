@@ -1,12 +1,11 @@
-//! Starts the LosOS boxes machine when a box shows up on the host's network.
+//! Starts the LosOS boxes machine for remembered away boxes or LAN discovery.
 //!
 //! The machine is made at the first boot (modules/losos-boxes.nix) but not
-//! started then: most of the time nothing on the network is a box, and a
-//! machine that waits for one costs its memory all day. `wake`, a service on
-//! the host, browses for boxes through the host's resolved, as the machine
-//! itself does through the relay, and starts the machine the first time
-//! one answers. Then it ends: if the machine's owner stops it after that,
-//! it stays stopped until the next boot.
+//! started then. An unpaired machine waits for a box on the host's network;
+//! a machine that remembers an away box starts at the next boot without
+//! waiting for LAN discovery. `wake`, a service on the host, browses for boxes
+//! through the host's resolved, as the machine itself does through the relay,
+//! and starts the machine the first time one answers.
 
 use miette::{bail, miette, IntoDiagnostic, Result, WrapErr};
 use std::process::Command;
@@ -16,8 +15,8 @@ use losos_boxes::Change;
 
 use super::run;
 
-/// Browses until a box shows up, then starts `machine`, unless it is gone,
-/// which its owner may have done in the Machines app, or already running.
+/// Starts a machine with remembered away boxes immediately; otherwise browses
+/// until a box shows up. Does nothing if it is gone or already running.
 pub fn wake(machine: &str) -> Result<()> {
     match state(machine)? {
         None => {
@@ -29,6 +28,10 @@ pub fn wake(machine: &str) -> Result<()> {
             return Ok(());
         }
         Some(_) => {}
+    }
+    if super::paired::is_paired(machine)? {
+        info!(%machine, "remembered away boxes; starting the machine");
+        return virsh(&["start", machine]);
     }
     info!(%machine, "waiting for a LosOS box");
     let mut started = false;
