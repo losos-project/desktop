@@ -94,6 +94,8 @@ map arp4 {{ type ifname : ipv4_addr; }}
     iifname != @mac_bound drop
     iifname map @macs != ether saddr drop
     icmpv6 type nd-neighbor-advert drop
+    icmpv6 type nd-neighbor-solicit ip6 saddr :: accept
+    icmpv6 type nd-neighbor-solicit drop
 {marks}    iifname map @macs == ether saddr iifname map @macs == arp saddr ether iifname map @arp4 == arp saddr ip accept
     iifname map @macs == ether saddr iifname map @macs == arp saddr ether arp saddr ip 0.0.0.0 accept
     ether type arp drop
@@ -102,7 +104,7 @@ map arp4 {{ type ifname : ipv4_addr; }}
     udp sport 68 udp dport 67 ip daddr 255.255.255.255 accept
     ip daddr @gateway4 udp dport 53 accept
     ip daddr @gateway4 tcp dport 53 accept
-    icmpv6 type {{ nd-router-solicit, nd-neighbor-solicit }} accept
+    icmpv6 type nd-router-solicit accept
     ip6 daddr @gateway6 udp dport 53 accept
     ip6 daddr @gateway6 tcp dport 53 accept
     ip daddr {{ {PRIVATE4} }} drop
@@ -447,13 +449,17 @@ mod tests {
         let source_mac = table.find("iifname map @macs != ether saddr drop").unwrap();
         let arp = table.find("iifname map @macs == arp saddr ether").unwrap();
         let advertisement = table.find("icmpv6 type nd-neighbor-advert drop").unwrap();
-        let discovery = table
-            .find("icmpv6 type { nd-router-solicit, nd-neighbor-solicit } accept")
+        let dad = table
+            .find("icmpv6 type nd-neighbor-solicit ip6 saddr :: accept")
             .unwrap();
+        let solicitation = table.find("icmpv6 type nd-neighbor-solicit drop").unwrap();
+        let router_solicitation = table.find("icmpv6 type nd-router-solicit accept").unwrap();
         assert!(table.find("iifname != @mac_bound drop").unwrap() < source_mac);
         assert!(source_mac < arp);
         assert!(advertisement < table.find("iifname @trusted accept").unwrap());
-        assert!(advertisement < discovery);
+        assert!(dad < solicitation);
+        assert!(solicitation < table.find("iifname @trusted accept").unwrap());
+        assert!(solicitation < router_solicitation);
 
         let blue_drop = table
             .find("meta mark & 0xffff0000 == 0x4c060000 drop")

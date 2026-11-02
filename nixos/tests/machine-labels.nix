@@ -310,6 +310,40 @@ in
           machine.succeed("sleep 1")
           machine.succeed(f"ip -6 neigh show to {target} dev virbr0 | grep -qi {macs['blue']}")
 
+      with subtest("a red guest cannot poison IPv6 neighbors with a solicitation"):
+          blue_ip6 = "2001:db8::3"
+          host_ip6 = "2001:db8::1"
+          machine.succeed(
+              f"ip -n blue -6 addr add {blue_ip6}/64 dev eth0 nodad",
+              f"ip -6 addr add {host_ip6}/64 dev virbr0 nodad",
+              f"ip -6 neigh flush to {blue_ip6} dev virbr0",
+          )
+          forged = (
+              "import socket,struct\n"
+              f"src=socket.inet_pton(socket.AF_INET6,'{blue_ip6}')\n"
+              f"target=socket.inet_pton(socket.AF_INET6,'{host_ip6}')\n"
+              "dst=socket.inet_pton(socket.AF_INET6,'ff02::1:ff00:1')\n"
+              "payload=struct.pack('!BBHI',135,0,0,0)+target+b'\\x01\\x01'+bytes.fromhex('"
+              f"{macs['red'].replace(':', '')}"
+              "')\n"
+              "pseudo=src+dst+struct.pack('!I3xB',len(payload),58)\n"
+              "data=pseudo+payload\n"
+              "if len(data)%2: data+=b'\\x00'\n"
+              "words=struct.unpack('!%dH'%(len(data)//2),data)\n"
+              "total=sum(words)\n"
+              "while total>>16: total=(total&0xffff)+(total>>16)\n"
+              "checksum=(~total)&0xffff\n"
+              "icmp=payload[:2]+struct.pack('!H',checksum)+payload[4:]\n"
+              "ip=struct.pack('!IHBB',6<<28,len(icmp),58,255)+src+dst\n"
+              "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0))\n"
+              "s.send(bytes.fromhex('3333ff000001"
+              f"{macs['red'].replace(':', '')}"
+              "86dd')+ip+icmp)"
+          )
+          machine.succeed(f"ip netns exec red python3 -c \"{forged}\"")
+          machine.succeed("sleep 1")
+          machine.fail(f"ip -6 neigh show to {blue_ip6} dev virbr0 | grep -q .")
+
       with subtest("trusted peer traffic routed through the gateway stays isolated"):
           machine.succeed(f"ip -n blue route add {green_ip}/32 via 192.168.122.1")
           not_reaches("blue", green_ip)

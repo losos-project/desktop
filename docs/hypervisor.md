@@ -147,8 +147,9 @@ machine's ports into that label's set.
 Every frame must use the MAC registered for its port before the bridge can
 learn its source address. ARP is accepted only when the sender MAC and IPv4
 address match the port's current libvirt DHCP lease. Lease changes refresh
-those bindings without changing labels. Guest IPv6 neighbor advertisements are
-dropped until the network has an authoritative per-port IPv6 address binding.
+those bindings without changing labels. Guest IPv6 neighbor advertisements and
+non-DAD solicitations are dropped until the network has an authoritative
+per-port IPv6 address binding.
 The policy also carries a guest's label through host routing, so sending a
 peer's address via `192.168.122.1` does not bypass the bridge's label checks.
 
