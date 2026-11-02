@@ -134,6 +134,9 @@ in
   # The host's security keys and smart card readers, lent to its machines
   # (docs/tokens.md).
   losos-tokens = callWithMold ./losos-tokens.nix { };
+  # Keeps machines apart on libvirt's network by their label
+  # (machine-labels.nix).
+  losos-machine-labels = callWithMold ./losos-machine-labels.nix { };
   # Windows app support (windows-apps.nix): WinBoat, from nixpkgs' own set
   # since it runs on an Electron that would link the patched GTK, renamed
   # and with the setup that installs Windows without asking anything.

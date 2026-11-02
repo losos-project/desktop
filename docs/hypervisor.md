@@ -117,6 +117,54 @@ its own system does, which for most distributions is Avahi multicasting on
 looks up `lanbox.local`, a test machine on the host's LAN that answers only
 over mDNS, gets that machine's LAN address, and pings it.
 
+## Labels on the network
+
+Every machine pm makes is on libvirt's `default` network, `virbr0`, and
+libvirt's NAT would let each reach the host, the LAN and every other
+machine. A machine's colour label decides what it reaches instead:
+
+| Machine | Reaches | Does not reach |
+| --- | --- | --- |
+| Red | the host's DHCP and DNS, the internet | the host's other services, the LAN, LosOS boxes, any other machine |
+| Any other label | the host, the LAN, the internet, machines with its own label, the LosOS boxes machine | machines with other labels, red machines |
+| No label (made outside pm) | the same, with the other machines without a label | labelled machines |
+| The LosOS boxes machine | every machine but a red one | red machines |
+
+Red is the label for untrusted work, the same machines whose windows cannot
+be kept on top. A red machine still gets on the internet, because the host
+masquerades it as before, but whatever it runs cannot probe the router,
+a printer, a LosOS box or the other machines.
+
+`losos-machine-labels` (`nixos/modules/machine-labels.nix`) does it with an
+nftables table in the bridge family, `losos-machine-labels`, which filters
+between `virbr0`'s ports. A rule in the host's own tables could not do this:
+machines on one bridge reach each other without the host routing anything.
+libvirt runs the program as a hook whenever a machine starts or stops, with
+the machine's definition on stdin. It reads the label pm wrote into the
+machine's `<metadata>`, or the LosOS boxes template, and puts the
+machine's ports into that label's set.
+
+Every frame must use the MAC registered for its port before the bridge can
+learn its source address. ARP is accepted only when the sender MAC and IPv4
+address match the port's current libvirt DHCP lease. Lease changes refresh
+those bindings without changing labels. Guest IPv6 neighbor advertisements and
+non-DAD solicitations are dropped until the network has an authoritative
+per-port IPv6 address binding.
+The policy also carries a guest's label through host routing, so sending a
+peer's address via `192.168.122.1` does not bypass the bridge's label checks.
+
+The table fails closed. A port no hook has named, such as a card added to a
+running machine, has no registered MAC and is blocked until a hook registers
+it. A label pm does not know is treated as red. A machine started while the
+table was missing puts it back. `systemctl reload losos-machine-labels` builds
+a fresh table from the running machines.
+A label changed while a machine runs applies from its next start, since
+libvirt runs no hook for a change of metadata.
+
+`nixos/tests/machine-labels.nix` checks every row of the table above, with
+network namespaces standing in for machines of each label, and one real
+machine that libvirt starts and stops.
+
 ## A machine's windows
 
 A machine has no screen. Its apps' windows come to the host's desktop over
