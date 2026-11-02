@@ -86,6 +86,21 @@ pub fn host(uri: &str) -> String {
     host.to_ascii_lowercase()
 }
 
+/// The origin of `uri`, or `None` when it has no authority.
+pub fn origin(uri: &str) -> Option<String> {
+    let (scheme, rest) = uri.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +110,19 @@ mod tests {
         assert_eq!(host("https://user@Meet.Example:443/room"), "meet.example");
         assert_eq!(host("http://[::1]:8080/"), "[::1]");
         assert_eq!(host("about:blank"), "");
+    }
+
+    #[test]
+    fn origins_include_scheme_and_port_but_not_credentials() {
+        assert_eq!(
+            origin("https://user@Meet.Example:443/room"),
+            Some("https://meet.example:443".into())
+        );
+        assert_eq!(
+            origin("http://meet.example/"),
+            Some("http://meet.example".into())
+        );
+        assert_eq!(origin("about:blank"), None);
     }
 
     #[test]

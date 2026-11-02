@@ -122,6 +122,13 @@ pub struct Plan {
     pub info_fd: Option<RawFd>,
     /// Descriptors read here and not to be passed on.
     pub consumed_fds: Vec<RawFd>,
+    /// Pass the program none of the launcher's descriptors but the standard
+    /// three, and leave them open here. WebKit hands its web processes
+    /// their IPC sockets as open descriptors, so its launches pass every
+    /// one; Danube's own sandboxes (the browser, its bus proxy) are started
+    /// from a process that holds a connection to the whole session bus,
+    /// which must not reach inside.
+    pub no_inherited_fds: bool,
     pub chdir: Option<String>,
     pub program: Vec<String>,
 }

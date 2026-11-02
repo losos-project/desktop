@@ -103,6 +103,12 @@
   marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
   build with. A chat needs `claude`, and a preview needs `cargo` with the
   `wasm32-wasip2` target, both installed by the person first.
+- **Searching what is in every file.** `derisk-index` reads plain text,
+  PDFs and OpenDocument and Office Open XML files, but not the text in
+  pictures or scanned PDFs, which would take OCR, nor the older binary
+  `.doc`, `.xls` and `.ppt` formats. Those are found by name alone. Only the
+  first MiB of a file's text is indexed. Hidden files and anything
+  `.gitignore` leaves out are not indexed unless Settings names their folder.
 - **The Agent's machine.** The [Agent](agent.md) works on a copy of the
   folder the person picks, so a file changed on the host while the copy is
   open is not seen in the machine until the folder is picked again. The
@@ -117,12 +123,6 @@
   app happens to list their type, if any. derisk's Text Editor cannot be
   handed a file, because its desktop entry lives inside the derisk binary
   with no file argument and no types.
-- **Searching what is in every file.** `derisk-index` reads plain text only.
-  A file with a NUL byte in its first 8 KiB counts as binary and is found by
-  its name alone, so the text in PDFs, office documents and pictures is not
-  searched. Only the first MiB of a large text file is indexed. Hidden files
-  and anything `.gitignore` leaves out are not indexed, and there is no
-  setting yet to index other folders or turn the index off.
 - **The guest template in full.** Only a reduced build of the
   [guest](hypervisor.md), without Danube, Flatpak and the Calculator, has
   booted, and no machine's window has reached a desktop through it yet. It is
@@ -134,10 +134,8 @@
   machine, such as a Flatpak's file chooser, are the
   [portal machine](portal-machine.md)'s now, and nobody has tried them
   with a real app in a machine.
-- **The Flatpak machine's loose ends.** A `.flatpakref` or `.flatpakrepo`
-  file opened on the host has nothing to open it, because Flatpak is in
-  [the machine](hypervisor.md#the-flatpak-machine), so it has to be copied
-  there first. Flatpak's files move off the host only for administrators,
+- **The Flatpak machine's loose ends.** Flatpak's files move off the host
+  only for administrators,
   because anyone else would get a password dialog they did not ask for.
   Other users copy their `~/.var/app` into the machine by hand. The host's
   copy of `~/.var/app` stays after the copy, until its owner deletes it.
@@ -319,6 +317,12 @@
   driver on a private bus, which offers no Performance profile. The Halium
   GSI has no Bluetooth, because the phone's controller sits behind its vendor
   HAL and nothing here bridges that to BlueZ.
+- **A recovery shell on an aarch64 PC.** The boot menu's root shell for a
+  machine nobody can administer, described in [When something goes
+  wrong](troubleshooting.md#no-one-can-administer-the-machine), starts the
+  kernel kept beside the UKI for a BIOS boot. Only x86_64 images carry that
+  kernel. An aarch64 PC's GRUB can only chainload its UKI, and a UKI takes
+  kernel arguments only as a replacement for its whole command line.
 - **A PIN at startup is the installer's only.** [The
   installer](installer.md#asking-for-a-pin-at-startup) encrypts root with a
   TPM and a PIN when asked, but a PC set up from a written image, first-boot
@@ -330,11 +334,6 @@
   needs a release to install. There is no way to change the PIN from
   Settings; `systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto
   --tpm2-with-pin=yes --tpm2-pcrs=` with the recovery key does it.
-- **Two LosOS disks in one PC.** Root comes from the disk the [boot
-  loader](boot-loaders.md) started from, under UEFI and a BIOS alike. Swap,
-  though, is found by its partition label, `losos-swap`, in `disk.nix` and
-  `hibernate.nix`. With two LosOS disks in one machine, swap may come from the
-  other disk.
 - **sysext.** Extensions merge into `/usr`, which here holds little but the
   Nix store, so an extension can add a program but cannot replace one.
 - **Android app support.** [Android app support](android-apps.md) boots
@@ -362,18 +361,15 @@
   started at all, since the arm64 runner has no KVM and the aarch64 VM under
   emulation times out waiting for its disk. And none of it has run on a PC
   instead of in QEMU.
-- **Danube is unfinished in places.** A page's file upload button opens
-  nothing, because [Danube](danube.md) does not answer WebKit's file chooser
-  request yet. A site's notifications are never shown, even when allowed.
-  Extensions cannot see requests through `webRequest`, talk to a native
-  program, or use cookies, context menus, history, bookmarks or the side
-  panel, as Danube's "Extensions" section lists. There are no bookmarks, no
-  history list, no find in page, and no way to resume a download. Its
-  sandboxes need unprivileged user namespaces, and a phone's own kernel may
-  refuse them. Danube then stops instead of running a page outside a
+- **Danube is unfinished in places.** [Danube](danube.md)'s extensions
+  cannot see requests through `webRequest`, talk to a native program, or use
+  cookies, context menus, history, bookmarks or the side panel, as its
+  "Extensions" section lists. A download that stopped cannot be resumed.
+  Its sandboxes need unprivileged user namespaces, and a phone's own kernel
+  may refuse them. Danube then stops instead of running a page outside a
   sandbox, so on such a phone it does not open at all. `--no-sandbox` skips
-  only the outer sandbox. Danube has run against WPE WebKit in a session,
-  but not yet on a desktop or phone with derisk.
+  only the outer sandbox. Danube has run with derisk on the desktop, in a
+  VM, but not yet on a phone.
 - **Ad blocking is DNS-wide only for names.** A filter list's URL and element
   rules apply in Danube alone. Other browsers and apps get only whole
   [blocked domains](adblock.md), and a program
@@ -406,13 +402,11 @@
 - **Backups to a LosOS box keep one copy.** LosOS
   cloud keeps old versions and the trash, but LosOS Git keeps only the latest
   state of each branch, and only the configs' repository has a history. A
-  repository deleted at home stays on the box. Configs that are symbolic
-  links, as Home Manager writes them, are not in the configs' repository, so
-  back up the Home Manager configuration they come from instead. Git LFS
-  objects are not pushed. Symbolic links, which
-  Nextcloud cannot hold, are left out. A box with HTTPS turned off through
-  `losos.tls.enable` cannot be backed up to. Only an administrator's run can
-  start a stopped LosOS boxes machine. Backups run once a day, with no
-  setting to change that. A box older than LosOS Login's sign-in for backups
-  offers only the password sign-in to LosOS cloud, and the repositories then
-  go to LosOS cloud as files. See [Backups to a LosOS box](backup.md).
+  repository deleted at home stays on the box.
+  Symbolic links are recorded for restore, and Git LFS objects are uploaded.
+  A box with HTTPS turned off through `losos.tls.enable` cannot be backed up
+  to. Only an administrator's run can start a stopped LosOS boxes machine.
+  A box older than LosOS Login's sign-in for backups offers the password
+  sign-in to LosOS cloud; without a LosOS Git token, repositories go to
+  LosOS cloud as files. The test uses both a stand-in and a real box. See
+  [Backups to a LosOS box](backup.md).

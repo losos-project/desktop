@@ -37,12 +37,13 @@ fn main() {
         // page's messages to the extension runtime.
         .allowlist_function("soup_message_headers_(new|append|unref|get_one)")
         // The cookies a download is handed to aria2 with (downloads.rs),
-        // and GDBus with the GVariants it carries, for the notification
-        // each download shows (notify.rs).
+        // and GDBus with the GVariants it carries, for the notifications
+        // downloads and sites show (notify.rs) and the file chooser portal
+        // a page's upload button opens (portal.rs).
         .allowlist_function("soup_cookie_(get_name|get_value|free)|g_list_free")
-        .allowlist_function("g_bus_get_sync|g_dbus_connection_(call|call_finish|signal_subscribe)")
+        .allowlist_function("g_bus_get_sync|g_dbus_connection_(call|call_finish|call_sync|signal_subscribe|get_unique_name)")
         .allowlist_function(
-            "g_variant_(new_(string|int32|uint32|boolean|variant|dict_entry|tuple|array|strv)|get_child_value|get_uint32|get_string|get_type_string|n_children|unref)",
+            "g_variant_(new_(string|int32|uint32|boolean|variant|dict_entry|tuple|array|strv)|get_child_value|get_variant|get_uint32|get_string|get_type_string|n_children|unref)",
         )
         .allowlist_function("jsc_value_(to_string|to_json|new_string|get_context)")
         .allowlist_type("(JSC|Soup).*")
