@@ -310,7 +310,7 @@ impl<'a> Forge<'a> {
         } else {
             repo.path.join(".git")
         };
-        let objects = lfs_objects(&git_dir.join("lfs/objects"));
+        let objects = lfs_objects(&git_dir.join("lfs/objects"))?;
         if objects.is_empty() {
             return Ok(());
         }
@@ -424,34 +424,56 @@ const LFS_BATCH: usize = 100;
 
 /// The objects in a Git LFS store, `lfs/objects/<2>/<2>/<oid>`: each
 /// object's ID, size and file. A file whose name is not a SHA-256 is a
-/// download git-lfs left unfinished, and is skipped.
-fn lfs_objects(store: &Path) -> Vec<(String, u64, std::path::PathBuf)> {
-    let mut objects = Vec::new();
-    let Ok(firsts) = fs::read_dir(store) else {
-        return objects;
+/// download git-lfs left unfinished, and is skipped. A store not there is
+/// an empty one; one that cannot be read is an error, since the walk does
+/// not enter repositories and nothing else would say their LFS files were
+/// left behind.
+fn lfs_objects(store: &Path) -> Result<Vec<(String, u64, std::path::PathBuf)>, Error> {
+    let unreadable = |path: &Path, e: std::io::Error| {
+        Error::new(format!(
+            "its Git LFS store could not be read: {}: {e}",
+            path.display()
+        ))
     };
-    for first in firsts.flatten() {
-        let Ok(seconds) = fs::read_dir(first.path()) else {
+    let dirs = |path: &Path| -> Result<Vec<fs::DirEntry>, std::io::Error> {
+        fs::read_dir(path)?.collect()
+    };
+    let mut objects = Vec::new();
+    let firsts = match dirs(store) {
+        Ok(firsts) => firsts,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(objects),
+        Err(e) => return Err(unreadable(store, e)),
+    };
+    let is_dir = |entry: &fs::DirEntry| -> Result<bool, Error> {
+        Ok(entry
+            .file_type()
+            .map_err(|e| unreadable(&entry.path(), e))?
+            .is_dir())
+    };
+    for first in firsts {
+        if !is_dir(&first)? {
             continue;
-        };
-        for second in seconds.flatten() {
-            let Ok(files) = fs::read_dir(second.path()) else {
+        }
+        for second in dirs(&first.path()).map_err(|e| unreadable(&first.path(), e))? {
+            if !is_dir(&second)? {
                 continue;
-            };
-            for file in files.flatten() {
+            }
+            for file in dirs(&second.path()).map_err(|e| unreadable(&second.path(), e))? {
                 let name = file.file_name().to_string_lossy().into_owned();
                 let is_oid = name.len() == 64
                     && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-                if let (true, Ok(meta)) = (is_oid, file.metadata()) {
-                    if meta.is_file() {
-                        objects.push((name, meta.len(), file.path()));
-                    }
+                if !is_oid {
+                    continue;
+                }
+                let meta = file.metadata().map_err(|e| unreadable(&file.path(), e))?;
+                if meta.is_file() {
+                    objects.push((name, meta.len(), file.path()));
                 }
             }
         }
     }
     objects.sort();
-    objects
+    Ok(objects)
 }
 
 impl Forge<'_> {
@@ -699,6 +721,28 @@ mod tests {
             assert!(match_lfs_objects(&json!({"objects": objects}), &requested).is_err());
         }
         assert!(match_lfs_objects(&json!({}), &requested).is_err());
+    }
+
+    #[test]
+    fn lists_lfs_objects_and_fails_on_a_store_it_cannot_read() {
+        let store = std::env::temp_dir().join(format!("losos-backup-lfs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&store);
+        assert!(lfs_objects(&store).unwrap().is_empty());
+
+        let oid = "a".repeat(64);
+        fs::create_dir_all(store.join("aa/aa")).unwrap();
+        fs::write(store.join("aa/aa").join(&oid), "abc").unwrap();
+        fs::write(store.join("aa/aa/unfinished"), "x").unwrap();
+        let objects = lfs_objects(&store).unwrap();
+        assert_eq!(
+            objects,
+            [(oid, 3, store.join("aa/aa").join("a".repeat(64)))]
+        );
+
+        // A store that is a file rather than a folder cannot be read.
+        let file = store.join("aa/aa/unfinished");
+        assert!(lfs_objects(&file).is_err());
+        fs::remove_dir_all(&store).unwrap();
     }
 
     #[test]

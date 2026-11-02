@@ -17,7 +17,7 @@
 //! front and runs the page's `onclick`, dismissing it runs `onclose`, and
 //! a page closing its own takes the desktop's away.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
@@ -139,6 +139,23 @@ impl Notifier {
                 )
             })
             .map_or(0, |(id, _)| *id);
+        // The page closed it (or the person did, through the server): the
+        // desktop's goes too. Listened for before `Notify` is called, since
+        // a page can close it while the call is in flight: then the id the
+        // server answers with is closed as soon as it comes.
+        let shown: Rc<Cell<Option<u32>>> = Rc::default();
+        let closed = Rc::new(Cell::new(false));
+        let closer = self.me.clone();
+        let (on_shown, on_closed) = (shown.clone(), closed.clone());
+        notification.on_closed(move |_| {
+            on_closed.set(true);
+            let Some(id) = on_shown.get() else { return };
+            let Some(me) = closer.upgrade() else { return };
+            let Ok(mut me) = me.try_borrow_mut() else { return };
+            if me.sites.remove(&id).is_some() {
+                me.close(id);
+            }
+        });
         let me = self.me.clone();
         let args = site_args(replaces, &title, &body, host);
         let origin = origin.map(str::to_owned);
@@ -155,20 +172,19 @@ impl Notifier {
                 }
             };
             me.served = Some(true);
-            // The page closed it (or the person did, through the server):
-            // the desktop's goes too.
-            let closer = me.me.clone();
-            notification.on_closed(move |_| {
-                let Some(me) = closer.upgrade() else { return };
-                let Ok(mut me) = me.try_borrow_mut() else { return };
-                if me.sites.remove(&id).is_some() {
-                    if let Some(bus) = &me.bus {
-                        bus.call(SERVER, PATH, SERVER, "CloseNotification", &Var::Tuple(vec![Var::U32(id)]), |_| {});
-                    }
-                }
-            });
+            if closed.get() {
+                return me.close(id);
+            }
+            shown.set(Some(id));
             me.sites.insert(id, (notification, tab, origin));
         });
+    }
+
+    /// Takes notification `id` off the desktop.
+    fn close(&self, id: u32) {
+        if let Some(bus) = &self.bus {
+            bus.call(SERVER, PATH, SERVER, "CloseNotification", &Var::Tuple(vec![Var::U32(id)]), |_| {});
+        }
     }
 
     fn connect(&mut self) -> bool {

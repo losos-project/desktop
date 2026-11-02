@@ -80,7 +80,9 @@ It walks the home without following symbolic links. LosOS cloud cannot
 hold a link, so the run lists every link outside the configs, with its
 target, in `.losos-backup-links.tsv` at the top of the computer's folder
 there, and sends the list again whenever it changes. Its header has the
-shell line that makes the links again in a restored home. A config that is
+shell line that makes the links again in a restored home and then removes
+the list: left there, the next backup would take it for a file of the
+home's own, which it refuses to overwrite with a new list. A config that is
 a link, as Home Manager writes them, goes to the configs' repository as a
 link, which Git keeps as it is.
 

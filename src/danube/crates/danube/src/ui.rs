@@ -73,6 +73,9 @@ struct FindBar {
     text: String,
     /// What was last searched for, and in which tab.
     searched: Option<(TabId, String)>,
+    /// That tab started loading a new document since: the search is run
+    /// again once it has loaded.
+    reloaded: bool,
     /// Put the keyboard in the field on the next frame.
     focus: bool,
 }
@@ -192,6 +195,11 @@ impl State {
             Event::LoadStarted(id) => {
                 if let Some(t) = self.tab(id) {
                     t.crashed = false;
+                    t.loading = true;
+                }
+                // The last search's matches were the old document's.
+                if self.found.is_some_and(|(t, _)| t == id) {
+                    self.found = None;
                 }
             }
             Event::Crashed(id) => {
@@ -373,6 +381,12 @@ impl Window {
                 Ok(Event::Copied(text)) => ctx.copy_text(text),
                 Ok(Event::Notice(text)) => toast(ctx, text, None),
                 Ok(Event::ShowFind) => self.open_find(),
+                Ok(Event::LoadStarted(id)) => {
+                    if let Some(bar) = &mut self.find {
+                        bar.reloaded |= bar.searched.as_ref().is_some_and(|(t, _)| *t == id);
+                    }
+                    changed |= self.state.apply(Event::LoadStarted(id));
+                }
                 Ok(event) => changed |= self.state.apply(event),
                 Err(TryRecvError::Empty) => break,
             }
@@ -453,6 +467,11 @@ impl Window {
             });
             self.open_palette();
         }
+        // Wherever the keyboard is, the page or the bar's own buttons
+        // included; an extension's popup, above, goes first.
+        if self.find.is_some() && pressed(egui::KeyboardShortcut::new(Modifiers::NONE, Key::Escape)) {
+            self.close_find();
+        }
         let Some(tab) = active else { return };
         if !self.captive && pressed(ctrl(Key::W)) {
             self.send(Command::Close(tab.id));
@@ -494,6 +513,14 @@ impl Window {
         self.find.get_or_insert_with(FindBar::default).focus = true;
     }
 
+    /// Closes the find bar, ending its search in the page.
+    fn close_find(&mut self) {
+        if let Some((id, _)) = self.find.take().and_then(|bar| bar.searched) {
+            self.send(Command::Find(id, String::new()));
+        }
+        self.state.found = None;
+    }
+
     /// The find bar along the bottom: the text to find, how many matches
     /// there are, the next and previous, and closing it, which Escape
     /// also does. Enter goes to the next match, Shift+Enter the previous.
@@ -506,16 +533,17 @@ impl Window {
             if std::mem::take(&mut bar.focus) {
                 field.request_focus();
             }
-            let (enter, shift, escape) = ui.input(|i| {
-                (i.key_pressed(Key::Enter), i.modifiers.shift, i.key_pressed(Key::Escape))
-            });
+            let (enter, shift) = ui.input(|i| (i.key_pressed(Key::Enter), i.modifiers.shift));
             if field.lost_focus() && enter && !bar.text.is_empty() {
                 commands.push(Command::FindAgain(tab.id, !shift));
                 field.request_focus();
             }
-            close |= escape && (field.has_focus() || field.lost_focus());
             let searched = (tab.id, bar.text.clone());
-            if bar.searched.as_ref() != Some(&searched) {
+            // A new document in the searched tab is searched once it has
+            // loaded, for what the bar holds then.
+            let held = bar.reloaded && tab.loading && bar.searched.as_ref().is_some_and(|(id, _)| *id == tab.id);
+            if !held && (bar.reloaded || bar.searched.as_ref() != Some(&searched)) {
+                bar.reloaded = false;
                 // A search left in another tab is ended there.
                 if let Some((old, _)) = bar.searched.as_ref().filter(|(old, _)| *old != tab.id) {
                     commands.push(Command::Find(*old, String::new()));
@@ -542,15 +570,11 @@ impl Window {
                 close = true;
             }
         });
-        if close {
-            if let Some((id, _)) = bar.searched.take() {
-                commands.push(Command::Find(id, String::new()));
-            }
-            self.find = None;
-            self.state.found = None;
-        }
         for command in commands {
             self.send(command);
+        }
+        if close {
+            self.close_find();
         }
     }
 

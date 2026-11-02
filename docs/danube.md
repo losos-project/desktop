@@ -147,8 +147,9 @@ bottom of the window. Typing there highlights every match in the page,
 ignoring case, and scrolls to the first; the bar says how many there are, up
 to a thousand. Enter and Next go to the next match and Shift+Enter and
 Previous to the one before, wrapping round the page. Esc or Close takes the
-bar and the highlights away. Switching tabs with the bar open searches the
-new tab for the same text.
+bar and the highlights away, wherever the keyboard is. Switching tabs with
+the bar open searches the new tab for the same text, and a page that
+navigates or reloads is searched again once it has loaded.
 
 ## History and bookmarks
 
