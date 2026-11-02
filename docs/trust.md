@@ -45,6 +45,13 @@ Everything the flake builds from, besides this repository:
   its `Cargo.lock` and `cargoHash`. It is the desktop, the display manager
   and the portal backend. The `components/mcsapi` submodule is the same
   mcsapi commit, and builds `x2mcsapi`.
+- **ocrs' OCR models**, `text-detection.onnx` and `text-recognition.onnx`,
+  fetched by `nixos/pkgs/derisk.nix` from ocrs' own bucket,
+  `ocrs-models.s3-accelerate.amazonaws.com`, and pinned by hash. The URLs
+  carry no version, so a changed file fails the hash rather than changing
+  the build. derisk reads every screenshot's text with them to black out
+  its secrets ([Screenshots](screenshots.md)). They are data that
+  [rten](https://github.com/robertknight/rten) runs, with no code in them.
 - **The LosOS terminal client**, `losos`, built from the LosOS repository at
   `github.com/dasmatus/losos`, at the commit `nixos/pkgs/losos-pin.nix`
   names. It is a sparse `fetchgit` of the directories it builds from, checked
