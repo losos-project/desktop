@@ -57,10 +57,10 @@ pub fn table() -> String {
         marks.push_str(&format!(
             "    iifname @{set} meta mark set (meta mark & 0x0000ffff) | {mark}\n"
         ));
-        output_rules.push_str(&format!(
-            "    meta mark & 0xffff0000 == {mark} oifname @{set} accept\n"
-        ));
         if *set != "red" {
+            output_rules.push_str(&format!(
+                "    meta mark & 0xffff0000 == {mark} oifname @{set} accept\n"
+            ));
             output_rules.push_str(&format!(
                 "    meta mark & 0xffff0000 == {mark} oifname @boxes accept\n"
             ));
