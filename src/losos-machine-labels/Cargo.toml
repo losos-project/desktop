@@ -1,0 +1,20 @@
+[package]
+name = "losos-machine-labels"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+
+[dependencies]
+# Logs go through tracing to stderr, `RUST_LOG` choosing the level, and
+# failures are reported by miette, as in every LosOS program.
+miette = { version = "7.6.0", features = ["fancy"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+thiserror = "2"
+# libvirt's domain XML, read without a DOM of our own.
+roxmltree = "0.20"
+
+# Fat LTO and one codegen unit, as every Rust crate in losos-desktop builds.
+[profile.release]
+lto = true
+codegen-units = 1

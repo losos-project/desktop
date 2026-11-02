@@ -41,11 +41,12 @@ in
   environment.systemPackages = [ pkgs.losos-backup ];
 
   # The timer's: it backs up only when the backups are on and the last one
-  # that went through is a day old, so it is cheap to ask every hour, and a
-  # computer that was off or away from the box catches up within the hour
+  # that went through is as old as the time set between them (a day unless
+  # the Backups page says otherwise), so it is cheap to ask every hour, and
+  # a computer that was off or away from the box catches up within the hour
   # after it is back.
   systemd.user.services.losos-backup = lib.recursiveUpdate unit {
-    description = "Back up to the LosOS box when a day has passed";
+    description = "Back up to the LosOS box when one is due";
     serviceConfig.ExecStart = "${lib.getExe pkgs.losos-backup} run --if-due";
   };
 

@@ -19,6 +19,7 @@
 //! rather than its command line, which other accounts can read: the token,
 //! the box's certificate as the only CA, and the box's name pinned to the
 //! address the run goes through. The repository's own hooks do not run.
+//! Git LFS objects go up through LFS's batch API after the push.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -292,8 +293,187 @@ impl<'a> Forge<'a> {
         let mut args = vec!["push", "--porcelain", "--quiet", url.as_str()];
         args.extend(refspecs.iter().map(String::as_str));
         git(&repo.path, &args, &env)?;
+        self.push_lfs(repo, &url)?;
         Ok(true)
     }
+
+    /// Uploads the Git LFS objects `repo` holds that the box lacks, through
+    /// LFS's batch API on `url`, so a repository using LFS is whole on the
+    /// box rather than pointers to files only this computer has. With the
+    /// pinned agent rather than git-lfs, which would resolve the box's name
+    /// itself and trust the system's CAs instead of the box's certificate.
+    /// Every object in the local store goes up, those of other branches
+    /// too; the box answers for those it has without an upload.
+    fn push_lfs(&self, repo: &Repo, url: &str) -> Result<(), Error> {
+        let git_dir = if repo.bare {
+            repo.path.clone()
+        } else {
+            repo.path.join(".git")
+        };
+        let objects = lfs_objects(&git_dir.join("lfs/objects"))?;
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let auth = basic(&self.user, &self.token);
+        let batch = format!("{url}/info/lfs/objects/batch");
+        for chunk in objects.chunks(LFS_BATCH) {
+            let request: Vec<Value> = chunk
+                .iter()
+                .map(|(oid, size, _)| json!({ "oid": oid, "size": size }))
+                .collect();
+            let answer: Value = match self
+                .agent
+                .post(&batch)
+                .set("Authorization", &auth)
+                .set("Accept", LFS_TYPE)
+                .set("Content-Type", LFS_TYPE)
+                .send_json(json!({
+                    "operation": "upload",
+                    "transfers": ["basic"],
+                    "objects": request,
+                })) {
+                Ok(answer) => answer.into_json()?,
+                // Forgejo without LFS_START_SERVER has no such endpoint.
+                Err(ureq::Error::Status(404 | 501, _)) => {
+                    return Err(Error::new(
+                        "its Git LFS files were not pushed: LosOS Git has LFS turned off",
+                    ))
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let responses = match_lfs_objects(&answer, chunk)?;
+            for (oid, size, path) in chunk {
+                let object = responses
+                    .get(oid.as_str())
+                    .expect("validated LFS response contains every requested object");
+                if let Some(error) = object["error"]["message"].as_str() {
+                    return Err(Error::new(format!("Git LFS object {oid}: {error}")));
+                }
+                let Some(upload) = object["actions"].get("upload") else {
+                    continue;
+                };
+                let mut put = self.agent.put(upload["href"].as_str().unwrap_or_default());
+                for (name, value) in upload["header"].as_object().into_iter().flatten() {
+                    put = put.set(name, value.as_str().unwrap_or_default());
+                }
+                put.set("Content-Type", "application/octet-stream")
+                    .set("Content-Length", &size.to_string())
+                    .send(fs::File::open(path)?)?;
+                if let Some(verify) = object["actions"].get("verify") {
+                    let mut post = self.agent.post(verify["href"].as_str().unwrap_or_default());
+                    for (name, value) in verify["header"].as_object().into_iter().flatten() {
+                        post = post.set(name, value.as_str().unwrap_or_default());
+                    }
+                    post.set("Accept", LFS_TYPE)
+                        .set("Content-Type", LFS_TYPE)
+                        .send_json(json!({ "oid": oid, "size": size }))?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn match_lfs_objects<'a>(
+    answer: &'a Value,
+    requested: &[(String, u64, std::path::PathBuf)],
+) -> Result<BTreeMap<&'a str, &'a Value>, Error> {
+    let Some(objects) = answer["objects"].as_array() else {
+        return Err(Error::new("Git LFS returned no objects for its batch"));
+    };
+    if objects.len() != requested.len() {
+        return Err(Error::new("Git LFS returned an incomplete object batch"));
+    }
+
+    let requested_oids: BTreeSet<&str> = requested.iter().map(|(oid, _, _)| oid.as_str()).collect();
+    let mut matched = BTreeMap::new();
+    for object in objects {
+        let Some(oid) = object["oid"].as_str() else {
+            return Err(Error::new("Git LFS returned an object without an OID"));
+        };
+        if !requested_oids.contains(oid) {
+            return Err(Error::new(format!(
+                "Git LFS returned unexpected object {oid}"
+            )));
+        }
+        if matched.insert(oid, object).is_some() {
+            return Err(Error::new(format!(
+                "Git LFS returned object {oid} more than once"
+            )));
+        }
+    }
+
+    for (oid, size, _) in requested {
+        let Some(object) = matched.get(oid.as_str()) else {
+            return Err(Error::new(format!("Git LFS did not return object {oid}")));
+        };
+        if object["size"].as_u64() != Some(*size) {
+            return Err(Error::new(format!(
+                "Git LFS returned the wrong size for object {oid}"
+            )));
+        }
+    }
+    Ok(matched)
+}
+
+/// The media type of Git LFS's API.
+const LFS_TYPE: &str = "application/vnd.git-lfs+json";
+
+/// Objects asked about in one batch request.
+const LFS_BATCH: usize = 100;
+
+/// The objects in a Git LFS store, `lfs/objects/<2>/<2>/<oid>`: each
+/// object's ID, size and file. A file whose name is not a SHA-256 is a
+/// download git-lfs left unfinished, and is skipped. A store not there is
+/// an empty one; one that cannot be read is an error, since the walk does
+/// not enter repositories and nothing else would say their LFS files were
+/// left behind.
+fn lfs_objects(store: &Path) -> Result<Vec<(String, u64, std::path::PathBuf)>, Error> {
+    let unreadable = |path: &Path, e: std::io::Error| {
+        Error::new(format!(
+            "its Git LFS store could not be read: {}: {e}",
+            path.display()
+        ))
+    };
+    let dirs = |path: &Path| -> Result<Vec<fs::DirEntry>, std::io::Error> {
+        fs::read_dir(path)?.collect()
+    };
+    let mut objects = Vec::new();
+    let firsts = match dirs(store) {
+        Ok(firsts) => firsts,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(objects),
+        Err(e) => return Err(unreadable(store, e)),
+    };
+    let is_dir = |entry: &fs::DirEntry| -> Result<bool, Error> {
+        Ok(entry
+            .file_type()
+            .map_err(|e| unreadable(&entry.path(), e))?
+            .is_dir())
+    };
+    for first in firsts {
+        if !is_dir(&first)? {
+            continue;
+        }
+        for second in dirs(&first.path()).map_err(|e| unreadable(&first.path(), e))? {
+            if !is_dir(&second)? {
+                continue;
+            }
+            for file in dirs(&second.path()).map_err(|e| unreadable(&second.path(), e))? {
+                let name = file.file_name().to_string_lossy().into_owned();
+                let is_oid = name.len() == 64
+                    && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+                if !is_oid {
+                    continue;
+                }
+                let meta = file.metadata().map_err(|e| unreadable(&file.path(), e))?;
+                if meta.is_file() {
+                    objects.push((name, meta.len(), file.path()));
+                }
+            }
+        }
+    }
+    objects.sort();
+    Ok(objects)
 }
 
 impl Forge<'_> {
@@ -515,6 +695,55 @@ fn git_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_lfs_batch_objects_by_oid_and_rejects_invalid_batches() {
+        let requested = vec![
+            ("a".to_owned(), 3, "a".into()),
+            ("b".to_owned(), 5, "b".into()),
+        ];
+        let answer = json!({
+            "objects": [
+                {"oid": "b", "size": 5},
+                {"oid": "a", "size": 3},
+            ]
+        });
+        let matched = match_lfs_objects(&answer, &requested).unwrap();
+        assert_eq!(matched["a"]["size"], 3);
+        assert_eq!(matched["b"]["size"], 5);
+
+        for objects in [
+            json!([{"oid": "a", "size": 3}]),
+            json!([{"oid": "a", "size": 3}, {"oid": "a", "size": 3}]),
+            json!([{"oid": "a", "size": 3}, {"oid": "c", "size": 5}]),
+            json!([{"oid": "a", "size": 3}, {"oid": "b", "size": 4}]),
+        ] {
+            assert!(match_lfs_objects(&json!({"objects": objects}), &requested).is_err());
+        }
+        assert!(match_lfs_objects(&json!({}), &requested).is_err());
+    }
+
+    #[test]
+    fn lists_lfs_objects_and_fails_on_a_store_it_cannot_read() {
+        let store = std::env::temp_dir().join(format!("losos-backup-lfs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&store);
+        assert!(lfs_objects(&store).unwrap().is_empty());
+
+        let oid = "a".repeat(64);
+        fs::create_dir_all(store.join("aa/aa")).unwrap();
+        fs::write(store.join("aa/aa").join(&oid), "abc").unwrap();
+        fs::write(store.join("aa/aa/unfinished"), "x").unwrap();
+        let objects = lfs_objects(&store).unwrap();
+        assert_eq!(
+            objects,
+            [(oid, 3, store.join("aa/aa").join("a".repeat(64)))]
+        );
+
+        // A store that is a file rather than a folder cannot be read.
+        let file = store.join("aa/aa/unfinished");
+        assert!(lfs_objects(&file).is_err());
+        fs::remove_dir_all(&store).unwrap();
+    }
 
     #[test]
     fn names_repositories_after_their_directory() {
