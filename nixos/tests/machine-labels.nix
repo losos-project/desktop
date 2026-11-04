@@ -248,8 +248,8 @@ in
           forged = (
               "import socket,struct; "
               "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0)); "
-              f"src=bytes.fromhex('{macs['red'].replace(':', '''')}'); "
-              f"sha=bytes.fromhex('{macs['red'].replace(':', '''')}'); "
+              f"src=bytes.fromhex('{macs['red'].replace(':', ''')}'); "
+              f"sha=bytes.fromhex('{macs['red'].replace(':', ''')}'); "
               f"spa=socket.inet_aton('{blue_ip}'); "
               "tha=b'\\x00'*6; tpa=socket.inet_aton('192.168.122.1'); "
               "s.send(b'\\xff'*6+src+b'\\x08\\x06'+"
@@ -265,7 +265,7 @@ in
           forged = (
               "import socket,struct; "
               "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0)); "
-              f"src=bytes.fromhex('{macs['blue'].replace(':', '''')}'); "
+              f"src=bytes.fromhex('{macs['blue'].replace(':', ''')}'); "
               "dst=b'\\xff'*6; "
               "ip=struct.pack('!BBHHHBBH4s4s',0x45,0,28,0,0,64,17,0,"
               "socket.inet_aton('192.168.122.20'),socket.inet_aton('203.0.113.1')); "
@@ -290,7 +290,7 @@ in
               "dst=socket.inet_pton(socket.AF_INET6,'ff02::1')\n"
               "payload=struct.pack('!BBHI',136,0,0,0x20000000)+target+"
               "b'\\x02\\x01'+bytes.fromhex('"
-              f"{macs['red'].replace(':', '''')}"
+              f"{macs['red'].replace(':', ''')}"
               "')\n"
               "pseudo=src+dst+struct.pack('!I3xB',len(payload),58)\n"
               "data=pseudo+payload\n"
@@ -303,7 +303,7 @@ in
               "ip=struct.pack('!IHBB',6<<28,len(icmp),58,255)+src+dst\n"
               "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0))\n"
               "s.send(bytes.fromhex('333300000001"
-              f"{macs['red'].replace(':', '''')}"
+              f"{macs['red'].replace(':', ''')}"
               "86dd')+ip+icmp)"
           )
           machine.succeed(f"ip netns exec red python3 -c \"{forged}\"")
@@ -324,7 +324,7 @@ in
               f"target=socket.inet_pton(socket.AF_INET6,'{host_ip6}')\n"
               "dst=socket.inet_pton(socket.AF_INET6,'ff02::1:ff00:1')\n"
               "payload=struct.pack('!BBHI',135,0,0,0)+target+b'\\x01\\x01'+bytes.fromhex('"
-              f"{macs['red'].replace(':', '''')}"
+              f"{macs['red'].replace(':', ''')}"
               "')\n"
               "pseudo=src+dst+struct.pack('!I3xB',len(payload),58)\n"
               "data=pseudo+payload\n"
@@ -337,7 +337,7 @@ in
               "ip=struct.pack('!IHBB',6<<28,len(icmp),58,255)+src+dst\n"
               "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('eth0',0))\n"
               "s.send(bytes.fromhex('3333ff000001"
-              f"{macs['red'].replace(':', '''')}"
+              f"{macs['red'].replace(':', ''')}"
               "86dd')+ip+icmp)"
           )
           machine.succeed(f"ip netns exec red python3 -c \"{forged}\"")
