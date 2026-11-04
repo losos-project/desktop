@@ -1,0 +1,28 @@
+--- a/src/i8dot.rs
++++ b/src/i8dot.rs
+@@ -251,7 +251,7 @@
+             b: <Self::Isa as Isa>::I8,
+             acc: <Self::Isa as Isa>::I32,
+         ) -> <Self::Isa as Isa>::I32 {
+-            use std::arch::x86_64::_mm512_dpbusd_epi32;
++            use std::arch::asm;
+ 
+             #[target_feature(enable = "avx512vnni")]
+             #[inline]
+@@ -260,7 +260,15 @@
+                 b: <Avx512Isa as Isa>::I8,
+                 acc: <Avx512Isa as Isa>::I32,
+             ) -> <Avx512Isa as Isa>::I32 {
+-                _mm512_dpbusd_epi32(acc.0, a.0, b.0).into()
++                let mut acc = acc.0;
++                asm!(
++                    "vpdpbusd {acc}, {a}, {b}",
++                    acc = inout(zmm_reg) acc,
++                    a = in(zmm_reg) a.0,
++                    b = in(zmm_reg) b.0,
++                    options(nostack)
++                );
++                acc.into()
+             }
+             // Safety: Constructor checks "avx512vnni" feature is supported.
+             unsafe { dot(a, b, acc) }

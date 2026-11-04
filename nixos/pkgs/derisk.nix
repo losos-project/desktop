@@ -325,6 +325,21 @@ rustPlatform.buildRustPackage {
   ];
   buildFeatures = [ "derisk/host" ] ++ lib.optional withHardenedMalloc "derisk/hardened-malloc";
 
+  # derisk-redact's OCR runs on rten, whose int8 GEMM calls the
+  # `_mm512_dpbusd_epi32` intrinsic (AVX-512 VNNI). nixpkgs' rustc declares
+  # that intrinsic's LLVM binding with `<64 x i8>` operands while the LLVM it
+  # links expects `<16 x i32>`, so it rejects any build that instantiates the
+  # intrinsic ("intrinsic has wrong type"); a rustup toolchain does not, which
+  # is why only the Nix build failed. rten's x86_64 kernels already write
+  # `vpdpbusd` as inline asm, so the patch does the same for this one call.
+  # The vendored crates are copied writable by cargoSetupPostUnpackHook, which
+  # runs before postPatch, and their checksum files list no file hashes, so
+  # patching one changes neither the build nor `cargoHash`. Drop the patch
+  # once nixpkgs' rustc and its LLVM agree again.
+  postPatch = ''
+    patch -p1 -d "$cargoDepsCopy"/rten-gemm-* < ${./patches/rten-gemm-vnni-asm.patch}
+  '';
+
   # build.rs compiles the palette's and the overview's plugins (plugins/ in
   # the same workspace and Cargo.lock, so the vendored crates cover them) for
   # wasm32-unknown-unknown. nixpkgs' rustc carries that target's std but links
