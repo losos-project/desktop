@@ -120,8 +120,8 @@ in
     # last, with the free space of the disk directly behind it.
     "20-usr-verity-a" = {
       Type = arch.usrVerity;
-      SizeMinBytes = "128M";
-      SizeMaxBytes = "128M";
+      SizeMinBytes = "256M";
+      SizeMaxBytes = "256M";
     };
     "21-usr-a" = {
       Type = arch.usr;
@@ -134,8 +134,8 @@ in
     "22-usr-verity-b" = {
       Type = arch.usrVerity;
       Label = "_empty";
-      SizeMinBytes = "128M";
-      SizeMaxBytes = "128M";
+      SizeMinBytes = "256M";
+      SizeMaxBytes = "256M";
     };
     "23-usr-b" = {
       Type = arch.usr;

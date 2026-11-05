@@ -24,11 +24,13 @@ swap         RAM-sized, a new key each boot          first boot (losos-swap)
 ![The disk from left to right: BIOS boot, ESP, usr-verity A and usr A come from the image; usr-verity B, usr B, root, home and swap are created on the first boot. The UKI's usrhash= names slot A's verity tree, sysupdate writes whichever slot is not in use, and a factory reset empties root and home](images/layout.svg)
 
 > [!IMPORTANT]
-> `/usr` is compressed with Zstandard. Each slot is `losos.usrSize` (8G) once
+> `/usr` is compressed with Zstandard. Each slot is `losos.usrSize` (16G) once
 > the first boot has grown it and can never grow again, so every later
 > release's store has to fit in it, and a release build fails when it does
 > not. Uncompressed, the store had reached 11.7G by October 2026, 7.3G
-> compressed; with LZ4HC it was 8.2G, and installs stopped at 97%.
+> compressed; with LZ4HC it was 8.2G, and installs stopped at 97%. The 8G
+> the slots shipped with passed in early November 2026 (8.2G compressed),
+> which is why they now hold 16G, with 256M verity partitions to match.
 
 On x86_64, GRUB's boot code is also in the MBR, so a PC without UEFI starts
 the same disk through the same [boot loader](boot-loaders.md).

@@ -72,9 +72,9 @@ in
         ];
         memorySize = 3072;
         # A disk to install onto, as large as repart's layout needs with
-        # root, /home and swap: both /usr slots, 8G of root, 4G of /home
-        # and swap as large as RAM.
-        emptyDiskImages = [ 40960 ];
+        # root, /home and swap: both 16G /usr slots, 8G of root, 4G of
+        # /home and swap as large as RAM, about 48G plus RAM in all.
+        emptyDiskImages = [ 65536 ];
         # A TPM 2.0, which encrypting root with a PIN needs; legacy BIOS
         # PCs are not offered it.
         tpm.enable = !bios;

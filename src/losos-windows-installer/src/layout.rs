@@ -30,7 +30,7 @@ pub const GIB: u64 = 1 << 30;
 /// image.nix gives the ESP of a disk of LosOS's own.
 pub const BOOT_SIZE: u64 = 512 * MIB;
 /// disk.nix's verity partitions.
-pub const VERITY_SIZE: u64 = 128 * MIB;
+pub const VERITY_SIZE: u64 = 256 * MIB;
 /// disk.nix's `SizeMinBytes=` for root and /home.
 pub const ROOT_MIN: u64 = 8 * GIB;
 pub const HOME_MIN: u64 = 4 * GIB;
@@ -203,11 +203,11 @@ mod tests {
 
     #[test]
     fn adds_up_what_first_boot_will_make() {
-        // 512M + 2 × (128M + 8G) + 8G + 4G + 16G of swap + slack.
+        // 512M + 2 × (256M + 8G) + 8G + 4G + 16G of swap + slack.
         let need = required(8 * GIB, 16 * GIB);
         assert_eq!(
             need,
-            512 * MIB + 2 * (128 * MIB + 8 * GIB) + 28 * GIB + 64 * MIB
+            512 * MIB + 2 * (256 * MIB + 8 * GIB) + 28 * GIB + 64 * MIB
         );
         assert_eq!(swap_size(4095), 4096);
     }

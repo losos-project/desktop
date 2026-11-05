@@ -68,7 +68,7 @@ in
     # device with /usr unmounted. A later -b wins over repart's own.
     #
     # Compressed, because every release has to fit the fixed update slot an
-    # installed disk already has (losos.usrSize, 8G; releaseArtifacts
+    # installed disk already has (losos.usrSize, 16G; releaseArtifacts
     # refuses a /usr that does not). LZ4HC did until the store grew past it:
     # the 23 October 2026 nightly's /usr was 8.24G, 11.7G uncompressed.
     # The same store as Zstandard level 3 in 128K physical clusters (-C) is
@@ -102,9 +102,9 @@ in
         };
       };
 
-      # Fixed at 128M rather than minimised: the hash tree of an 8G /usr is
-      # about 64M, and slot A's verity partition cannot grow later because
-      # slot A's data partition sits directly behind it.
+      # Fixed at 256M rather than minimised: the hash tree of a 16G /usr is
+      # 128M, and slot A's verity partition cannot grow later because slot
+      # A's data partition sits directly behind it.
       ${partitionIds.store-verity}.repartConfig = {
         Label = "${id}_${version}";
         # repart defaults verity blocks to the image's 512-byte sector size,
@@ -113,8 +113,8 @@ in
         VerityDataBlockSizeBytes = 4096;
         VerityHashBlockSizeBytes = 4096;
         Minimize = lib.mkForce "off";
-        SizeMinBytes = "128M";
-        SizeMaxBytes = "128M";
+        SizeMinBytes = "256M";
+        SizeMaxBytes = "256M";
       };
 
       # The label carries the version because that is where systemd-sysupdate

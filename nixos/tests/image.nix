@@ -64,8 +64,9 @@ rec {
     };
 
   # A copy-on-write disk backed by the image, grown so first boot has room
-  # for slot B, root, /home and swap.
-  disk = diskOfSize "32G";
+  # for slot B, root, /home and swap: with 16G slots that is about 48G plus
+  # swap.
+  disk = diskOfSize "64G";
   diskOfSize = size: machine: ''
     import os
     import subprocess

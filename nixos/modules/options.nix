@@ -240,7 +240,7 @@ in
 
     usrSize = mkOption {
       type = types.str;
-      default = "8G";
+      default = "16G";
       description = ''
         The size of each /usr slot once first boot has grown it. An update
         writes a whole new /usr into the slot not currently booted, so this
