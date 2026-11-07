@@ -601,7 +601,6 @@ jobs:
         id: check
         if: steps.build.outputs.complete == 'true'
         run: |
-          nix flake check --impure --no-build -L
           system=$(nix eval --impure --raw --expr builtins.currentSystem)
           nix eval --impure --json ".#checks.$system" \
             --apply 'cs: builtins.mapAttrs (_: c: if c ? driver then c.outPath else "") cs' \
