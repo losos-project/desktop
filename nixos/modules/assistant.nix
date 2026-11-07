@@ -15,6 +15,12 @@
     # the CPU otherwise, for 45 MiB more. A phone's GPU is Android's, behind
     # libhybris, which no Vulkan loader here reaches.
     package = if pkgs.stdenv.hostPlatform.isx86_64 then pkgs.ollama-vulkan else pkgs.ollama;
+    environmentVariables = {
+      # The OpenAI wire has no num_ctx; the old backend passed 8192 because
+      # the tools and a busy desktop's description take ~3000 tokens and
+      # Ollama's default (4096) would cut a long request short.
+      OLLAMA_CONTEXT_LENGTH = "8192";
+    };
     # NixOS's defaults otherwise: loopback only, a dynamic user, the models
     # in /var/lib/ollama on the root partition, where state lives.
   };
