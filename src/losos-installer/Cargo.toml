@@ -19,5 +19,5 @@ losos-report = { path = "../losos-report" }
 # the release binary is the one on the installer ISO, so it trades build time
 # for inlining across crates and a smaller binary.
 [profile.release]
-lto = true
+lto = "thin"
 codegen-units = 1

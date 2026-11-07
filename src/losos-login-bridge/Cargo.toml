@@ -44,7 +44,7 @@ bindgen = "0.72"
 
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "thin"
 codegen-units = 1
 strip = true
 # A panic must never unwind into the login screen through PAM's C frames;

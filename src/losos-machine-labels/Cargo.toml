@@ -16,5 +16,5 @@ roxmltree = "0.20"
 
 # Fat LTO and one codegen unit, as every Rust crate in losos-desktop builds.
 [profile.release]
-lto = true
+lto = "thin"
 codegen-units = 1

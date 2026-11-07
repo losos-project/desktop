@@ -30,6 +30,6 @@ rustls-platform-verifier = "0.7"
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "thin"
 codegen-units = 1
 strip = true

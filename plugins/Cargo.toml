@@ -20,7 +20,7 @@ wit-bindgen = { version = "0.63.0", default-features = false, features = ["macro
 # latency rather than disk. These are pm's own plugin profile settings.
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
