@@ -82,17 +82,20 @@ let
     }
   ];
 
-  cargoHash = "sha256-C2KKSvXym5lF9Po/7bDV8Y1//fgArG65tRFvQ3E7i5Y=";
+  cargoHash = "sha256-Dxwym+gWyhlGOpqUb3GoTdLy6CbUSxI86jw4Kagz3IA=";
 
   # Fat LTO (Cargo.toml: lto = true) compiles every dependency as bitcode
   # (-C linker-plugin-lto) and links it in one rustc. That link is killed on
   # a 4GB machine, and stripping -C lto only from the final rustc then leaves
   # mold with undefined symbols, because the rlibs contain no object code.
   # These override the release profile, and the wasm-plugin profile that
-  # inherits it, so the crates ship ordinary object code.
+  # inherits it, so the crates ship ordinary object code. More codegen
+  # units and fewer parallel jobs keep peak RSS down on memory-tight hosts.
   cargoEnv = {
     CARGO_PROFILE_RELEASE_LTO = "off";
     CARGO_PROFILE_WASM_PLUGIN_LTO = "off";
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16";
+    CARGO_BUILD_JOBS = "2";
   };
 
   # rten-gemm (rten 0.26.0) does not compile against nixpkgs rustc 1.98 on
