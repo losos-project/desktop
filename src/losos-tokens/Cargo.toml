@@ -28,6 +28,6 @@ nix = { version = "0.31", default-features = false, features = ["socket"] }
 
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "thin"
 codegen-units = 1
 strip = true

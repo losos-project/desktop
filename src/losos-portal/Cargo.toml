@@ -25,6 +25,6 @@ crossbeam-channel = "0.5"
 
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "thin"
 codegen-units = 1
 strip = true

@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 # The edge runtime compiles the module on a cold start, so size is latency.
 [profile.release]
 opt-level = "z"
-lto = true
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
