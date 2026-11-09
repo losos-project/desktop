@@ -53,7 +53,12 @@
 
   systemd.paths.losos-machine-labels-leases = {
     wantedBy = [ "multi-user.target" ];
-    after = [ "libvirtd.service" ];
+    # No `after = libvirtd.service` here: it closed an ordering cycle
+    # paths.target → basic.target → libvirtd-config → this path →
+    # libvirtd, which systemd broke by deleting libvirtd-config's job, so
+    # libvirtd never started and every machine with it. The path only
+    # watches the lease file and starts the service for it, whose own
+    # requires are what wait for libvirt.
     pathConfig = {
       PathChanged = "/var/lib/libvirt/dnsmasq/default.leases";
       Unit = "losos-machine-labels-leases.service";
