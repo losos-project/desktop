@@ -155,7 +155,7 @@ in
               "/var/lib/libvirt/dnsmasq/default.leases"
           ).strip()
           machine.wait_until_succeeds(
-              f"nft list map bridge losos-machine-labels arp4 | grep -q '\"{port}\" : {address}'",
+              f"nft list map bridge losos-machine-labels arp4 | grep -q '\"{port}\" . {mac.lower()} . {address} : accept'",
               timeout=30,
           )
           machine.succeed(
