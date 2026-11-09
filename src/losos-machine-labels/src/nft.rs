@@ -146,19 +146,25 @@ map arp4 {{ type ifname . ether_addr . ipv4_addr : verdict; }}
 }
 
 /// Takes `ports` out of every set they are in, which a port of a machine
-/// gone since may still be: libvirt names the next machine's card the same.
-fn forget(script: &mut String, ports: &[String]) {
+/// gone since may still be: libvirt names the next machine's card the
+/// same. Their entries in the maps go too, by the exact `pairs` a check
+/// of the table's elements holds — concat keys cannot be destroyed
+/// partly (`nft -c` accepts the shortened form, running nft does not).
+/// The IPv4 ownership map needs no destroy here: its refreshes flush and
+/// rebuild it from live ports, and a port no packet can enter on does
+/// nothing until then.
+fn forget(script: &mut String, ports: &[String], pairs: &[(String, String)]) {
     for port in ports {
         for set in LABELS.iter().chain(OTHER_SETS.iter()) {
             script.push_str(&format!(
                 "destroy element bridge {TABLE} {set} {{ \"{port}\" }}\n"
             ));
         }
-        for map in ["macs", "arp4"] {
-            script.push_str(&format!(
-                "destroy element bridge {TABLE} {map} {{ \"{port}\" }}\n"
-            ));
-        }
+    }
+    for (port, mac) in pairs {
+        script.push_str(&format!(
+            "destroy element bridge {TABLE} macs {{ \"{port}\" . {mac} }}\n"
+        ));
     }
 }
 
@@ -203,8 +209,17 @@ pub fn mac_bindings(machine: &Machine) -> String {
 /// Removes any previous policy and address binding for a machine's ports.
 pub fn unassign(machine: &Machine) -> String {
     let mut script = String::new();
-    forget(&mut script, &machine.ports);
+    forget(&mut script, &machine.ports, &machine_pairs(machine));
     script
+}
+
+/// A machine's port-and-MAC pairs, as the maps are keyed.
+fn machine_pairs(machine: &Machine) -> Vec<(String, String)> {
+    machine
+        .macs
+        .iter()
+        .map(|(mac, port)| (port.clone(), mac.clone()))
+        .collect()
 }
 
 /// The current port-to-MAC map, as nftables prints it.
@@ -310,7 +325,7 @@ pub fn current_port_macs() -> std::io::Result<Vec<(String, String)>> {
 /// The changes for `machine` having stopped.
 pub fn stopped(machine: &Machine) -> String {
     let mut script = String::new();
-    forget(&mut script, &machine.ports);
+    forget(&mut script, &machine.ports, &machine_pairs(machine));
     script
 }
 
@@ -359,7 +374,13 @@ pub fn forget_gone() -> String {
         .filter(|port| !std::path::Path::new("/sys/class/net").join(port).exists())
         .collect();
     let mut script = String::new();
-    forget(&mut script, &gone);
+    // The pairs the table still holds for the gone ports, by which their
+    // entries in the two maps are destroyed; the sets go by port alone.
+    let pairs: Vec<(String, String)> = port_macs(&String::from_utf8_lossy(&listing.stdout))
+        .into_iter()
+        .filter(|(port, _)| gone.contains(port))
+        .collect();
+    forget(&mut script, &gone, &pairs);
     script
 }
 
@@ -593,7 +614,15 @@ mod tests {
             &leases,
         ));
         let mut forgotten = String::new();
-        forget(&mut forgotten, &machine.ports);
+        forget(
+            &mut forgotten,
+            &machine.ports,
+            &machine
+                .macs
+                .iter()
+                .map(|(mac, port)| (port.clone(), mac.clone()))
+                .collect::<Vec<_>>(),
+        );
         script.push_str(&forgotten);
         let mut nft = Command::new("nft")
             .args(["-c", "-f", "-"])

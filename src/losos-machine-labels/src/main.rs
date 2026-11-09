@@ -175,10 +175,13 @@ fn locked_arp() -> miette::Result<()> {
         return Ok(());
     }
     advance_generation()?;
-    let script = nft::arp_owners(
+    // Ports gone since the last time drop their bindings here too, so a
+    // card named the same as a gone one does not inherit them.
+    let mut script = nft::forget_gone();
+    script.push_str(&nft::arp_owners(
         &nft::current_port_macs().into_diagnostic()?,
         &nft::leases(&String::from_utf8_lossy(&leases)),
-    );
+    ));
     nft::apply(&script).into_diagnostic()
 }
 
