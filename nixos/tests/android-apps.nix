@@ -99,6 +99,16 @@ in
           machine.screenshot("desktop")
 
       with subtest("the network reaches Google"):
+          # sys-net answers DNS at 10.139.0.1 as the forwarder; anywhere
+          # it does not, this carries the bridge state and sys-net's own
+          # console (netd's log) into the output to say why.
+          print(machine.execute(
+              "ip -br link; ip -br addr;"
+              " ip route show table 254; ip route show table 100;"
+              " ip rule; ping -c1 -W2 10.139.0.1 || true;"
+              " nft list table bridge losos-machine-labels || true;"
+              " tail -n 150 /var/log/libvirt/qemu/sys-net-console.log 2>/dev/null || true",
+          )[1])
           machine.wait_until_succeeds(
               "curl -fsS -o /dev/null https://dl.google.com/android/repository/repository2-3.xml",
               timeout=300,
