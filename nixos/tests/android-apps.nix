@@ -107,7 +107,12 @@ in
               " ip route show table 254; ip route show table 100;"
               " ip rule; ping -c1 -W2 10.139.0.1 || true;"
               " nft list table bridge losos-machine-labels || true;"
-              " tail -n 150 /var/log/libvirt/qemu/sys-net-console.log 2>/dev/null || true",
+              " virsh domstate sys-net 2>&1;"
+              " ls -la /var/log/libvirt/qemu/ 2>&1;"
+              " tail -c 4000 /var/log/libvirt/qemu/sys-net.log 2>&1;"
+              " journalctl --no-pager -n 60 -u libvirtd -u systemd-machined"
+              " -u 'qemu-1-sys-net' -u losos-service-machine-sys-net-start"
+              " -u losos-service-machine-sys-net-graph 2>&1 | tail -n 60",
           )[1])
           machine.wait_until_succeeds(
               "curl -fsS -o /dev/null https://dl.google.com/android/repository/repository2-3.xml",
