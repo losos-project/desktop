@@ -15,9 +15,9 @@ serde_json = "1"
 # reporter.
 losos-report = { path = "../losos-report" }
 
-# Fat LTO and one codegen unit, as every Rust crate in losos-desktop builds:
-# the release binary is the one on the installer ISO, so it trades build time
-# for inlining across crates and a smaller binary.
+# Thin LTO and one codegen unit, as every Rust crate in losos-desktop builds:
+# the release binary is the one on the installer ISO, so it trades some build
+# time for inlining across crates and a smaller binary.
 [profile.release]
 lto = "thin"
 codegen-units = 1

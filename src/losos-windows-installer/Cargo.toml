@@ -19,7 +19,7 @@ uuid = { version = "1.28.0", features = ["v4"] }
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Ioctl", "Win32_System_IO", "Win32_Storage_FileSystem", "Win32_System_WindowsProgramming", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry", "Win32_UI_Shell", "Win32_System_Memory"] }
 
-# Fat LTO and one codegen unit, as every Rust crate in losos-desktop builds.
+# Thin LTO and one codegen unit, as every Rust crate in losos-desktop builds.
 [profile.release]
 lto = "thin"
 codegen-units = 1

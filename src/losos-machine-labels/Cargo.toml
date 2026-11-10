@@ -14,7 +14,7 @@ thiserror = "2"
 # libvirt's domain XML, read without a DOM of our own.
 roxmltree = "0.20"
 
-# Fat LTO and one codegen unit, as every Rust crate in losos-desktop builds.
+# Thin LTO and one codegen unit, as every Rust crate in losos-desktop builds.
 [profile.release]
 lto = "thin"
 codegen-units = 1
