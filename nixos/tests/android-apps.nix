@@ -109,7 +109,9 @@ in
               " nft list table bridge losos-machine-labels || true;"
               " virsh domstate sys-net 2>&1;"
               " ls -la /var/log/libvirt/qemu/ 2>&1;"
-              " tail -c 4000 /var/log/libvirt/qemu/sys-net.log 2>&1;"
+              " cat /var/log/libvirt/qemu/sys-net.log 2>&1;"
+              " virsh dumpxml sys-net 2>&1 | sed -n '/<os>/,/<\\/os>/p';"
+              " ls /var/lib/losos-service-machines/sys-net/ 2>&1;"
               " journalctl --no-pager -n 60 -u libvirtd -u systemd-machined"
               " -u 'qemu-1-sys-net' -u losos-service-machine-sys-net-start"
               " -u losos-service-machine-sys-net-graph 2>&1 | tail -n 60",
