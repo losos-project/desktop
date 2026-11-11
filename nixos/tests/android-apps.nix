@@ -80,10 +80,15 @@ in
 
       with subtest("a person signs in to the desktop"):
           # Directory storage, so the Pixel's 20 GB need no LUKS volume of
-          # that size made first; the storage is boot.nix's to test.
+          # that size made first; the storage is boot.nix's to test. Wheel,
+          # because first-boot setup makes its account an administrator
+          # (docs/first-boot.md) and derisk manages machines only for one:
+          # without it the session's libvirt connection sits behind a polkit
+          # password prompt nobody in the test answers, and neither the
+          # machines nor, with them, sys-net's DNS is reached.
           machine.succeed(
               f"NEWPASSWORD=correct-horse homectl create alice --uid={uid} --storage=directory"
-              " --enforce-password-policy=no"
+              " --member-of=wheel --enforce-password-policy=no"
           )
           # The first login after setup, as boot.nix has it.
           machine.succeed("umask 077; printf 'alice\\0correct-horse' > /run/derisk-first-login")
@@ -109,7 +114,7 @@ in
               " nft list table bridge losos-machine-labels || true;"
               " virsh domstate sys-net 2>&1;"
               " timeout 5 virsh domstats sys-net --cpu 2>&1 | grep cpu_time"
-              " || echo 'domstats hung: the machine's monitor is not answering';"
+              " || echo 'domstats hung: the machine monitor is not answering';"
               " timeout 5 virsh qemu-monitor-command sys-net --hmp 'info status' 2>&1"
               " || echo 'the monitor command hung too';"
               " ps -C qemu-system-x86_64 -o pid,pcpu,etime,args 2>&1 | grep sys-net | cut -c1-80;"
