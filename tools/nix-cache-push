@@ -200,10 +200,22 @@ chunk_n=0
 cap=$(batch_cap)
 flush_chunk() {
   [ "$chunk_n" -gt 0 ] || return 0
-  nix copy --no-recursive --stdin --to "$to" < "$work/chunk"
+  # One failed batch is retried path by path, so one broken path does not
+  # lose the rest of what it held. What still fails is skipped, and the run
+  # stays green: an uncached path costs the next run a build, a red job
+  # costs the release.
+  if ! nix copy --no-recursive --stdin --to "$to" < "$work/chunk"; then
+    echo "nix-cache-push: a batch of $chunk_n failed, retrying path by path" >&2
+    rm -rf "$staging/nar"
+    while read -r p; do
+      nix copy --no-recursive --to "$to" "$p" \
+        || echo "nix-cache-push: skipped $p" >&2
+    done < "$work/chunk"
+  fi
   # shellcheck disable=SC2016 # expanded by the inner bash, not here
   xargs -r -n1 basename < "$work/chunk" | cut -c1-32 \
-    | REPO=$repository DRY_RUN=$dry_run xargs -r -P "$jobs" -I{} bash -c 'push_one "$1" "$2"' _ "$staging" {}
+    | REPO=$repository DRY_RUN=$dry_run xargs -r -P "$jobs" -I{} bash -c 'push_one "$1" "$2"' _ "$staging" {} \
+    || echo "nix-cache-push: some pushes of a batch failed" >&2
   rm -rf "$staging/nar"
   pushed=$((pushed + chunk_n))
   echo "nix-cache-push: pushed $pushed/$todo"
@@ -212,7 +224,19 @@ flush_chunk() {
   chunk_n=0
   cap=$(batch_cap)
 }
+skipped=0
 while read -r size path; do
+  # A path the disk cannot hold even alone, NAR and the copy's own scratch
+  # both, is skipped rather than staged into a nearly full disk: nix copy
+  # writes each NAR whole, and a release directory of 25G against a few G
+  # of free space filled the aarch64 runner's disk ("No space left on
+  # device") after everything else had already pushed. Nothing is staged
+  # when the free space cannot hold it.
+  if [ "$chunk_n" = 0 ] && [ "$size" -gt "$cap" ]; then
+    skipped=$((skipped + 1))
+    echo "nix-cache-push: skipped $(numfmt --to=iec "$size") $path, bigger than $(numfmt --to=iec "$((cap * 4))") free" >&2
+    continue
+  fi
   if [ "$chunk_n" -gt 0 ] && { [ "$chunk_n" -ge "$batch" ] || [ $((chunk_bytes + size)) -gt "$cap" ]; }; then
     flush_chunk
   fi
@@ -221,4 +245,7 @@ while read -r size path; do
   chunk_n=$((chunk_n + 1))
 done < "$work/sized"
 flush_chunk
+if [ "$skipped" -gt 0 ]; then
+  echo "nix-cache-push: skipped $skipped of $todo path(s) that did not fit the disk" >&2
+fi
 echo "nix-cache-push: pushed $todo path(s)"
