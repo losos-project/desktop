@@ -26,7 +26,11 @@ Wi-Fi when both are up. A machine with a cable in is online without being
 asked anything. Otherwise derisk scans for a Wi-Fi network and joins it
 through NetworkManager with `nmcli`. Of the firmware NixOS would add, only
 `linux-firmware` is on the medium, because most Wi-Fi cards do not start
-without it.
+without it, and the NVIDIA driver's GSP firmware when a supported card is
+present. The live medium also runs the same `losos-hardware` rules and open
+NVIDIA stack as an installed session (`nixos/installer/drivers.nix`,
+[Drivers](drivers.md)), so Turing-and-newer cards such as a GTX 16xx are not
+left on nouveau while derisk runs the GLES compositor.
 
 ![The installer's Disk page, listing the one disk it may install to, and the Erase this disk? page, which names the disk once more behind an Erase and install button](images/installer-pages.png)
 
@@ -43,9 +47,11 @@ refuses any disk it did not list. Before anything is touched, the installer
 names the chosen disk, its size and the source once more, behind an "Erase
 and install" button. Then:
 
-1. The installer wipes the disk's old partition table and tells the kernel to
-   forget its partitions. The kernel refuses while one of them is mounted,
-   and that stops the install before anything is written. This step matters
+1. The installer releases anything still using the chosen disk (swap,
+   mounts, active volume groups and open LUKS devices on it), wipes the
+   disk's old partition table and tells the kernel to forget its partitions.
+   The kernel still refuses while something on the disk stays busy, and
+   that stops the install before anything is written. This step matters
    because repart adds the new ESP to the kernel itself to format it, and it
    could not do that while the kernel still knew an old partition with the
    same number.

@@ -86,6 +86,14 @@ instead. [The installer](installer.md) describes each step.
 > leaves the disk without a working system, and the install can be run again
 > from the start. tty2 has a root shell for looking around first.
 
+If the install refuses to erase a disk that used LVM or LUKS, the details
+usually say the partition table could not be reread. The backend now
+deactivates volume groups on that disk and closes LUKS on its partitions
+before it wipes the disk. LosOS does not install *into* an existing
+LVM-on-LUKS layout ([layout](layout.md)); it replaces the whole disk with its
+own GPT partitions. Optional TPM-locked LUKS on the root partition is
+[another scheme](installer.md#asking-for-a-pin-at-startup).
+
 ![The installer's "The install failed" page: partitioning and mounting done, "Downloading and writing the system" failed with systemd-sysupdate's exit status, and Show details open on a log ending in "SSL peer certificate or SSH remote key was not OK"](images/installer-failed.png)
 
 ## Setup could not finish

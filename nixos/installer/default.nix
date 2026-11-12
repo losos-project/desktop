@@ -64,6 +64,9 @@ let
         pkgs.gnutar
         pkgs.bash
         pkgs.e2fsprogs
+        # Tear down LVM and LUKS on the install target before repart (install.rs).
+        pkgs.lvm2
+        pkgs.cryptsetup
       ]
     }:$PATH
     exec ${lib.getExe pkgs.losos-installer} "$@"
@@ -77,12 +80,18 @@ let
   };
 in
 {
+  losos.installer.livepatch.backend = backend;
+
   imports = [
     "${modulesPath}/profiles/minimal.nix"
     ./iso.nix
     # The installed system's boot screen, which reads "LosOS Desktop
     # installer is starting" here.
     ../modules/splash.nix
+    # NVIDIA open and the rest of losos-hardware's rules, as on the
+    # installed system (docs/drivers.md).
+    ./drivers.nix
+    ./livepatch.nix
     # update-source.nix was imported here, so an install from the channel
     # read it through the same socket on 127.0.0.1 as an update does. That
     # socket streams each file through curl's one connection; the backend
@@ -115,13 +124,9 @@ in
   # wherever it is plugged in, and every network driver.
   hardware.enableAllHardware = true;
 
-  # all-hardware.nix also turns on every redistributable firmware package, and
-  # most of their bytes are audio DSP and other firmware an installer never
-  # loads. linux-firmware alone holds what is needed: Wi-Fi, and the GPU
-  # firmware without which amdgpu or nouveau would take the console over from
-  # the EFI framebuffer and then fail to drive it.
-  hardware.enableRedistributableFirmware = lib.mkForce false;
-  hardware.firmware = [ pkgs.linux-firmware ];
+  # hardware.firmware and redistributable firmware are set in drivers.nix
+  # after nvidia.nix, so the ISO keeps linux-firmware plus NVIDIA GSP without
+  # pulling in nixpkgs' full redistributable-firmware tree.
 
   # Mesa, for derisk's GLES renderer and the GBM buffers it scans out, as on
   # the installed system (desktop.nix).
@@ -251,10 +256,7 @@ in
     serviceConfig = {
       ExecStart =
         lib.escapeShellArgs [
-          (lib.getExe pkgs.derisk)
-          "installer"
-          "--"
-          backend
+          config.system.build.installerSession
           "serve"
           "--name"
           "LosOS Desktop"

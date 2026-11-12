@@ -32,7 +32,7 @@
 //! rendered for the chosen disk here. The UKI's target is the ESP's mount
 //! point, which the OS does know, because it passes the same path to this
 //! program.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -243,12 +243,107 @@ fn install(plan: &Plan, events: &Sender<Event>) -> Result<(), String> {
 /// stops an install, before anything is written, when a partition on the
 /// disk is mounted or otherwise open, since the kernel then refuses.
 fn forget_partitions(disk: &str, events: &Sender<Event>) -> Result<(), String> {
+    release_disk(disk, events);
     let in_use = |e: String| format!("{disk} has a partition in use, so it cannot be erased: {e}");
     command("blockdev", &["--rereadpt", disk], false, events).map_err(in_use)?;
     command("wipefs", &["--all", "--force", disk], false, events)?;
     command("blockdev", &["--rereadpt", disk], false, events).map_err(in_use)?;
     command("udevadm", &["settle"], false, events)?;
     Ok(())
+}
+
+/// Unmounts, swaps off, deactivates volume groups and closes LUKS devices on
+/// `disk` so repart can wipe its partition table. A machine that still runs
+/// another OS from LVM-on-LUKS on that disk often needs this before
+/// `blockdev --rereadpt` succeeds; nothing here was done before, so people
+/// fixed it by hand from tty2 with `vgchange -an` and `cryptsetup close`.
+fn release_disk(disk: &str, events: &Sender<Event>) {
+    let _ = events.send(Event::Line(format!(
+        "Releasing anything still using {disk}."
+    )));
+    if let Ok(targets) = command(
+        "findmnt",
+        &["-rn", "-S", disk, "-o", "TARGET"],
+        true,
+        events,
+    ) {
+        let mut mounts: Vec<&str> = targets.lines().filter(|line| !line.is_empty()).collect();
+        mounts.sort_by_key(|target| std::cmp::Reverse(target.len()));
+        for target in mounts {
+            if target == "/" || target == "/iso" {
+                continue;
+            }
+            if target.starts_with("/run/losos-installer") {
+                continue;
+            }
+            let _ = command("umount", &["-R", target], false, events);
+        }
+    }
+    if let Ok(swap) = command(
+        "findmnt",
+        &["-rn", "-S", disk, "-t", "swap", "-o", "SOURCE"],
+        true,
+        events,
+    ) {
+        for source in swap.lines().filter(|line| !line.is_empty()) {
+            let _ = command("swapoff", &[source], false, events);
+        }
+    }
+    if let Ok(pvs) = command(
+        "pvs",
+        &["--noheadings", "-o", "vg_name,pv_name"],
+        true,
+        events,
+    ) {
+        for vg in vgs_on_disk(&pvs, disk) {
+            let _ = command("vgchange", &["-an", &vg], false, events);
+        }
+    }
+    // LVM-on-LUKS leaves crypt mappers after the volume group is gone; close
+    // whatever still sits on a partition of this disk, deepest stacks first.
+    for _ in 0..8 {
+        let Ok(nodes) = command("lsblk", &["-rn", "-o", "PATH,TYPE", disk], true, events) else {
+            break;
+        };
+        let names: Vec<String> = nodes
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let path = fields.next()?;
+                let kind = fields.next()?;
+                (kind == "crypt").then(|| cryptsetup_name(path))
+            })
+            .collect();
+        if names.is_empty() {
+            break;
+        }
+        for name in names {
+            let _ = command("cryptsetup", &["close", &name], false, events);
+        }
+    }
+    let _ = command("udevadm", &["settle"], false, events);
+}
+
+fn cryptsetup_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_owned()
+}
+
+pub fn vgs_on_disk(pvs_listing: &str, disk: &str) -> Vec<String> {
+    let prefix = format!("{disk}");
+    let mut vgs = BTreeSet::new();
+    for line in pvs_listing.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(vg) = fields.next() else {
+            continue;
+        };
+        let Some(pv) = fields.next() else {
+            continue;
+        };
+        if pv == disk || pv.starts_with(&prefix) {
+            vgs.insert(vg.to_owned());
+        }
+    }
+    vgs.into_iter().collect()
 }
 
 fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), String> {

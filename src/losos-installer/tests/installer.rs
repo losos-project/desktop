@@ -667,6 +667,16 @@ fn aria2_saves_every_part_under_its_own_name() {
 }
 
 #[test]
+fn volume_groups_on_the_chosen_disk_are_found_from_pvs() {
+    let listing = "  datavg   /dev/sda2\n  rootvg   /dev/nvme0n1p3\n  oldvg    /dev/sda1\n";
+    assert_eq!(
+        install::vgs_on_disk(listing, "/dev/sda"),
+        ["datavg", "oldvg"]
+    );
+    assert_eq!(install::vgs_on_disk(listing, "/dev/nvme0n1"), ["rootvg"]);
+}
+
+#[test]
 fn the_scratch_partition_is_found_in_reparts_table() {
     let table = r#"[
         {"type":"esp","label":"ESP","node":"/dev/nvme0n1p1","activity":"unchanged"},

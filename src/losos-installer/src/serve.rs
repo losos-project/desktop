@@ -135,6 +135,11 @@ pub fn hello(config: &Config) -> Value {
     if encryption(config).is_some() {
         hello["encryption"] = json!(true);
     }
+    if let Ok(text) = std::fs::read_to_string("/run/losos-installer/livepatch-offer.json") {
+        if let Ok(offer) = serde_json::from_str::<Value>(&text) {
+            hello["livepatch"] = offer;
+        }
+    }
     hello
 }
 

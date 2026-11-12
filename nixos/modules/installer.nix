@@ -156,10 +156,13 @@ let
       ../installer
       # The image's own package set, overlay and all, so the installer's
       # systemd is the image's systemd and nothing is evaluated twice.
+      # The image's pkgs already carries nvidia.nix's allowUnfreePredicate;
+      # eval-config forbids nixpkgs.config when pkgs is injected.
       { nixpkgs.pkgs = pkgs; }
     ];
     specialArgs.losos = {
       inherit (cfg) version channel;
+      releaseRepository = cfg.release.repository;
       inherit (cfg.update) baseUrl pubring;
       # Where the backend reads which assets make up the channel's files,
       # when baseUrl is losos-update-source's address (update-source.nix).
@@ -193,10 +196,18 @@ let
           null;
     };
   };
+
+  installerLiveBundle = pkgs.callPackage ../pkgs/installer-live-bundle.nix {
+    inherit (cfg) version channel;
+    installerToplevel = installer.config.system.build.toplevel;
+    derisk = pkgs.derisk;
+    backend = installer.config.losos.installer.livepatch.backend;
+  };
 in
 {
   system.build = {
     installerSystem = installer;
     installerIso = installer.config.system.build.isoImage;
+    inherit installerLiveBundle;
   };
 }
