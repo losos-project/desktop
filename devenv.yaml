@@ -1,0 +1,6 @@
+# Pin nixpkgs to the same revision as flake.lock's nixpkgs input so `devenv
+# shell` and `nix build` see the same toolchain. After `nix flake update
+# nixpkgs`, copy the new rev here and run `devenv update`.
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504

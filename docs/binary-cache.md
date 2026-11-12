@@ -52,6 +52,17 @@ cd proxy && sh build.sh
 GHCR_REPOSITORY=losos-project/desktop node --experimental-strip-types serve.ts 127.0.0.1:8484
 ```
 
+The repository wraps the same steps for a workstation. `devenv shell` and
+`nix develop` run `tools/enter-local-cache.sh` on entry (starts the proxy;
+registers the substituter when passwordless sudo works, otherwise prints the
+one-time `configure-nix-local-cache.sh` command):
+
+```
+devenv shell                        # or: direnv allow && cd into the tree
+./tools/configure-nix-local-cache.sh  # once; needs sudo on multi-user Nix
+./tools/nix-with-local-cache.sh build .#installer -L
+```
+
 To use it for a build:
 
 ```

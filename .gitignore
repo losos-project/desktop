@@ -5,10 +5,12 @@
 target/
 /plugins/dist
 
-# nix-direnv caches the dev shell in .direnv/, `nix build` leaves result
-# symlinks, and `nix run .#vm` writes a disk and a firmware variable store into
-# the directory it ran in.
+# nix-direnv caches the dev shell in .direnv/, devenv keeps machine state in
+# .devenv/, `nix build` leaves result symlinks, and `nix run .#vm` writes a
+# disk and a firmware variable store into the directory it ran in.
 .direnv/
+.devenv/
+.devenv.flake.nix
 result
 result-*
 /losos-desktop.qcow2

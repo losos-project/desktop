@@ -395,6 +395,9 @@
           installer-boot = pkgs.testers.runNixOSTest (
             import ./nixos/tests/installer-boot.nix { inherit self; }
           );
+          installer-liveproof = pkgs.testers.runNixOSTest (
+            import ./nixos/tests/installer-liveproof.nix { inherit self; }
+          );
           installer-boot-bios = pkgs.testers.runNixOSTest (
             import ./nixos/tests/installer-boot.nix {
               inherit self;
@@ -477,7 +480,12 @@
               # with the same tools that built it.
               systemd
               systemdUkify
+              curl
             ];
+            # Same hook as devenv.nix enterShell for `nix develop` without devenv.
+            shellHook = ''
+              "$PWD/tools/enter-local-cache.sh" || true
+            '';
           };
         }
       );

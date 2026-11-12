@@ -73,7 +73,7 @@ writeShellApplication {
       read_config
       ref="$repository:$channel-$arch"
       mkdir -p "$work"
-      rm -rf "$work"/*
+      find "$work" -mindepth 1 -delete
       oras pull "$ref" -o "$work"
       remote=$(jq -er .version "$work/manifest.json")
       if ! newer "$remote" "$version"; then
