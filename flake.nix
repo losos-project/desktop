@@ -199,6 +199,7 @@
         {
           image = build.disk;
           installer = build.installerIso;
+          installer-live-bundle = build.installerLiveBundle;
           qcow2 = build.qcow2;
           # On arm64 the release also carries the GSI's files, under the
           # same SHA256SUMS and signature, which is where the web flasher
