@@ -80,7 +80,7 @@ let
   };
 in
 {
-  losos.installer.livepatch.backend = backend;
+  _module.args.backend = backend;
 
   imports = [
     "${modulesPath}/profiles/minimal.nix"

@@ -5,6 +5,7 @@
   lib,
   pkgs,
   losos,
+  backend,
   ...
 }:
 
@@ -35,7 +36,7 @@ let
     text = ''
       set -euo pipefail
       default_derisk=${lib.getExe pkgs.derisk}
-      default_backend=${lib.escapeShellArg config.losos.installer.livepatch.backend}
+      default_backend=$(cat /etc/losos/installer-backend)
       if [ -f /run/losos-installer/session.env ]; then
         # shellcheck disable=SC1091
         . /run/losos-installer/session.env
@@ -47,16 +48,11 @@ let
   };
 in
 {
-  options.losos.installer.livepatch.backend = lib.mkOption {
-    type = lib.types.str;
-    internal = true;
-    description = "The losos-installer serve wrapper the session starts.";
-  };
-
   config = {
     fileSystems."/nix/.rw-store".options = lib.mkAfter [ "size=4G" ];
 
     environment.etc."losos/installer-live.json".source = configJson;
+    environment.etc."losos/installer-backend".text = "${backend}";
     environment.systemPackages = [ livepatch ];
 
     system.build.installerSession = lib.getExe session;
@@ -72,7 +68,7 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        ExecStartPre = "${lib.getExe pkgs.coreutils}/bin/rm -f /run/losos-installer/livepatch-offer.json";
+        ExecStartPre = "${lib.getExe' pkgs.coreutils "rm"} -f /run/losos-installer/livepatch-offer.json";
         ExecStart = "${lib.getExe livepatch} check";
       };
     };

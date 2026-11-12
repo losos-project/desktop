@@ -201,7 +201,7 @@ let
     inherit (cfg) version channel;
     installerToplevel = installer.config.system.build.toplevel;
     derisk = pkgs.derisk;
-    backend = installer.config.losos.installer.livepatch.backend;
+    backend = installer.config.environment.etc."losos/installer-backend".text;
   };
 in
 {
