@@ -106,6 +106,8 @@ in
   # losos, the terminal client for LosOS boxes (docs/losos-boxes.md),
   # written in the LosOS repository.
   losos = callWithMold ./losos.nix { };
+  # Admin/panes web export, pinned to losos channel/daily; not in the image yet.
+  losos-admin-panes = final.callPackage ./losos-admin-panes.nix { };
   # Finds those boxes over mDNS and offers each one as an application.
   losos-boxes = callWithMold ./losos-boxes.nix { };
   # Company accounts: LosOS Login on a box, as homed records here
