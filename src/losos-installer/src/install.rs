@@ -388,7 +388,15 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
                             "No GHCR image for this ISO version ({e}); trying the current {} image",
                             release.channel
                         )));
-                        (current.clone(), oci_manifest(&current, events)?, None)
+                        match oci_manifest(&current, events) {
+                            Ok(manifest) => (current.clone(), manifest, None),
+                            Err(e2) => {
+                                let _ = events.send(Event::Line(format!(
+                                    "CI is failing for losos-project/desktop ({e2}); falling back to building the release locally"
+                                )));
+                                return channel(plan, disk, url, events);
+                            }
+                        }
                     }
                 },
                 None => {
@@ -396,7 +404,15 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
                         "{} is not a published release version; pulling the current {} image",
                         release.version, release.channel
                     )));
-                    (current.clone(), oci_manifest(&current, events)?, None)
+                    match oci_manifest(&current, events) {
+                        Ok(manifest) => (current.clone(), manifest, None),
+                        Err(e) => {
+                            let _ = events.send(Event::Line(format!(
+                                "CI is failing for losos-project/desktop ({e}); falling back to building the release locally"
+                            )));
+                            return channel(plan, disk, url, events);
+                        }
+                    }
                 }
             };
             let files = oci_files(&manifest, &release.arch)?;
