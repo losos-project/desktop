@@ -1,0 +1,406 @@
+name: opencode autofix
+
+# ── What this is ────────────────────────────────────────────────────────────
+#
+# A tinycode agent (github.com/dasmatus/tinycode — the same one-binary Rust
+# coding agent Derisk's Ask pane can drive on LosOS Desktop, here pointed at
+# the losos-desktop codebase itself) that reworks a pull request's branch so
+# matches what the pull request DESCRIPTION asks for: the description is
+# passed to the agent as its brief, the agent edits and commits, and what
+# it did is reported in the pull request body — and the body itself is
+# reshaped to `.github/pull_request_template.md`: Description, then
+# Screenshots, then Reviewer notes. Content is only ever moved, never
+# rewritten; sections the description lacks are added as bare headings for
+# the author to fill, and the template's instruction comments are dropped,
+# as the template asks. The report marker carries the hash of the reshaped
+# body, so the reshaping does not read as a description change.
+#
+# The agent talks to OpenCode Zen's Go gateway
+# (https://opencode.ai/inference/go/openai/v1) with the repository's
+# OPENCODE_API_KEY actions secret, on the same models the tinycode
+# autofix workflow (CI fixing and main-merging) uses. Until the secret
+# exists the workflow is inert — the gate skips with a notice.
+#
+# Triggers and guards:
+#
+#   - Runs on same-repository pull requests only — a fork's pull request gets
+#     no secrets and nothing to push to, so the gate skips it with a notice.
+#   - The gate skips a pull request whose body carries our report fence for
+#     this head commit and this description text (`oc-autofix:<sha>:<hash>`):
+#     this is what keeps a running agent's own push (which re-triggers this
+#     workflow through `synchronize`) and the body-update edit itself (which
+#     re-triggers it through `edited`) from looping. A NEW head commit or a
+#     NEW description still runs the agent again, so editing the description
+#     after a fix is how you request the next pass.
+#   - Draft pull requests are left alone.
+#
+# Models: OpenCode Zen's Go gateway. glm-5.3-flash is the primary,
+# deepseek-v4.1-flash the fallback for when the primary is saturated.
+# (The -free variants of these two do not route on Go — their sponsored
+# quota lives on the pay-as-you-go endpoint, which refuses every
+# non-OpenCode client; tinycode presents the OpenCode identification
+# there regardless — see dasmatus/tinycode #10.)
+#
+# Trust: this workflow gives an agent write over the PR's branch and its
+# body on the strength of the description text — which is itself an input.
+# That is fine for the branch-and-description flow of a single-developer
+# repo, but on a repo where strangers open pull requests, add an author
+# allowlist in the gate's step condition before this matters. The
+# description reaches the agent as data through a file, never through a
+# shell.
+#
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # OpenCode Zen's Go gateway (without the chat-completions path tinycode
+  # appends) — per opencode.ai/docs/console/harnesses. The -free model ids
+  # do not route here — their sponsored quota lives on the pay-as-you-go
+  # endpoint, which free-tier-refuses every non-OpenCode client — so these
+  # are the paid variants of the same families.
+  TINYCODE_BASE_URL: https://opencode.ai/inference/go/openai/v1
+  TINYCODE_PROVIDER: openai
+  TINYCODE_MODEL: glm-5.3-flash
+  TINYCODE_FALLBACK_MODEL: deepseek-v4.1-flash
+
+concurrency:
+  # NOT cancelled in progress: an agent push re-enters this group while the
+  # first run is still writing its report, and that run must finish; the
+  # second one exits in the gate.
+  group: opencode-autofix-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: "gate: does this pull request want an autofix"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: decide
+        id: decide
+        env:
+          # A secret cannot be read directly, but it CAN go into a step's
+          # env (never into a run script): empty means the workflow runs
+          # inert until someone adds OPENCODE_API_KEY in the settings.
+          HAS_API_KEY: ${{ secrets.OPENCODE_API_KEY != '' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          skip() { echo "run=false" >> "$GITHUB_OUTPUT"; echo "::notice::$1"; exit 0; }
+          [ "$HAS_API_KEY" = true ] || skip "OPENCODE_API_KEY is not set in the repository's actions secrets"
+          [ "$HEAD_REPO" = "$GH_REPO" ] || skip "the pull request is from a fork"
+          [ "$DRAFT" = false ] || skip "the pull request is a draft"
+          body=$(gh pr view "$PR" --json body --jq .body) || skip "the pull request could not be read"
+          # The description hash ignores our own report fence: the report
+          # step stamps the marker with the hash of the body it writes (the
+          # description reshaped to the template, plus the fence), so neither
+          # the report nor the reshaping counts as a description change.
+          clean=$(sed -e '/<!-- oc-autofix:begin -->/,/<!-- oc-autofix:end -->/d' <<<"$body")
+          desc=$(printf '%s' "$clean" | sha256sum | cut -c1-16)
+          if grep -Fq -- "<!-- oc-autofix: $HEAD_SHA:$desc -->" <<<"$body"; then
+            skip "this head commit and description are already handled"
+          fi
+          # Rare case, bounded: the report lands in the body a moment before
+          # the push, so one `edited`-triggered run can still carry the
+          # previous report's head sha. That run applies nothing and
+          # restamps the marker, after which the gate settles.
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+  autofix:
+    name: "autofix: tinycode against the description"
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Note where the branch stands
+        id: position
+        run: |
+          set -euo pipefail
+          git config user.name "losos-ci-bot"
+          git config user.email "losos-ci-bot@users.noreply.github.com"
+          echo "pre_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # The published nightly, checksum-verified — the same install the
+      # tinycode-autofix workflow uses. A glibc build, right for the runner.
+      - name: install tinycode
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          base=https://github.com/dasmatus/tinycode/releases/download/nightly
+          curl -fsSL -o "$HOME/.local/bin/tinycode" "$base/tinycode-x86_64-unknown-linux-gnu"
+          curl -fsSL -o /tmp/tinycode.sha256 "$base/tinycode-x86_64-unknown-linux-gnu.sha256"
+          hash=$(awk '{print $1}' /tmp/tinycode.sha256)
+          echo "$hash  $HOME/.local/bin/tinycode" | sha256sum -c - >/dev/null
+          chmod +x "$HOME/.local/bin/tinycode"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # The brief is a skeleton plus the pull request body, appended by a
+      # command — the body reaches the agent as data in a file, never
+      # through a shell or an interpolating heredoc. `CLAUDE.md` at the
+      # repository root carries the repo's working agreements; the agent
+      # reads it first.
+      - name: write the task
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          {
+            cat <<'BRIEF'
+          You are the losos-desktop pull-request autofix bot, working in a
+          checkout of the pull request's own branch.
+
+          Read CLAUDE.md at the repository root before anything else and
+          follow it where it applies.
+
+          The author of the pull request recorded below wrote the
+          description after the mark at the end of this file. Work out what
+          it requires of the code that is NOT yet true on this branch, and
+          make those changes — exactly those: no drive-by fixes, no rename
+          sweeps, nothing the description does not ask for. If everything
+          it asks for is already there, change nothing.
+
+          Do not comment on the pull request, do not update its body, and
+          do not open pull requests; the workflow that ran you reports the
+          result. Commit your edits (`git add -A` and one commit, message
+          `fix: <one-line summary>`) but do NOT push and do not rebase.
+
+          ── pull request description ──
+          BRIEF
+            gh pr view "$PR" --repo "$GH_REPO" --json body --jq .body
+            echo "── end ──"
+          } > /tmp/task.txt
+          echo "task: $(wc -c < /tmp/task.txt) bytes"
+
+      # Free models rotate and saturate; when the primary can't run, a
+      # second one on the same brief usually can. Exit codes: 0 done,
+      # 1 hard error, 2 used its turns up — any non-zero falls through to
+      # the fallback model.
+      - name: tinycode works against the description (primary, then fallback)
+        id: agent
+        env:
+          # tinycode reads OPENCODE_API_KEY itself; TINYCODE_API_KEY is
+          # spelled out too, since it is the name tinycode's docs lead with.
+          TINYCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          used=""
+          for model in "$TINYCODE_MODEL" "$TINYCODE_FALLBACK_MODEL"; do
+            echo "tinycode run on $model"
+            set +e
+            tinycode run --auto --json --max-turns 48 \
+              --root "$GITHUB_WORKSPACE" \
+              --task-file /tmp/task.txt \
+              > /tmp/tc-events.ndjson 2> /tmp/tc-narration.log
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then
+              used="$model"
+              break
+            fi
+            echo "::warning::tinycode failed on $model (exit $rc):"
+            tail -5 /tmp/tc-narration.log || true
+          done
+          if [ -z "$used" ]; then
+            echo "::error::both free models failed; the next pull request event retries"
+            exit 1
+          fi
+          jq -r 'select(.type == "done") | .text' /tmp/tc-events.ndjson | tail -1 > /tmp/tc-answer.txt
+          echo "model=$used" >> "$GITHUB_OUTPUT"
+          echo "answer: $(head -c 200 /tmp/tc-answer.txt)"
+
+      - name: Commit, rebase, and take stock
+        id: changes
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PRE_SHA: ${{ steps.position.outputs.pre_sha }}
+        run: |
+          set -euo pipefail
+          # The agent's session files live inside the workspace root
+          # (.tinycode/sessions); they are the agent's private state, not
+          # part of the fix, and must not enter the commit.
+          rm -rf .tinycode
+          # The sha the report below names: the pushed tip when the agent
+          # changed something, the unchanged tip when it did not. Either
+          # way the run the next event triggers must see it, or the gate
+          # would hold this loop open forever.
+          git add -A
+          # Everything the agent produced, committed or not, against where
+          # the run started.
+          if git diff --quiet "$PRE_SHA" --; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "pushed_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          files=$(git diff --name-only "$PRE_SHA" | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "file_count=$(git diff --name-only "$PRE_SHA" | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          # One commit of the agent's leftovers, on top of whatever commits
+          # the agent made itself. Both rebased onto the branch's tip, which
+          # may have moved between run start and now, as rust-autofix.yml
+          # does.
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: autofix per the pull request description"
+          fi
+          git fetch origin "$BRANCH"
+          if ! git rebase "refs/remotes/origin/$BRANCH"; then
+            git rebase --abort
+            echo "::error::The branch moved under this run and rebasing the autofix would conflict; it is left committed locally."
+            exit 1
+          fi
+          # The marker in the report below names THIS sha, and the run the
+          # push triggers sees it in the body and exits in its gate.
+          echo "pushed_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Written after the commit and rebase, before the push: the marker
+      # names the sha this run is pushing, and it is what stops the
+      # `synchronize` run the push itself triggers. Only if someone pushes
+      # to the branch again between this edit and the push is the marker
+      # stale, and that next run goes around once more, changing nothing —
+      # a cheap round trip, not a loop. The body outside the fence is
+      # reshaped to `.github/pull_request_template.md` here; the script
+      # below says exactly what that means.
+      - name: report in the pull request body
+        if: steps.agent.outcome == 'success'
+        uses: actions/github-script@v9
+        env:
+          MODEL: ${{ steps.agent.outputs.model }}
+          HEAD_SHA: ${{ steps.changes.outputs.pushed_sha }}
+          CHANGED: ${{ steps.changes.outputs.changed }}
+          FILES: ${{ steps.changes.outputs.files }}
+          FILE_COUNT: ${{ steps.changes.outputs.file_count }}
+          # github-script's own env contract has shifted across major
+          # versions; plain custom names do not.
+          OC_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const crypto = require('crypto');
+            const pr = context.issue.number;
+            const current = (await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr,
+            })).data.body ?? '';
+            const begin = '<!-- oc-autofix:begin -->';
+            const end = '<!-- oc-autofix:end -->';
+            let body = current;
+            const i = body.lastIndexOf(begin);
+            const j = body.indexOf(end);
+            if (i >= 0 && j > i) body = (body.slice(0, i) + body.slice(j + end.length)).trimEnd();
+
+            // The description is reshaped to `.github/pull_request_template.md`
+            // before the report is appended: Description, Screenshots,
+            // Reviewer notes, in the template's order. Content is only ever
+            // MOVED — section bodies are kept verbatim; sections the
+            // description lacks are added as bare headings for the author to
+            // fill; headings the template does not know keep their content and
+            // follow the known ones, so nothing is dropped. The template's
+            // own instruction comments are deleted here, as the template asks.
+            const SECTIONS = ['Description', 'Screenshots', 'Reviewer notes'];
+            const canon = (name) =>
+              SECTIONS.find((s) => s.toLowerCase() === name.trim().replace(/:$/, '').toLowerCase());
+            body = body.replace(
+              /<!--(?:(?!-->)[\s\S])*?(?:What this changes|Drop the images|Where to start reading)[\s\S]*?-->/g,
+              '',
+            );
+            const prose = [];
+            const blocks = new Map();
+            const other = [];
+            let bucket = prose;
+            let fence = false;
+            for (const raw of body.split('\n')) {
+              // Heading lines inside fenced code are content, not structure.
+              if (/^\s*(```|~~~)/.test(raw)) {
+                fence = !fence;
+                bucket.push(raw);
+                continue;
+              }
+              if (fence) {
+                bucket.push(raw);
+                continue;
+              }
+              const m = /^#{1,6}\s+(.+?)\s*$/.exec(raw);
+              if (!m) {
+                bucket.push(raw);
+                continue;
+              }
+              const name = canon(m[1]);
+              if (name) {
+                if (!blocks.has(name)) blocks.set(name, []);
+                bucket = blocks.get(name);
+              } else {
+                other.push([raw]);
+                bucket = other[other.length - 1];
+              }
+            }
+            const out = [];
+            const proseText = prose.join('\n').trim();
+            if (proseText) out.push(proseText);
+            for (const name of SECTIONS) {
+              const text = (blocks.get(name) ?? []).join('\n').trim();
+              out.push(text ? `## ${name}\n${text}` : `## ${name}`);
+            }
+            for (const block of other) {
+              const text = block.join('\n').trim();
+              if (text) out.push(text);
+            }
+            const reshaped = out.join('\n\n');
+
+            // The gate hashes the description with our fence removed. This
+            // edit changes the body OUTSIDE the fence too, so the marker
+            // carries the hash of the reshaped description rather than the
+            // one the gate computed on entry: the `edited` event this update
+            // triggers must land on "already handled", not run the agent
+            // again over a description that only changed shape.
+            const desc = crypto.createHash('sha256').update(reshaped).digest('hex').slice(0, 16);
+            const lines = ['### tinycode autofix', ''];
+            if (process.env.CHANGED === 'true') {
+              const count = process.env.FILE_COUNT;
+              lines.push(`_${process.env.MODEL} applied the description: ${count} file${count === '1' ? '' : 's'} touched ([run](${process.env.OC_RUN_URL}))._`);
+              const files = process.env.FILES.trim().split(/\s+/);
+              for (const f of files.slice(0, 20)) lines.push(`- \`${f}\``);
+              if (files.length > 20) lines.push(`- … and ${files.length - 20} more`);
+            } else {
+              lines.push(`_${process.env.MODEL} found the description already implemented; nothing was edited. ([run](${process.env.OC_RUN_URL}))_`);
+            }
+            lines.push('');
+            lines.push(`<!-- oc-autofix: ${process.env.HEAD_SHA}:${desc} -->`);
+            const section = [begin, ...lines, end].join('\n');
+            await github.rest.pulls.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              pull_number: pr,
+              body: `${reshaped}\n\n${section}`,
+            });
+
+      - name: push the fixes to the branch
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          # Already committed and rebased in the previous step, so this is a
+          # plain push. If it fails because the branch moved again, the next
+          # `synchronize` event repeats this whole pass.
+          git push origin "HEAD:$BRANCH"

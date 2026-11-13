@@ -1,0 +1,604 @@
+name: tinycode autofix
+
+# ── What this is ────────────────────────────────────────────────────────────
+#
+# A tinycode agent (github.com/dasmatus/tinycode — one small Rust binary,
+# a few MB of RSS, far cheaper on the runner than a Node agent runtime)
+# talking to OpenCode Zen's OpenAI-compatible inference endpoint, doing two
+# jobs this repository otherwise needs a human for:
+#
+#   1. ci-fix    — a `ci` run goes red, the agent gets the failed-step log
+#                  and fixes the branch. A failing head on an open pull
+#                  request is fixed on the pull request's own branch; a
+#                  failing default branch gets a fix branch and a pull
+#                  request of its own.
+#   2. merge-main — on a schedule, main is merged into every open pull
+#                  request that is behind; when the merge stops on
+#                  conflicts, the agent resolves them, preserving both the
+#                  pull request's intent and main's changes.
+#
+# This is also dogfooding: tinycode is the coding agent Derisk's Ask pane
+# can drive on a LosOS Desktop system (docs/assistant.md), exercised here
+# against the losos-desktop codebase itself, over the same OpenCode Zen
+# endpoint and the same free models the opencode-autofix workflow uses
+# through the full opencode CLI.
+#
+# The agent model: OpenCode Zen's Go gateway. glm-5.3-flash is the
+# primary, deepseek-v4.1-flash the fallback for when the primary is
+# saturated. (The -free variants of these two do not route on Go — their
+# sponsored quota lives on the pay-as-you-go endpoint, which refuses every
+# non-OpenCode client; tinycode presents the OpenCode identification there
+# regardless — see dasmatus/tinycode #10.)
+#
+# Key: the repository's OPENCODE_API_KEY actions secret (a free OpenCode
+# Console key; sign-up is all it takes — https://opencode.ai/docs/zen/).
+# tinycode reads it natively; until the secret exists the workflow runs
+# inert, its gates skipping with a notice.
+#
+# Triggers and guards:
+#
+#   - workflow_run fires only for a completed `ci` run, and only failure
+#     gets past the job condition. This file's definition comes from the
+#     default branch, as GitHub requires for workflow_run.
+#   - A run's failing head is attempted ONCE: a marker comment
+#     (`tc-autofix:<sha>`) is left on the head commit, and a head commit
+#     the bot itself authored is never re-fixed. Together those are the
+#     loop breaker — a bot fix that goes red again ends the chain instead
+#     of circling; a new human push starts a new one.
+#   - Fork pull requests are skipped: no secrets, nothing to push to.
+#   - CodeQL flags the ci-fix checkout (actions/untrusted-checkout): a
+#     workflow_run ref is event-derived, and the checkout persists its
+#     credentials — which is the point, the job pushes to the branch. The
+#     gate only lets same-repository heads through, and the alert is
+#     dismissed (won't fix) on that basis; the comment here records it so
+#     the pattern is not mistaken for an oversight.
+#   - The merge sweep is bounded (10 pull requests a pass) and idempotent —
+#     a branch that already contains main is left alone, so a pushed merge
+#     never causes a second one.
+#
+# Trust: this workflow gives an agent write over branches on the strength
+# of a CI log — which is itself made of build output and code. That is fine
+# for the single-developer flow of this repository, but on a repo where
+# strangers open pull requests, add an author allowlist in the gate before
+# this matters. The prompt text and the logs reach the agent as data through
+# files and stdin, never through a shell.
+#
+# The two jobs use separate concurrency groups, so a CI fix and a merge
+# sweep can proceed in parallel on different branches; within a group runs
+# queue rather than cancel, because a queued run finds its work already
+# done and exits through a guard cheaply.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  schedule:
+    # Every half hour at :14 and :44, clear of the other scheduled
+    # workflows this repository runs.
+    - cron: "14,44 * * * *"
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Merge main into this one pull request number only. Empty: sweep them all."
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+env:
+  # OpenCode Zen's Go gateway, without the chat-completions path tinycode
+  # appends (opencode.ai/docs/console/harnesses). The -free model ids do
+  # not route here — their sponsored quota lives on the pay-as-you-go
+  # endpoint, which free-tier-refuses every non-OpenCode client — so these
+  # are the paid variants of the same families. `is_opencode_gateway`
+  # matches the /inference/go path, so the session and client
+  # identification headers go out as the Go API requires.
+  TINYCODE_BASE_URL: https://opencode.ai/inference/go/openai/v1
+  TINYCODE_PROVIDER: openai
+  TINYCODE_MODEL: glm-5.3-flash
+  TINYCODE_FALLBACK_MODEL: deepseek-v4.1-flash
+
+jobs:
+  # ── Job 1: a failed ci run → tinycode fixes the branch ────────────────────
+  ci-fix:
+    name: "ci-fix: tinycode against the failed run"
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: tinycode-autofix-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: triage the failed run
+        id: triage
+        env:
+          # A secret cannot be read directly, but it CAN go into a step's
+          # env (never into a run script): empty means the workflow runs
+          # inert until someone adds OPENCODE_API_KEY in the settings.
+          HAS_API_KEY: ${{ secrets.OPENCODE_API_KEY != '' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          skip() { echo "run=false" >> "$GITHUB_OUTPUT"; echo "::notice::$1"; exit 0; }
+          [ "$HAS_API_KEY" = true ] || skip "OPENCODE_API_KEY is not set in the repository's actions secrets"
+          [ "$HEAD_REPO" = "$GH_REPO" ] || skip "the failed run is on a fork"
+          default_branch=$(gh api "repos/$GH_REPO" --jq .default_branch)
+          # A pull request whose head is this commit, if there is one.
+          pr=$(gh api "repos/$GH_REPO/commits/$HEAD_SHA/pulls" \
+            --jq '[.[] | select(.state == "open")][0].number // empty' || true)
+          if [ -n "$pr" ]; then
+            mode=pr
+            branch=$(gh pr view "$pr" --repo "$GH_REPO" --json headRefName --jq .headRefName)
+          elif [ "$HEAD_BRANCH" = "$default_branch" ]; then
+            # Red main: fix on a branch of its own, pull request back to main.
+            mode=main
+            branch="$default_branch"
+          else
+            skip "the failed run is on '$HEAD_BRANCH' with no open pull request (merge queue or deleted branch)"
+          fi
+          # Loop breaker one: never re-fix the bot's own head. A bot fix
+          # that is itself red ends the chain; a new human push starts a
+          # new one.
+          author=$(gh api "repos/$GH_REPO/commits/$HEAD_SHA" --jq '.commit.author.email')
+          if [ "$author" = "losos-ci-bot@users.noreply.github.com" ]; then
+            skip "the failing head commit is the bot's own work; one pass per human push"
+          fi
+          # Loop breaker two: one attempt per head commit, recorded as a
+          # commit comment. This is what keeps a manual re-run of `ci` from
+          # buying a second identical pass.
+          if gh api "repos/$GH_REPO/commits/$HEAD_SHA/comments" --jq '.[].body' \
+              | grep -Fq "tc-autofix: $HEAD_SHA"; then
+            skip "head commit $HEAD_SHA was already attempted"
+          fi
+          {
+            echo "run=true"
+            echo "mode=$mode"
+            echo "pr=$pr"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.triage.outputs.run == 'true'
+        with:
+          ref: ${{ steps.triage.outputs.branch }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: git identity
+        if: steps.triage.outputs.run == 'true'
+        run: |
+          git config user.name "losos-ci-bot"
+          git config user.email "losos-ci-bot@users.noreply.github.com"
+
+      # The failed steps' log is all the agent needs to see of the run;
+      # capped, since a build can scream for megabytes.
+      - name: collect the failed log
+        if: steps.triage.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          gh run view "$RUN_ID" --repo "$GH_REPO" --log-failed > /tmp/ci-failure.log \
+            || { echo "the run left no failed-step log (startup failure?)"; echo "(no log)" > /tmp/ci-failure.log; }
+          head -c 60000 /tmp/ci-failure.log > /tmp/ci-failure.log.tmp && mv /tmp/ci-failure.log.tmp /tmp/ci-failure.log
+          echo "failed log: $(wc -l < /tmp/ci-failure.log) lines"
+
+      # The published nightly, checksum-verified — pinned by checksum to
+      # whatever nightly existed when this file was last reviewed. A glibc
+      # build, right for the ubuntu runner. (`deploy/install.sh` in the
+      # tinycode repository builds the musl variant; a runner does not need
+      # it.)
+      - name: install tinycode
+        if: steps.triage.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          base=https://github.com/dasmatus/tinycode/releases/download/nightly
+          curl -fsSL -o "$HOME/.local/bin/tinycode" "$base/tinycode-x86_64-unknown-linux-gnu"
+          curl -fsSL -o /tmp/tinycode.sha256 "$base/tinycode-x86_64-unknown-linux-gnu.sha256"
+          hash=$(awk '{print $1}' /tmp/tinycode.sha256)
+          echo "$hash  $HOME/.local/bin/tinycode" | sha256sum -c - >/dev/null
+          chmod +x "$HOME/.local/bin/tinycode"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # The task is written to a file and fed through --task-file: the log
+      # is build output an attacker could shape, and it must reach the
+      # agent as data, never through a shell or an interpolating heredoc.
+      - name: write the task
+        if: steps.triage.outputs.run == 'true'
+        env:
+          MODE: ${{ steps.triage.outputs.mode }}
+          PR: ${{ steps.triage.outputs.pr }}
+          BRANCH: ${{ steps.triage.outputs.branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          {
+            cat <<'BRIEF'
+          You are the losos-desktop CI autofix agent, working in a checkout
+          of the branch below.
+
+          Read CLAUDE.md at the repository root before anything else and
+          follow it where it applies.
+
+          The GitHub Actions run at the URL below (the repository's only CI
+          lane, workflow "ci") failed on the commit recorded below. Its
+          failed-step log is in /tmp/ci-failure.log — read it first, then
+          the files it points at. Diagnose the failure and fix the code so
+          CI passes.
+
+          Scope: exactly what is needed to make CI pass. No drive-by fixes,
+          no rename sweeps, no reformatting the failure did not touch. Do
+          not change CI's own expectations (tests, workflows) just to turn
+          them green — fix the code the expectations are about; if you are
+          certain a test itself is wrong, say so in your final answer
+          instead of editing it.
+
+          This runner has no nix and cannot run the full lane. Verify what
+          you can with the tools at hand; prefer small, precise changes you
+          can reason about over broad ones you cannot.
+
+          Commit your edits (`git add -A` and one commit, message
+          `fix: <one-line summary>`) but do NOT push, do NOT rebase, and do
+          not comment on, create or edit any pull request; the workflow
+          that ran you reports the result.
+          BRIEF
+            echo
+            echo "run url: $RUN_URL"
+            echo "branch:   $BRANCH"
+            if [ "$MODE" = main ]; then
+              echo "mode:     the failed commit is on the default branch; your fix will land through a new pull request"
+            else
+              echo "mode:     pull request #$PR's branch; your fix will be pushed to it"
+            fi
+            echo "commit:   $HEAD_SHA"
+            echo
+            echo "── failed-step log (/tmp/ci-failure.log is the full file) ──"
+            cat /tmp/ci-failure.log
+          } > /tmp/task.txt
+          echo "task: $(wc -c < /tmp/task.txt) bytes"
+
+      # Free models rotate and saturate; when the primary can't run, a
+      # second one on the same brief usually can. Exit codes: 0 done,
+      # 1 hard error, 2 used its turns up — any non-zero falls through to
+      # the fallback model.
+      - name: run tinycode (primary, then fallback free model)
+        id: agent
+        if: steps.triage.outputs.run == 'true'
+        env:
+          # tinycode reads OPENCODE_API_KEY itself; TINYCODE_API_KEY is
+          # spelled out too, since it is the name tinycode's docs lead with.
+          TINYCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          used=""
+          for model in "$TINYCODE_MODEL" "$TINYCODE_FALLBACK_MODEL"; do
+            echo "tinycode run on $model"
+            set +e
+            tinycode run --auto --json --max-turns 48 \
+              --root "$GITHUB_WORKSPACE" \
+              --task-file /tmp/task.txt \
+              > /tmp/tc-events.ndjson 2> /tmp/tc-narration.log
+            rc=$?
+            set -e
+            if [ "$rc" = 0 ]; then
+              used="$model"
+              break
+            fi
+            echo "::warning::tinycode failed on $model (exit $rc):"
+            tail -5 /tmp/tc-narration.log || true
+          done
+          if [ -z "$used" ]; then
+            echo "::error::both free models failed; no attempt is recorded, the next ci run retries"
+            exit 1
+          fi
+          jq -r 'select(.type == "done") | .text' /tmp/tc-events.ndjson | tail -1 > /tmp/tc-answer.txt
+          echo "model=$used" >> "$GITHUB_OUTPUT"
+          echo "answer: $(head -c 200 /tmp/tc-answer.txt)"
+
+      # One attempt per head commit, recorded on the commit itself. Posted
+      # only after the agent actually answered, so a saturated provider
+      # does not spend the attempt.
+      - name: mark the attempt
+        if: steps.triage.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/commits/$HEAD_SHA/comments" \
+            -f body="tc-autofix: $HEAD_SHA — attempted by the tinycode autofix workflow."
+
+      - name: take stock of the changes
+        id: changes
+        if: steps.triage.outputs.run == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # The agent's session files live inside the workspace root
+          # (.tinycode/sessions); they are its private state, not part of
+          # the fix, and must not enter the commit.
+          rm -rf .tinycode
+          # Everything the agent produced, committed or not, against where
+          # the run started.
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: tinycode CI autofix"
+          fi
+          if git diff --quiet "$HEAD_SHA" --; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          files=$(git diff --name-only "$HEAD_SHA" | tr '\n' ' ')
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "file_count=$(git diff --name-only "$HEAD_SHA" | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      # Pull-request mode: the agent's work, rebased onto the branch's tip
+      # (which may have moved between run start and now) and pushed.
+      - name: push the fix to the pull request
+        if: steps.triage.outputs.run == 'true' && steps.triage.outputs.mode == 'pr' && steps.changes.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ steps.triage.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH"
+          if ! git rebase "refs/remotes/origin/$BRANCH"; then
+            git rebase --abort
+            echo "::error::the branch moved under this run and rebasing the fix would conflict; it is left committed locally for the next run."
+            exit 1
+          fi
+          git push origin "HEAD:$BRANCH"
+
+      # Default-branch mode: a fix branch and a pull request of its own —
+      # main is never pushed to directly.
+      - name: open a fix pull request to main
+        if: steps.triage.outputs.run == 'true' && steps.triage.outputs.mode == 'main' && steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          short=${HEAD_SHA:0:12}
+          fix_branch="tinycode-ci-fix-$short"
+          git push origin "HEAD:refs/heads/$fix_branch"
+          {
+            echo "tinycode's fix for the red main commit \`$short\` ([failed run]($RUN_URL))."
+            echo
+            echo "Replaces the failed commit's CI with a passing one; review and merge."
+          } > /tmp/pr-body.md
+          gh pr create --repo "$GH_REPO" --base main --head "$fix_branch" \
+            --title "fix: CI autofix for ${short}" --body-file /tmp/pr-body.md
+
+      - name: report on the pull request
+        if: steps.triage.outputs.run == 'true' && steps.triage.outputs.mode == 'pr'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ steps.triage.outputs.pr }}
+          MODEL: ${{ steps.agent.outputs.model }}
+          CHANGED: ${{ steps.changes.outputs.changed }}
+          FILES: ${{ steps.changes.outputs.files }}
+          FILE_COUNT: ${{ steps.changes.outputs.file_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### tinycode CI fix"
+            echo
+            echo "_${MODEL} read the failed [run](${RUN_URL})_"
+            if [ "$CHANGED" = "true" ]; then
+              echo "_and pushed a fix: ${FILE_COUNT} file(s) touched._"
+              for f in $FILES; do echo "- \`$f\`"; done
+            else
+              echo "_and changed nothing — the log did not give it a code fix it could make._"
+            fi
+            echo
+            if [ -s /tmp/tc-answer.txt ]; then
+              echo "<details><summary>the agent's answer</summary>"
+              echo
+              head -c 2000 /tmp/tc-answer.txt
+              echo
+              echo "</details>"
+            fi
+          } > /tmp/report.md
+          gh pr comment "$PR" --repo "$GH_REPO" --body-file /tmp/report.md
+
+  # ── Job 2: scheduled sweep — main into every open pull request ────────────
+  merge-main:
+    name: "merge-main: main into open pull requests, conflicts to tinycode"
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: tinycode-autofix-merge
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: git identity
+        run: |
+          git config user.name "losos-ci-bot"
+          git config user.email "losos-ci-bot@users.noreply.github.com"
+
+      - name: install tinycode
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          base=https://github.com/dasmatus/tinycode/releases/download/nightly
+          curl -fsSL -o "$HOME/.local/bin/tinycode" "$base/tinycode-x86_64-unknown-linux-gnu"
+          curl -fsSL -o /tmp/tinycode.sha256 "$base/tinycode-x86_64-unknown-linux-gnu.sha256"
+          hash=$(awk '{print $1}' /tmp/tinycode.sha256)
+          echo "$hash  $HOME/.local/bin/tinycode" | sha256sum -c - >/dev/null
+          chmod +x "$HOME/.local/bin/tinycode"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: sweep the open pull requests
+        env:
+          # A secret cannot be read directly, but it CAN go into a step's
+          # env (never into a run script): empty means the sweep still does
+          # the clean merges, and hands only the conflict message along —
+          # tinycode itself cannot run without the key.
+          HAS_API_KEY: ${{ secrets.OPENCODE_API_KEY != '' }}
+          TINYCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ONLY_PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_API_KEY" != "true" ]; then
+            echo "::notice::OPENCODE_API_KEY is not set in the repository's actions secrets; conflicted merges will be left to a human"
+          fi
+          if [ -n "$ONLY_PR" ]; then
+            case "$ONLY_PR" in
+              ''|*[!0-9]*) echo "::error::pr input must be a number, got '$ONLY_PR'"; exit 1 ;;
+            esac
+            prs=("$ONLY_PR")
+          else
+            mapfile -t prs < <(gh pr list --repo "$GH_REPO" --state open --limit 30 \
+              --json number --jq '.[].number')
+          fi
+          echo "${#prs[@]} open pull request(s) in this pass"
+          merged=0 resolved=0 failed=0
+          for pr in "${prs[@]:0:10}"; do
+            echo "── pull request #$pr"
+            head_repo=$(gh pr view "$pr" --repo "$GH_REPO" \
+              --json headRepositoryOwner --jq .headRepositoryOwner.login)
+            if [ "$head_repo" != "${GH_REPO%%/*}" ]; then
+              echo "   fork; nothing to push to"
+              continue
+            fi
+            head_ref=$(gh pr view "$pr" --repo "$GH_REPO" --json headRefName --jq .headRefName)
+            head_sha=$(gh pr view "$pr" --repo "$GH_REPO" --json headRefOid --jq .headRefOid)
+            author=$(gh api "repos/$GH_REPO/commits/$head_sha" --jq '.commit.author.email')
+            if [ "$author" = "losos-ci-bot@users.noreply.github.com" ]; then
+              echo "   head is the bot's own; waiting for CI or a human"
+              continue
+            fi
+            if gh api "repos/$GH_REPO/commits/$head_sha/comments" --jq '.[].body' \
+                | grep -Fq "tc-autofix: $head_sha"; then
+              echo "   this head was already attempted; skipping"
+              continue
+            fi
+            git fetch --force origin "refs/pull/$pr/head:refs/remotes/tc/pr-$pr"
+            git fetch --force origin main
+            # A previous pass may have left a conflicted index, an aborted
+            # merge's leftovers or untracked files behind; start clean.
+            git merge --abort 2>/dev/null || true
+            git checkout --force -B "tc-merge-$pr" "refs/remotes/tc/pr-$pr"
+            git reset --hard HEAD
+            git clean -fd
+            # Idempotence: a branch that already contains main needs nothing.
+            if git merge-base --is-ancestor origin/main HEAD; then
+              echo "   already contains main"
+              continue
+            fi
+            if git merge --no-edit origin/main; then
+              if git push origin "HEAD:$head_ref"; then
+                echo "   merged main cleanly and pushed"
+                merged=$((merged + 1))
+              else
+                echo "   push refused (branch moved); the next pass tries again"
+              fi
+              continue
+            fi
+            # Conflicted. The agent resolves; the workflow commits and pushes.
+            conflicts=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+            echo "   conflicts in: $conflicts"
+            {
+              cat <<'BRIEF'
+          You are the losos-desktop merge-conflict resolver, working in a
+          checkout where a merge of origin/main into a pull request's branch
+          is in progress and has stopped on conflicts.
+
+          Read CLAUDE.md at the repository root before anything else and
+          follow it where it applies.
+
+          Resolve every conflict so BOTH sides keep their intent: what the
+          pull request was changing, and what main changed underneath it.
+          Read both sides' history (`git log --oneline` on each) when the
+          files do not make it obvious. Do not resolve by deleting one
+          side's work wholesale.
+
+          Do not run builds or tests (no nix on this runner — a wrong
+          resolution is cheaper to catch in review than an hour of
+          building). Do not commit; leave the resolved files staged or in
+          the working tree. Do not abort the merge, do not push, do not
+          comment anywhere; the workflow that ran you reports the result.
+
+          The conflicted files, from git status:
+          BRIEF
+              echo "$conflicts"
+              echo
+              echo "── the working tree is the conflicted merge itself ──"
+            } > /tmp/task.txt
+            used=""
+            if [ "$HAS_API_KEY" = "true" ]; then
+              for model in "$TINYCODE_MODEL" "$TINYCODE_FALLBACK_MODEL"; do
+                echo "   tinycode resolving on $model"
+                set +e
+                tinycode run --auto --json --max-turns 48 \
+                  --root "$(git rev-parse --show-toplevel)" \
+                  --task-file /tmp/task.txt \
+                  > /tmp/tc-events.ndjson 2> /tmp/tc-narration.log
+                rc=$?
+                set -e
+                if [ "$rc" = 0 ]; then used="$model"; break; fi
+                echo "::warning::tinycode failed on $model (exit $rc)"
+                tail -5 /tmp/tc-narration.log || true
+              done
+            fi
+            if [ -z "$used" ] \
+                || [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+              git merge --abort 2>/dev/null || true
+              git reset --hard HEAD
+              git clean -fd
+              failed=$((failed + 1))
+              {
+                echo "### tinycode could not merge main"
+                echo
+                echo "_Conflict resolution did not complete; this needs a human. The next sweep (or a new commit) tries again._"
+              } > /tmp/report.md
+              gh pr comment "$pr" --repo "$GH_REPO" --body-file /tmp/report.md
+              continue
+            fi
+            # The agent's session files are its private state, not part of
+            # the resolution.
+            rm -rf .tinycode
+            git add -A
+            git commit -m "merge main: resolve conflicts (tinycode)" \
+              || echo "   the agent committed itself; keeping its commit"
+            if git push origin "HEAD:$head_ref"; then
+              resolved=$((resolved + 1))
+              touched=$(git diff --name-only "$head_sha" HEAD | tr '\n' ' ')
+              touched_count=$(git diff --name-only "$head_sha" HEAD | wc -l | tr -d ' ')
+              {
+                echo "### tinycode merged main"
+                echo
+                echo "_${used} merged origin/main and resolved the conflicts in ${touched_count} path(s) ([sweep](${GITHUB_SERVER_URL}/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}))._"
+                for f in $touched; do echo "- \`$f\`"; done
+              } > /tmp/report.md
+              gh pr comment "$pr" --repo "$GH_REPO" --body-file /tmp/report.md
+            else
+              echo "   push refused (branch moved); the next pass tries again"
+            fi
+          done
+          echo "clean merges: $merged, conflicts resolved: $resolved, unresolved: $failed" \
+            >> "$GITHUB_STEP_SUMMARY"
