@@ -74,7 +74,25 @@ writeShellApplication {
       ref="$repository:$channel-$arch"
       mkdir -p "$work"
       rm -rf "$work"/*
-      oras pull "$ref" -o "$work"
+      # CI for losos-project/desktop may be failing, so the bundle is not
+      # published. Fall back to building the installer-live bundle locally
+      # from the flake when nix and a checkout are available, and otherwise
+      # keep the installer's own bundled closure (build it itself).
+      if ! oras pull "$ref" -o "$work" 2>/dev/null; then
+        if command -v nix >/dev/null 2>&1 && [ -f flake.nix ]; then
+          echo "No published bundle; building installer-live-bundle locally."
+          nix build .#installer-live-bundle --out-link "$work/bundle" || {
+            rm -f "$offer"
+            echo "Build failed; keeping the bundled installer at $version."
+            exit 0
+          }
+          work="$work/bundle"
+        else
+          rm -f "$offer"
+          echo "No published bundle and no local build; keeping the bundled installer at $version."
+          exit 0
+        fi
+      fi
       remote=$(jq -er .version "$work/manifest.json")
       if ! newer "$remote" "$version"; then
         rm -f "$offer"

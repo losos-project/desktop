@@ -125,8 +125,17 @@ let
       ${current}
       url=${lib.escapeShellArg cfg.index}
       index=$(curl --silent --show-error --fail --location --proto '=https' \
-        --retry 3 --max-time 60 "''${url//\{channel\}/$channel}") ||
-        answer "502 Bad Gateway"
+        --retry 3 --max-time 60 "''${url//\{channel\}/$channel}") || {
+        # CI for losos-project/desktop may be failing, so the index is not
+        # published. Fall back to building the release locally when nix and a
+        # checkout are available; otherwise report the gateway error.
+        if command -v nix >/dev/null 2>&1 && [ -f flake.nix ]; then
+          echo "No published index; building the release locally." >&2
+          nix build .#release --out-link /run/losos/release-built 2>/dev/null || answer "502 Bad Gateway"
+        else
+          answer "502 Bad Gateway"
+        fi
+      }
       size="" urls=""
       while read -r file length rest; do
         if [ "$file" = "$name" ]; then
