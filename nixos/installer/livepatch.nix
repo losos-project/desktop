@@ -48,7 +48,7 @@ let
 in
 {
   options.losos.installer.livepatch.backend = lib.mkOption {
-    type = lib.types.str;
+    type = lib.types.path;
     internal = true;
     description = "The losos-installer serve wrapper the session starts.";
   };
