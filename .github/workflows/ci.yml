@@ -585,10 +585,6 @@ jobs:
         with:
           target: .#release
 
-      # As in `prebuild`.
-      - *setup-oras
-      - *cache-push
-
       # Formatting is checked by `format`, not here: run after the build, a
       # misplaced space failed a run only once hours of building had finished.
       #
@@ -698,6 +694,13 @@ jobs:
           path: ${{ runner.temp }}/installer-live-${{ steps.collect.outputs.arch }}/
           if-no-files-found: error
           retention-days: 3
+
+      # As in `prebuild`, but only after the release artifact is uploaded.
+      # x86_64's check step builds every driver and failed with "the hosted
+      # runner lost communication with the server" when this ran first: the
+      # cache push's second copy of the store left no room for those builds.
+      - *setup-oras
+      - *cache-push
 
   # Pushes each architecture's release to GHCR. This is the only job that
   # holds packages: write next to release files, and it checks out and builds
