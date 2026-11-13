@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Print the derisk GitHub release tag LosOS CI should install for this run.
+# LosOS_CHANNEL names the cadence (nightly, weekly, monthly, yearly). When
+# LOSOS_DERISK_TAG is already set, print it. Otherwise, for a cadence run use
+# <cadence>-<stamp> from the commit's UTC time, matching this repository's own
+# release tags; for nightly, use the tag in nixos/pkgs/derisk-bundle.pin.nix.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+if [ -n "${LOSOS_DERISK_TAG:-}" ]; then
+  echo "$LOSOS_DERISK_TAG"
+  exit 0
+fi
+
+cadence=${LOSOS_CHANNEL:-nightly}
+
+if [ "$cadence" = nightly ]; then
+  sed -n 's/.*tag = "\([^"]*\)".*/\1/p' nixos/pkgs/derisk-bundle.pin.nix | head -n 1
+  exit 0
+fi
+
+sha=${GITHUB_SHA:-HEAD}
+stamp=$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y%m%dT%H%M "$sha")
+tag="${cadence}-${stamp}"
+repo=$(sed -n 's/.*repository = "\([^"]*\)".*/\1/p' nixos/pkgs/derisk-bundle.pin.nix | head -n 1)
+repo=${repo:-losos-project/derisk}
+if command -v gh > /dev/null && gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
+  echo "$tag"
+  exit 0
+fi
+sed -n 's/.*tag = "\([^"]*\)".*/\1/p' nixos/pkgs/derisk-bundle.pin.nix | head -n 1

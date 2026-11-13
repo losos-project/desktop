@@ -220,12 +220,24 @@ jobs:
           sudo systemctl restart nix-daemon
           echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
 
-      # submodules: derisk, mcsapi and pm are components/ submodules the flake
-      # builds from (flake.nix, `self.submodules`). All three are public, so
-      # the checkout needs no token for them.
+      # mcsapi and pm stay submodules; derisk is a prebuilt bundle from its
+      # GitHub release when nixos/pkgs/derisk-bundle.pin.nix says so.
       - &checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false, submodules: true }
+
+      # LOSOS_DERISK_TAG matches the cadence this run builds (ci.yml env
+      # LOSOS_CHANNEL): nightly uses the pin file, slower cadences use
+      # <cadence>-<stamp> from the commit being released.
+      - &derisk-release
+        name: Point derisk at its release for this cadence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x tools/ci-derisk-tag
+          tag=$(tools/ci-derisk-tag)
+          echo "LOSOS_DERISK_TAG=$tag" >> "$GITHUB_ENV"
+          echo "- derisk: [\`$tag\`](https://github.com/losos-project/derisk/releases/tag/$tag)" >> "$GITHUB_STEP_SUMMARY"
 
       # The key that signs GRUB and the UKIs for Secure Boot
       # (docs/secure-boot.md), from the repository secret, where the Nix
@@ -487,6 +499,7 @@ jobs:
       - *free-disk
       - *install-nix
       - *checkout
+      - *derisk-release
       - *secure-boot-key
       - *serve-cache
       - *serve-cache-start
