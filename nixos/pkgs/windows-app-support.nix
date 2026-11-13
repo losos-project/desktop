@@ -34,10 +34,12 @@
   symlinkJoin,
   coreutils,
   curl,
+  diffutils,
   gawk,
   jq,
   libargon2,
   libnotify,
+  podman,
   podman-compose,
   systemd,
   util-linux,
@@ -61,6 +63,8 @@ let
     name = "pm";
     runtimeInputs = [
       coreutils
+      diffutils
+      podman
       util-linux
       # What the plugin's steps run besides Podman, which the person's PATH
       # has, beside the setuid newuidmap it needs.

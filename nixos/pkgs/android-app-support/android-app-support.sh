@@ -91,7 +91,9 @@ json() {
 
 # The Pixel's data partition, where its apps and their data live, in GiB.
 # The emulator makes it at its first start and refuses to unless a fifth
-# more than its size is free, so it is not as large as a phone's.
+# more than its size is free, so it is not as large as a phone's. The
+# final value is computed dynamically in cmd_setup from the space actually
+# free (see below); 8 GiB is only the floor.
 data_partition=8
 
 set_up() { [ -e "$avd/pixel.ini" ] && [ -e "$sdk/$system_image/system.img" ]; }
@@ -158,9 +160,13 @@ fetch() {
 cmd_setup() {
   local downloads=$data/downloads
   mkdir -p "$downloads"
-  # The downloads, unpacked beside them, and the data partition.
-  need=$(( (@imageSize@ * 3 + @emulatorSize@ * 3) / 1024 + data_partition * 1024 * 1024 * 6 / 5 ))
   free=$(df --output=avail -k "$data" | tail -1)
+  download_term=$(( (@imageSize@ * 3 + @emulatorSize@ * 3) / 1024 ))
+  spare=$(( free - download_term ))
+  data_partition=$(( spare * 5 / (6 * 1024 * 1024) ))
+  if [ "$data_partition" -lt 8 ]; then data_partition=8; fi
+  if [ "$data_partition" -gt 32 ]; then data_partition=32; fi
+  need=$(( download_term + data_partition * 1024 * 1024 * 6 / 5 ))
   if [ "$free" -lt "$need" ]; then
     progress "Android needs $(numfmt --to=iec $((need * 1024))) free, and this computer has $(numfmt --to=iec $((free * 1024)))."
     return 1

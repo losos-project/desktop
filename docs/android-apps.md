@@ -38,7 +38,7 @@ For a person with no Pixel yet, the app starts their user unit
 `android-app-support-setup`, which runs `android-app-support setup`:
 
 1. It checks for KVM and for room: about 9 GB while the download unpacks,
-   and 10 GB for the Pixel's data partition.
+   and a data partition sized from the free space available.
 2. It downloads the emulator, 350 MB, and Android, 2.5 GB, into
    `~/.local/share/android-app-support/`. A stopped download resumes, and a
    file that does not match its hash is deleted and fetched again.
