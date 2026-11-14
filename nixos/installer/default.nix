@@ -24,6 +24,10 @@ let
 
   # Where a release disk is mounted, when one is attached.
   releaseDisk = "/run/losos/release";
+  # Where the embedded release is mounted when the ISO carries one.
+  embeddedRelease = "/iso/release";
+
+  tryLive = pkgs.callPackage ../pkgs/losos-installer-try-live.nix { };
 
   # systemd-sysupdate is a libexec program, not one on PATH.
   sysupdateBin = pkgs.linkFarm "systemd-sysupdate-bin" [
@@ -184,7 +188,14 @@ in
   # `path` never reaches the backend. NixOS
   # lists curl by default; naming it keeps the installer working if that
   # default goes.
-  environment.systemPackages = [ pkgs.curl ];
+  environment.systemPackages = [
+    pkgs.curl
+    tryLive
+    pkgs.qemu
+  ];
+
+  boot.initrd.kernelModules = lib.mkAfter [ "kvm" ];
+  boot.kernelModules = [ "kvm" ];
 
   # The release signing key: sysupdate verifies SHA256SUMS.gpg here exactly
   # as it does on the installed system, under the name systemd 261's
@@ -207,6 +218,17 @@ in
       type = "auto";
       options = "ro";
     }
+    # The sysupdate payload baked into the ISO at build time (image.nix), read
+    # without the network when UPDATE_SIGNING_KEY_FILE was set for that build.
+    {
+      what = "/iso/release.squashfs";
+      where = embeddedRelease;
+      type = "squashfs";
+      options = "loop,ro";
+      requiredBy = [ "derisk-installer.service" ];
+      before = [ "derisk-installer.service" ];
+      unitConfig.ConditionPathExists = "/iso/release.squashfs";
+    }
   ];
   services.udev.extraRules = ''
     SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="LOSOS-RELEASE", ENV{SYSTEMD_WANTS}+="${utils.escapeSystemdPath releaseDisk}.mount"
@@ -221,8 +243,36 @@ in
   # so the installer works with a mouse, a touchscreen and a phone-sized
   # screen, and losos-installer is only the backend it starts.
   systemd.defaultUnit = "graphical.target";
+
+  systemd.services.losos-installer-try-live = {
+    description = "Ephemeral try session of LosOS Desktop";
+    unitConfig.ConditionPathExists = "/iso/try.qcow2";
+    serviceConfig = {
+      Type = "simple";
+      ExecStart = lib.getExe tryLive;
+      TTYPath = "/dev/tty1";
+      TTYReset = true;
+      TTYVHangup = true;
+      TTYVTDisallocate = true;
+    };
+  };
+
+  systemd.services.losos-installer-try-on-boot = {
+    description = "Start an ephemeral try session from the boot menu";
+    unitConfig.ConditionKernelCommandLine = "losos.try";
+    unitConfig.ConditionPathExists = "/iso/try.qcow2";
+    wantedBy = [ "graphical.target" ];
+    before = [ "derisk-installer.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${lib.getExe pkgs.systemd}/bin/systemctl start --no-block losos-installer-try-live.service";
+    };
+  };
+
   systemd.services.derisk-installer = {
     description = "LosOS Desktop installer";
+    unitConfig.ConditionKernelCommandLine = "!losos.try";
     wantedBy = [ "graphical.target" ];
     # After Plymouth has let go of the display, as the login screen is on
     # the installed system (desktop.nix).

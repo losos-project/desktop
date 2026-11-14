@@ -86,9 +86,20 @@ and install" button. Then:
 So an install is an update into an empty slot, from the newest complete
 release on the channel configured in the ISO. A nightly ISO installs the
 newest nightly; a weekly ISO installs the newest weekly. The installed system
-then follows its configured channel. The medium carries no copy of the OS.
+then follows its configured channel.
 
-The installer pulls the architecture-specific OCI artifact from GHCR with
+When the installer ISO is built from this repository, it grafts the same flake's
+sysupdate files as `release.squashfs` (`installer-embedded-release.nix`) and the
+desktop disk image as `try.qcow2` for an ephemeral try session. A install reads
+the release at `/iso/release` instead of the network, and derisk skips the
+Network page. CI sets `UPDATE_SIGNING_KEY_FILE` so the embedded manifest matches
+what published releases use; a local build without it checks file hashes only.
+Choose **Try LosOS Desktop** on the welcome page, or the matching GRUB entry
+(`losos.try=1`), to run the desktop in QEMU with a fresh overlay in tmpfs:
+nothing on the machine's own disks is touched.
+
+Without those files on the medium, the installer still pulls the
+architecture-specific OCI artifact from GHCR with
 `oras`, without a hosted proxy or GitHub release-asset downloads. CI publishes
 each version as `images:<channel>-<version>-<arch>` and moves
 `images:<channel>-<arch>` to the latest complete artifact. The installer

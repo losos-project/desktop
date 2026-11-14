@@ -68,9 +68,17 @@ let
       menuentry "Install LosOS Desktop" {
         chainloader /boot/installer.efi
       }
+      menuentry "Try LosOS Desktop" {
+        linux /boot/linux ${config.boot.uki.settings.UKI.Cmdline} losos.try=1
+        initrd /boot/initrd
+      }
     else
       menuentry "Install LosOS Desktop" {
         linux /boot/linux ${config.boot.uki.settings.UKI.Cmdline}
+        initrd /boot/initrd
+      }
+      menuentry "Try LosOS Desktop" {
+        linux /boot/linux ${config.boot.uki.settings.UKI.Cmdline} losos.try=1
         initrd /boot/initrd
       }
     fi
@@ -238,6 +246,8 @@ in
           -output $out \
           nix-store.squashfs=${squashfs} \
           boot/installer.efi=${uki} \
+          release.squashfs=${losos.embeddedRelease} \
+          try.qcow2=${losos.tryQcow2} \
           ${lib.optionalString (bios != { }) ''
             boot/eltorito.img=${bios.image}/eltorito.img \
             boot/linux=${config.boot.uki.settings.UKI.Linux} \

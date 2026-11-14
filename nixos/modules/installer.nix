@@ -5,8 +5,9 @@
 # command line said `losos.install`, copying its own /usr onto the target with
 # CopyBlocks=. That medium was the whole desktop, and it installed whatever
 # version the stick happened to be written with. It is not coming back:
-# installing is now an update into an empty slot, downloaded from the ISO's
-# configured update channel, and the medium carries no copy of the OS.
+# installing is now an update into an empty slot, from the channel, from GHCR
+# or from a release copy on the ISO when the build had the update signing key
+# (image.nix, installer-embedded-release.nix).
 #
 # This module is the OS's half, the half that decides what is written. The
 # repart definitions are disk.nix's own ESP and /usr slots, and the transfers are
@@ -162,6 +163,8 @@ let
     ];
     specialArgs.losos = {
       inherit (cfg) version channel;
+      embeddedRelease = config.system.build.installerEmbeddedRelease;
+      tryQcow2 = config.system.build.installerTryQcow2;
       releaseRepository = cfg.release.repository;
       inherit (cfg.update) baseUrl pubring;
       # Where the backend reads which assets make up the channel's files,

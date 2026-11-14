@@ -230,6 +230,39 @@ in
         sha256sum -- * > SHA256SUMS
       '';
 
+  # Squashfs of the sysupdate files for this build, grafted onto the installer
+  # ISO so an install reads local outputs instead of the network. It is not
+  # part of releaseArtifacts: that output still carries the installer ISO
+  # without waiting on itself.
+  system.build.installerEmbeddedRelease =
+    let
+      signingKeyFile = builtins.getEnv "UPDATE_SIGNING_KEY_FILE";
+      # Matches UPDATE_SIGNING_FPR in .github/workflows/ci.yml; the push job
+      # checks out no code, so both are maintained together.
+      signingFpr = "7FD984194AB8DDFF17DA0B0CDCDCF53B64988CBD";
+      image = config.system.build.disk;
+      raw = "${config.image.baseName}.raw";
+    in
+    pkgs.callPackage ../pkgs/installer-embedded-release.nix {
+      inherit
+        image
+        raw
+        id
+        version
+        arch
+        ukiFile
+        signingKeyFile
+        signingFpr
+        ;
+      inherit (cfg) usrSize;
+      uki = config.system.build.uki;
+      ukiReleaseFiles = config.system.build.ukiReleaseFiles;
+    };
+
+  # The desktop qcow2 the same flake built, for an ephemeral try session from
+  # the installer (installer/default.nix, losos-installer-try-live.nix).
+  system.build.installerTryQcow2 = config.system.build.qcow2;
+
   system.build.qcow2 =
     pkgs.runCommand "${id}_${version}.qcow2" { nativeBuildInputs = [ pkgs.buildPackages.qemu-utils ]; }
       ''

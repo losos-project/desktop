@@ -941,10 +941,11 @@ pub fn verify_release(
 ) -> Result<(), String> {
     let sums = dir.join("SHA256SUMS");
     let sums_text = sums.to_string_lossy().into_owned();
-    if pubring.exists() {
+    let signature = dir.join("SHA256SUMS.gpg");
+    if pubring.exists() && signature.is_file() {
         let home = work.join("gnupg");
         fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
-        let signature = dir.join("SHA256SUMS.gpg").to_string_lossy().into_owned();
+        let signature_text = signature.to_string_lossy().into_owned();
         // The options systemd-pull passes: only the given keyring, and any
         // key in it is trusted, since being in it is what trust means here.
         command(
@@ -960,12 +961,16 @@ pub fn verify_release(
                 "--trust-model=always",
                 &format!("--keyring={}", pubring.display()),
                 "--verify",
-                &signature,
+                &signature_text,
                 &sums_text,
             ],
             false,
             events,
         )?;
+    } else if pubring.exists() && !signature.is_file() {
+        let _ = events.send(Event::Line(
+            "SHA256SUMS.gpg is missing; checking file hashes only.".into(),
+        ));
     } else {
         let _ = events.send(Event::Line(format!(
             "{} is missing, so the release's signature is not checked",

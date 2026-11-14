@@ -116,16 +116,32 @@ pub fn github(config: &Config) -> Option<install::GitHub> {
     })
 }
 
-/// The release disk's directory, when one holding a release is mounted.
+/// Where an embedded release is mounted on the ISO when the medium carries one.
+const EMBEDDED_RELEASE: &str = "/iso/release";
+
+/// The release to install from: an attached release disk, or the copy on the
+/// ISO when there is one.
 pub fn release(config: &Config) -> Option<&Path> {
     config
         .local_source
         .as_deref()
         .filter(|dir| install::has_release(dir))
+        .or_else(|| {
+            let embedded = Path::new(EMBEDDED_RELEASE);
+            install::has_release(embedded).then_some(embedded)
+        })
+}
+
+/// Whether the medium carries an ephemeral try image.
+pub fn live_available() -> bool {
+    Path::new("/iso/try.qcow2").is_file()
 }
 
 pub fn hello(config: &Config) -> Value {
     let mut hello = json!({"event": "hello", "name": config.name, "source": config.source});
+    if live_available() {
+        hello["live"] = json!(true);
+    }
     if let Some(dir) = release(config) {
         hello["release"] = json!(dir.to_string_lossy());
     }
@@ -235,6 +251,7 @@ pub enum Request {
     /// With the person's own words to add, which may be empty.
     ReportSend(String),
     ReportCancel,
+    TryLive,
 }
 
 pub fn parse_request(line: &str) -> Result<Request, String> {
@@ -256,6 +273,7 @@ pub fn parse_request(line: &str) -> Result<Request, String> {
             value["note"].as_str().unwrap_or_default().to_owned(),
         )),
         Some("report_cancel") => Ok(Request::ReportCancel),
+        Some("try_live") => Ok(Request::TryLive),
         other => Err(format!("unknown method {other:?}")),
     }
 }
@@ -279,9 +297,7 @@ fn current_disks(config: &Config) -> impl Iterator<Item = Disk> + use<> {
     let sys = Path::new("/sys");
     let info = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
     let medium = disks::backing_disk(&info, sys, &config.medium);
-    let release = config
-        .local_source
-        .as_deref()
+    let release = release(config)
         .and_then(|dir| disks::backing_disk(&info, sys, &dir.to_string_lossy()));
     disks::list(sys, medium.as_deref())
         .into_iter()
@@ -377,7 +393,7 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
                     work: config.work.clone(),
                     source: config.source.clone(),
                     index: config.index.clone(),
-                    local: config.local_source.clone(),
+                    local: release(config).map(Path::to_path_buf),
                     release: github(config),
                     bios_boot: config.bios_boot.clone(),
                     encrypt,
@@ -452,6 +468,29 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
             Request::ReportCancel => {
                 if let Some((_, cancel)) = &sending {
                     cancel.store(true, Ordering::Release);
+                }
+            }
+            Request::TryLive if !live_available() => {
+                let _ = events.send(failed(
+                    "Try LosOS is not on this medium (try.qcow2 is missing).",
+                ));
+            }
+            Request::TryLive => {
+                let _ = events.send(json!({"event": "line", "text": "Starting an ephemeral try session…"}));
+                match Command::new("systemctl")
+                    .args(["start", "--no-block", "losos-installer-try-live.service"])
+                    .status()
+                {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => {
+                        let _ = events.send(failed(format!(
+                            "Could not start the try session (exit {}).",
+                            status
+                        )));
+                    }
+                    Err(e) => {
+                        let _ = events.send(failed(format!("Could not start the try session: {e}")));
+                    }
                 }
             }
         }

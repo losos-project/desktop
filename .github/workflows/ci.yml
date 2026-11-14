@@ -259,6 +259,23 @@ jobs:
             | sudo install -m 0640 -g nixbld /dev/stdin /var/lib/losos-secure-boot/key.pem
           echo "LOSOS_SECURE_BOOT_KEY=/var/lib/losos-secure-boot/key.pem" >> "$GITHUB_ENV"
 
+      # The same secret as push signs release manifests with. The path is read
+      # inside the Nix sandbox like LOSOS_SECURE_BOOT_KEY (secure-boot-key
+      # above), so the secret never lands in the store.
+      - &update-signing-key
+        name: Give the build the update signing key
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::notice::No UPDATE_SIGNING_KEY; the installer ISO will not embed a release."
+            exit 0
+          fi
+          sudo install -d -m 0750 -g nixbld /var/lib/losos-update-signing
+          printf '%s' "$UPDATE_SIGNING_KEY" \
+            | sudo install -m 0640 -g nixbld /dev/stdin /var/lib/losos-update-signing/key.asc
+          echo "UPDATE_SIGNING_KEY_FILE=/var/lib/losos-update-signing/key.asc" >> "$GITHUB_ENV"
+
       # The proxy's handler, run by node on this runner at NIX_CACHE_URL,
       # before anything asks Nix to substitute. The GHCR packages are public,
       # so it holds no token. It runs in the background for the rest of the
@@ -488,6 +505,7 @@ jobs:
       - *install-nix
       - *checkout
       - *secure-boot-key
+      - *update-signing-key
       - *serve-cache
       - *serve-cache-start
 
