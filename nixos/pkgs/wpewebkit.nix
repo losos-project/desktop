@@ -25,14 +25,14 @@
 
 webkitgtk.overrideAttrs (old: {
   pname = "wpewebkit";
-  version = "2.54.1";
-  name = "wpewebkit-2.54.1";
+  version = "2.54.2";
+  name = "wpewebkit-2.54.2";
 
   # The WPE release of the WebKit version nixpkgs' WebKitGTK is at; move
   # them together so nixpkgs' patches keep applying.
   src = fetchurl {
-    url = "https://wpewebkit.org/releases/wpewebkit-2.54.1.tar.xz";
-    hash = "sha256-Dei9+6AR+c1jupqRcfpgON0sCCN4lPQIKru4IfKdP+k=";
+    url = "https://wpewebkit.org/releases/wpewebkit-2.54.2.tar.xz";
+    hash = "sha256-8yhOGeR/y1rIxjwuHBE9vWWyQj64pUX1s0VweCkAT1Y=";
   };
 
   # One patch of ours: the program that sandboxes each web process can be

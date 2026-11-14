@@ -6,6 +6,12 @@
 # installer). nixos/halium/ adds the Halium half instead: an Android boot
 # image and the device's vendor layer in an Android container.
 {
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+{
   imports = [
     ./options.nix
     ./accounts.nix
@@ -35,6 +41,15 @@
   ];
 
   nixpkgs.overlays = [ (import ../pkgs) ];
+
+  # linuxPackages_latest, not the channel's default: the kernel is this
+  # project's own build (kernel-hardening.nix) and is rebuilt by CI anyway, so
+  # it never substitutes from cache.nixos.org, and tracking the newest series
+  # is what nixos-unstable is here for (flake.nix). The channel's default
+  # kernel can sit a whole series behind linuxPackages_latest for weeks. The
+  # Halium GSI boots its device's vendor kernel (halium/boot.nix), so the
+  # choice costs it nothing but an evaluation.
+  boot.kernelPackages = lib.mkDefault pkgs.linuxPackages_latest;
 
   system.nixos = {
     distroId = "losos-desktop";

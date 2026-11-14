@@ -1,25 +1,24 @@
-# Every Monday, the lockfiles move to what their manifests allow now, in one
-# commit straight to the default branch (docs/trust.md,
-# "Keeping the pins current").
+# Every Monday, the lockfiles move to what their manifests allow now, and
+# land as one pull request that merges itself when CI passes
+# (docs/trust.md, "Keeping the pins current").
 #
 # `update` runs tools/update-lockfiles: flake.lock, every Cargo.lock and
-# package-lock.json outside components/, the submodules to their
-# repositories' newest weekly releases, and the fixed-output hashes they
-# move.
+# package-lock.json outside components/, tools/update-packages for the
+# custom packages' upstream pins, the submodules to their repositories'
+# newest weekly releases, and the fixed-output hashes they move.
 #
-# If anything changed, `update` commits the result straight to the default
-# branch, with no pull request: CI's run on that commit is the check, and a
-# lockfile that breaks the build shows there as any other push would. If the
-# branch moved while this ran, the commit is rebased onto it first; a
-# conflict leaves this week's update unpushed and the run red, and running
-# it again starts afresh.
+# If anything changed, `update` pushes the result to a `lockfiles/update`
+# branch and opens or refreshes a pull request titled
+# "chore(deps): update lockfiles", then asks GitHub to merge it once its
+# checks pass: main's rules refuse a direct push, and merging is what
+# they wait for (CodeQL's analysis, the required checks, coverage).
 #
 # The push uses LOCKFILE_UPDATE_TOKEN, a fine-grained token with Contents
-# write on this repository, when there is one: GitHub starts no workflow for
-# a push made with Actions' own token, so CI would not run on the update
-# until the next push. Without the secret it pushes with that token all the
-# same. A branch rule that refuses direct pushes to the default branch has
-# to let the token's owner, or Actions, bypass it.
+# and Pull requests write on this repository, and it is required: a
+# branch pushed with Actions' own token starts no workflow, so the pull
+# request's required checks would never run and it could never merge.
+# GitHub starts no workflow for Actions' token's pushes either, so a
+# merged update runs CI because the token, not Actions, made the merge.
 name: lockfiles
 
 on:
@@ -35,9 +34,10 @@ jobs:
   update:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    # Only for the push without LOCKFILE_UPDATE_TOKEN.
+    # Everything that lands does so through LOCKFILE_UPDATE_TOKEN; Actions'
+    # own token only reads.
     permissions:
-      contents: write
+      contents: read
     env:
       NIX_VERSION: "2.34.8"
       # The installer script's own hash, from releases.nixos.org's
@@ -64,9 +64,9 @@ jobs:
 
       # The submodules are evaluated with the release, and move to their
       # repositories' weekly releases. The checkout is the default branch,
-      # whatever branch a run by hand was started on: the commit is rebased
-      # onto it and pushed there, so a feature branch's own commits must not
-      # be in it.
+      # whatever branch a run by hand was started on: the pull request is
+      # raised against it, so a feature branch's own commits must not be
+      # in it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -82,31 +82,45 @@ jobs:
           tools/update-lockfiles > "$RUNNER_TEMP/summary.md"
           cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Push them to the default branch
+      - name: Raise the pull request
         env:
-          TOKEN: ${{ secrets.LOCKFILE_UPDATE_TOKEN || github.token }}
+          TOKEN: ${{ secrets.LOCKFILE_UPDATE_TOKEN }}
           HAS_TOKEN: ${{ secrets.LOCKFILE_UPDATE_TOKEN != '' }}
           BASE: ${{ github.event.repository.default_branch }}
+          BRANCH: lockfiles/update
+          TITLE: "chore(deps): update lockfiles"
+          GH_TOKEN: ${{ secrets.LOCKFILE_UPDATE_TOKEN }}
         run: |
           # HEAD, because a moved submodule is staged, not just changed.
           if git diff HEAD --quiet; then
             echo "Every lockfile is already current." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # No line naming the run: commits here carry no attribution, and the
-          # run's own summary already lists what moved.
-          git commit -qam "chore(deps): update lockfiles" -m "$(cat "$RUNNER_TEMP/summary.md")"
-          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          git -c http.extraheader="$auth" fetch --quiet origin "$BASE"
-          if ! git rebase --quiet "origin/$BASE"; then
-            git rebase --abort
-            echo "::error::$BASE changed the same lockfiles while this ran, so the update is not pushed; run the workflow again."
+          # Actions' token cannot make this pull request workable: a branch
+          # or merge pushed with it starts no workflow, so the required
+          # checks would never run and the rules would refuse the merge.
+          if [ "$HAS_TOKEN" != true ]; then
+            echo "::error::LOCKFILE_UPDATE_TOKEN is not set. Main's rules refuse direct pushes and merging is what they wait for, so the update needs a token with Contents and Pull requests write; without it nothing is pushed."
             exit 1
           fi
-          git -c http.extraheader="$auth" push origin "HEAD:refs/heads/$BASE"
-          echo "Pushed $(git rev-parse --short HEAD) to $BASE." | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$HAS_TOKEN" != true ]; then
-            echo "::warning::LOCKFILE_UPDATE_TOKEN is not set, so the update was pushed with Actions' own token and CI does not run on it until the next push."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # No line naming the run: commits here carry no attribution, and
+          # the pull request body already lists what moved.
+          git commit -qam "$TITLE" -m "$(cat "$RUNNER_TEMP/summary.md")"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git -c http.extraheader="$auth" push --force origin "HEAD:refs/heads/$BRANCH"
+          # A branch already up from an earlier week updates its pull
+          # request; a first push opens one.
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --head "$BRANCH" --base "$BASE" --title "$TITLE" \
+              --body "$(cat "$RUNNER_TEMP/summary.md")"
+          else
+            gh pr edit "$BRANCH" --body "Rebased onto this week's update.
+
+          $(cat "$RUNNER_TEMP/summary.md")"
           fi
+          # Merges when the checks pass, deletes the branch after. If the
+          # repository has auto-merge off, this fails and says so.
+          gh pr merge "$BRANCH" --auto --squash --delete-branch
+          echo "Pull request for $BRANCH raised and set to merge when its checks pass." | tee -a "$GITHUB_STEP_SUMMARY"
