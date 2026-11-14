@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# Move the custom packages' upstream pins forward when their upstream moved
+# (docs/trust.md, "Keeping the pins current"). The `lockfiles` workflow runs
+# this through tools/update-lockfiles; a person can run it the same way.
+#
+#   tools/update-packages > packages.md
+#
+# Only pins with a machine-readable upstream move, and only forward, and
+# each check rewrites the hash from the same source it read the version
+# from, so a fetch on an architecture no runner can build never leaves a
+# stale hash behind:
+#
+# - wpewebkit: the WPE release of the WebKit version nixpkgs' WebKitGTK
+#   (webkitgtk_6_0) is at, which is what the pin's own comment asks it to
+#   follow. The hash is the new tarball's, downloaded once.
+# - libhybris: master's head, compared forward only. The hash is the tree
+#   NAR that nix flake prefetch reports, which is the same hash fetchgit
+#   pins (checked against a pin that is current).
+# - android-headers: the halium-16.0 branch's head, which every Halium
+#   base from 11 to 16 shares. Same hash rule as libhybris.
+# - halium-gsi: Droidian's newest android-system-gsi-34 in its trixie
+#   repository, with the SHA-256 the repository's Packages file lists, so
+#   the aarch64-only .deb fetch never has to run.
+# - the Android emulator: Google's stable channel, whose repository XML
+#   lists the revision and the archive. The zip is downloaded to hash it,
+#   and Google's listed SHA-1 confirms the download before the pin moves.
+#   The system image beside it stays a hand decision: a new Android
+#   version changes what runs, and is not a bump.
+#
+# Pins left deliberate, not touched here: shim-signed's Fedora build,
+# reims' chosen commit, and the losos client, which the losos
+# repository's desktop-pin workflow updates in a pull request of its own.
+#
+# The two git pins need gh and a token, as the submodule moves in
+# tools/update-lockfiles do; without them they stay where they are.
+# Progress goes to stderr; stdout is a Markdown summary.
+set -euo pipefail
+
+[ $# = 0 ] || { sed -n 's/^#   //p' "$0" >&2; exit 2; }
+cd "$(git rev-parse --show-toplevel)"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+summary=$work/summary
+: > "$summary"
+
+# True when NEW is a strictly newer version than OLD. sort -V orders the
+# dotted forms both these upstreams use.
+newer_version() {
+  local old=$1 new=$2
+  [ "$old" != "$new" ] &&
+    [ "$(printf '%s\n' "$old" "$new" | sort -V | head -1)" = "$old" ]
+}
+
+# The first `version = "..."` in a package file.
+pinned_version() {
+  sed -n 's/^[[:space:]]*version = "\([^"]*\)";$/\1/p' "$1" | head -1
+}
+
+# The first SRI hash in a package file, the form nixpkgs' fetchers pin.
+pinned_hash() {
+  grep -om1 'sha256-[A-Za-z0-9+/]\{43\}=' "$1"
+}
+
+# SRI of the tree a git revision fetches, which is what fetchgit pins.
+# nix flake prefetch hashes the tree itself, so this needs no builder for
+# either architecture.
+git_tree_hash() {
+  nix flake prefetch "git+$1?rev=$2" --json 2>/dev/null | jq -r .hash
+}
+
+# SRI of a file, which is what fetchurl pins: the archive's own hash, not
+# the unpacked tree's. The download stays in $work/dl for the caller to
+# size or checksum.
+download() {
+  local hex
+  curl -fsSL "$1" -o "$work/dl"
+  hex=$(sha256sum "$work/dl" | cut -d' ' -f1)
+  hex_to_sri "$hex"
+}
+
+# SRI of a SHA-256 some upstream lists as hex, the form nixpkgs' fetchers
+# pin. nix hash convert names it the new way; to-sri is the same thing
+# under the old name, for the Nix versions that only know it.
+hex_to_sri() {
+  if nix hash convert --help > /dev/null 2>&1; then
+    nix hash convert --hash-algo sha256 --to sri "$1" 2>/dev/null
+  else
+    nix hash to-sri --type sha256 "$1"
+  fi
+}
+
+# Moves a git pin to a revision and date, rewriting the rev, the
+# -unstable-YYYY-MM-DD the version carries and the tree hash. REPO names
+# the GitHub repository the pin is compared against: forward only, so a
+# pin someone moved past the head on purpose stays. URL is the fetchgit
+# URL, FILE the package file, NAME what the summary calls it.
+move_git_pin() {
+  local name=$1 file=$2 repo=$3 url=$4 rev=$5 date=$6 pin hash status
+  pin=$(grep -om1 '"[0-9a-f]\{40\}"' "$file" | tr -d '"')
+  [ "$pin" = "$rev" ] && { echo "$name is at $rev already" >&2; return 0; }
+  if ! status=$(gh api "repos/$repo/compare/$pin...$rev" --jq .status 2>/dev/null); then
+    echo "::warning::could not compare $name with $rev; it stays" >&2
+    return 0
+  fi
+  if [ "$status" != ahead ]; then
+    echo "$name stays at ${pin:0:12}, which $rev is not ahead of ($status)" >&2
+    return 0
+  fi
+  if ! hash=$(git_tree_hash "$url" "$rev") || [ -z "$hash" ]; then
+    echo "::warning::could not hash $name's new tree $rev; it stays" >&2
+    return 0
+  fi
+  sed -i "s|$pin|$rev|g" "$file"
+  sed -i "s|-unstable-[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}|-unstable-$date|g" "$file"
+  sed -i "s|$(pinned_hash "$file")|$hash|g" "$file"
+  echo "- \`$file\`: \`${pin:0:12}\` to \`${rev:0:12}\` ($date)" >> "$summary"
+}
+
+# True when the Debian version NEW is strictly newer than OLD. dpkg
+# compares the +git suffixes correctly; sort -V is the fallback for a
+# machine without dpkg, which orders the ubports dates right anyway.
+deb_newer() {
+  if command -v dpkg > /dev/null && dpkg --compare-versions "$2" gt "$1"; then
+    return 0
+  elif ! command -v dpkg > /dev/null; then
+    newer_version "$1" "$2"
+  else
+    return 1
+  fi
+}
+
+if command -v gh > /dev/null && gh auth status > /dev/null 2>&1; then
+  echo "Checking wpewebkit" >&2
+  file=nixos/pkgs/wpewebkit.nix
+  pinned=$(pinned_version "$file")
+  # The WebKitGTK the overlay's wpewebkit is built from (pkgs/default.nix
+  # passes webkitgtk_6_0); the alias without an ABI is a throw.
+  upstream=$(nix eval --raw --inputs-from . nixpkgs#webkitgtk_6_0.version 2>/dev/null) || upstream=
+  if [ -n "$upstream" ] && newer_version "$pinned" "$upstream"; then
+    if hash=$(download "https://wpewebkit.org/releases/wpewebkit-$upstream.tar.xz"); then
+      # The version is in the version, the name and the tarball URL.
+      sed -i "s|$pinned|$upstream|g" "$file"
+      sed -i "s|$(pinned_hash "$file")|$hash|g" "$file"
+      echo "- \`$file\`: $pinned to $upstream" >> "$summary"
+    else
+      echo "::warning::wpewebkit.org has no $upstream tarball; wpewebkit stays at $pinned" >&2
+    fi
+  else
+    echo "wpewebkit stays at $pinned; nixpkgs' webkitgtk_6_0 is at $upstream" >&2
+  fi
+
+  echo "Checking libhybris" >&2
+  repo=libhybris/libhybris
+  if head=$(gh api "repos/$repo/commits/master" --jq .sha 2>/dev/null) &&
+    date=$(gh api "repos/$repo/commits/$head" --jq .commit.committer.date | cut -d T -f 1); then
+    move_git_pin libhybris nixos/pkgs/libhybris.nix "$repo" \
+      "https://github.com/$repo" "$head" "$date"
+  else
+    echo "warning: $repo's master did not resolve; it stays" >&2
+  fi
+
+  echo "Checking android-headers" >&2
+  repo=Halium/android-headers
+  if head=$(gh api "repos/$repo/commits/halium-16.0" --jq .sha 2>/dev/null) &&
+    date=$(gh api "repos/$repo/commits/$head" --jq .commit.committer.date | cut -d T -f 1); then
+    move_git_pin android-headers nixos/pkgs/android-headers.nix "$repo" \
+      "https://github.com/$repo" "$head" "$date"
+  else
+    echo "warning: $repo's halium-16.0 did not resolve; it stays" >&2
+  fi
+else
+  echo "warning: gh is not signed in, so the git pins and wpewebkit stay where they are" >&2
+fi
+
+echo "Checking halium-gsi" >&2
+file=nixos/pkgs/halium-gsi.nix
+pinned=$(pinned_version "$file")
+# The pin's URL is written as a template with ${finalAttrs.version} in
+# it, so the full Debian version is the version attribute plus the +git
+# suffix the URL carries beside it.
+old_suffix=$(grep -om1 '+git[^_"]*' "$file")
+pinned_full="$pinned$old_suffix"
+# trixie is where Droidian's newest production .debs land; the Packages
+# file lists the version, filename and SHA-256 of the one to pin.
+packages=$work/Packages
+if curl -fsSL "https://production.repo.droidian.org/dists/trixie/main/binary-arm64/Packages" -o "$packages"; then
+  new_full=$(sed -n '/^Package: android-system-gsi-34$/,/^$/{
+    /^Version: /s/^Version: //p
+  }' "$packages" | tail -1)
+  sha_hex=$(sed -n '/^Package: android-system-gsi-34$/,/^$/{
+    /^SHA256: /s/^SHA256: //p
+  }' "$packages" | tail -1)
+  if [ -n "$new_full" ] && deb_newer "$pinned_full" "$new_full"; then
+    new_base=${new_full%%+git*}
+    new_suffix="+git${new_full#*+git}"
+    hash=$(hex_to_sri "$sha_hex")
+    # The version attribute and the URL's first half move together; the
+    # URL's +git suffix moves on its own.
+    sed -i "s|$pinned|$new_base|g" "$file"
+    sed -i "s|$old_suffix|$new_suffix|g" "$file"
+    sed -i "s|$(pinned_hash "$file")|$hash|g" "$file"
+    echo "- \`$file\`: \`$pinned_full\` to \`$new_full\`" >> "$summary"
+  else
+    echo "halium-gsi stays at $pinned_full; Droidian's trixie lists $new_full" >&2
+  fi
+else
+  echo "::warning::could not read Droidian's trixie Packages; halium-gsi stays" >&2
+fi
+
+echo "Checking the Android emulator" >&2
+file=nixos/pkgs/android-app-support.nix
+pinned=$(pinned_version "$file")
+pinned_build=$(sed -n '/^  emulator = {/,/^  };/s/^[[:space:]]*build = "\([0-9]*\)";$/\1/p' "$file")
+# Google's stable channel (channel-0) alone: canary and beta revisions
+# list in the same XML. The linux/x64 archive names the build.
+latest=$(curl -fsSL "https://dl.google.com/android/repository/repository2-3.xml" |
+  python3 -c '
+import re, sys
+xml = sys.stdin.read()
+best = None
+for block in re.findall(r"<remotePackage[^>]*path=\"emulator\".*?</remotePackage>", xml, re.S):
+    if "<channelRef ref=\"channel-0\"/>" not in block:
+        continue
+    rev = re.search(r"<major>(\d+)</major>\s*<minor>(\d+)</minor>\s*<micro>(\d+)</micro>", block)
+    zip_ = re.search(r"<url>emulator-linux_x64-(\d+)\.zip</url>", block)
+    sha1 = re.search(r"<checksum type=\"sha1\">([0-9a-f]{40})</checksum>", block)
+    if not (rev and zip_ and sha1):
+        continue
+    key = (*map(int, rev.groups()), int(zip_.group(1)))
+    if best is None or key > best[0]:
+        best = (key, ".".join(rev.groups()), zip_.group(1), sha1.group(1))
+print(best[1], best[2], best[3]) if best else sys.exit(1)
+' ) || latest=
+if [ -n "$latest" ]; then
+  read -r new_version new_build new_sha1 <<<"$latest"
+  # A bump is a newer revision, or the same revision published again with
+  # a newer build. Either way the ~350 MB zip downloads, to hash it and
+  # confirm it against the SHA-1 Google listed.
+  if { [ "$new_version" != "$pinned" ] &&
+    newer_version "$pinned" "$new_version"; } ||
+    { [ "$new_version" = "$pinned" ] && [ "$new_build" -gt "$pinned_build" ]; }; then
+    url="https://dl.google.com/android/repository/emulator-linux_x64-$new_build.zip"
+    if got_sha1=$(curl -fsSL "$url" -o "$work/dl" &&
+      sha1sum "$work/dl" | cut -d' ' -f1) && [ "$got_sha1" = "$new_sha1" ]; then
+      # Hex, not SRI: android-app-support.sh feeds this value to
+      # `sha256sum -c`, which reads no other form. Google's listed SHA-1
+      # has already confirmed the download above.
+      hash=$(sha256sum "$work/dl" | cut -d' ' -f1)
+      size=$(stat -c %s "$work/dl")
+      old_hash=$(sed -n '/^  emulator = {/,/^  };/s/^[[:space:]]*sha256 = "\([^"]*\)";$/\1/p' "$file")
+      old_size=$(sed -n '/^  emulator = {/,/^  };/s/^[[:space:]]*size = \([0-9]*\);$/\1/p' "$file")
+      # The build is in the build field and the URL; the rest is one
+      # place each.
+      sed -i "s|$pinned_build|$new_build|g" "$file"
+      sed -i "s|$pinned|$new_version|g" "$file"
+      sed -i "s|$old_hash|$hash|g" "$file"
+      sed -i "s|$old_size|$size|g" "$file"
+      echo "- \`$file\`: emulator $pinned (build $pinned_build) to $new_version (build $new_build)" >> "$summary"
+    else
+      echo "::warning::the emulator $new_version zip did not match Google's SHA-1; it stays at $pinned" >&2
+    fi
+  else
+    echo "the emulator stays at $pinned; Google's stable channel lists $new_version" >&2
+  fi
+else
+  echo "::warning::Google's repository XML did not name an emulator revision; it stays at $pinned" >&2
+fi
+
+cat "$summary"
+[ -s "$summary" ] || echo "Every custom package's pin is already current."

@@ -10,6 +10,9 @@
 # - Every Cargo.lock outside components/: `cargo update`, which stays within
 #   the versions each Cargo.toml allows, so no manifest changes.
 # - Every package-lock.json: `npm update --package-lock-only`, the same.
+# - tools/update-packages: the custom packages whose upstreams move on
+#   their own schedule, each pin bumped forward only with the hash its
+#   upstream source lists.
 # - Then tools/nix-refresh-hashes, for losos-docs' npm deps and anything
 #   else whose fetch the above changed.
 #
@@ -122,6 +125,9 @@ git ls-files ':(glob)**/package-lock.json' ':!:components/' | while read -r lock
   (cd "$(dirname "$lock")" && npm update --package-lock-only --ignore-scripts --no-fund --no-audit < /dev/null) >&2
 done
 
+# The custom packages' upstreams move without waiting for nixpkgs.
+tools/update-packages > "$work/packages"
+
 tools/nix-refresh-hashes "$work/before" | tee "$work/hashes" >&2
 
 # What a reviewer reads first: which inputs moved, how many crates and npm
@@ -147,6 +153,10 @@ echo
 echo "### Submodules"
 echo
 if [ -s "$work/submodules" ]; then cat "$work/submodules"; else echo "No submodule moved."; fi
+echo
+echo "### Custom packages"
+echo
+if [ -s "$work/packages" ]; then cat "$work/packages"; else echo "No pin moved."; fi
 echo
 echo "### Pinned hashes"
 echo

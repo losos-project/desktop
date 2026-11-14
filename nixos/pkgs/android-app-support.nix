@@ -45,11 +45,11 @@ let
   # hashes are taken from the archives themselves, whose SHA-1s match the
   # ones Google lists.
   emulator = {
-    build = "16428233";
-    version = "37.2.12";
-    url = "https://dl.google.com/android/repository/emulator-linux_x64-16428233.zip";
-    sha256 = "b08fc43d8608d2955f607f1b287beb525041e730086bdca3af152accac3af9c1";
-    size = 349654171;
+    build = "16740729";
+    version = "37.2.13";
+    url = "https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip";
+    sha256 = "sha256-y8fDz7gyILig+cUT/atVdxLnTTOewZ3f+kPyM1Cum90=";
+    size = 349658551;
   };
   # Android 17 (API level 37.2) with Google Play, in its 16 KB page size
   # build, the page size a Pixel 10's kernel uses. Google's AOSP images

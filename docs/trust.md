@@ -116,7 +116,7 @@ stays.
 
 Every Monday the `lockfiles` workflow, `.github/workflows/lockfiles.yml`,
 runs `tools/update-lockfiles`. A person can run it the same way. It does
-three things:
+four things:
 
 - `nix flake update` moves nixpkgs and Home Manager in `flake.lock`.
 - `cargo update` moves every `Cargo.lock` outside `components/`, and
@@ -131,6 +131,19 @@ three things:
   agree. A pin only moves forward, so one moved past the release by hand stays
   until a newer release passes it. Inside the submodules nothing else
   moves, since each repository updates its own lockfiles the same way.
+- `tools/update-packages` moves the custom packages' own upstream pins,
+  each forward only and with the hash its upstream source lists, so a
+  fetch no runner can reach never leaves a stale hash behind:
+  wpewebkit to the WPE release of the WebKit version nixpkgs' WebKitGTK
+  is at, libhybris to its master's head, android-headers to the head of
+  the halium-16.0 branch that every supported Halium base shares,
+  halium-gsi to Droidian's newest `android-system-gsi-34` in its trixie
+  repository, and the Android emulator to Google's stable channel, whose
+  zip is downloaded once to hash and checked against the SHA-1 Google
+  lists. The emulator's system image, shim-signed's Fedora build and
+  reims' chosen commit stay hand decisions, and the losos client's pin is
+  the losos repository's own desktop-pin workflow's, which raises its own
+  pull request here on each release.
 - `tools/nix-refresh-hashes` then re-fetches every fixed output pinned in
   this repository whose derivation those changes touched, and writes back
   the hash it really has. It has to re-fetch, because a stale hash still
@@ -138,19 +151,21 @@ three things:
   builds with it and never notices. losos-docs' npm hash moves this way
   whenever `website/package-lock.json` does.
 
-The result is one commit, `chore(deps): update lockfiles`, pushed straight
-to main with no pull request. Main's own `ci` run on it is the check, so a
-lockfile that breaks the build shows there as any other push would, and a
-green one publishes that night's release. If main moved while the update
-ran, the commit is rebased onto it first. If the two touched the same lock,
-nothing is pushed and the run fails, and running it again starts afresh.
+The result is one pull request, `chore(deps): update lockfiles`, pushed to
+a `lockfiles/update` branch and set to merge when its checks pass. The
+checks are the same CI a pull request of any kind gets, so a lockfile that
+breaks the build shows there before it reaches main, and the squash merge
+lands as that commit on main, from which a green `ci` publishes that
+night's release.
 
 > [!IMPORTANT]
-> The workflow pushes with `LOCKFILE_UPDATE_TOKEN`, a fine-grained token with
-> Contents write. GitHub starts no workflow for a push made with Actions' own
-> token, so without the secret the update still lands on main but `ci` does
-> not run on it until the next push. A branch rule that refuses direct pushes
-> to main has to let the token's owner, or Actions, bypass it.
+> The workflow needs `LOCKFILE_UPDATE_TOKEN`, a fine-grained token with
+> Contents and Pull requests write. Main's rules refuse a direct push, and
+> they wait for the pull request's checks to pass before they let a merge
+> through — which is exactly what the pull request is for. The token, and
+> not Actions' own, is what makes this work at all: a branch or merge
+> pushed with Actions' token starts no workflow, so the checks would never
+> run and the rules would never let the merge through.
 
 android_translation_layer stays a `fetchgit` pin. It is an upstream fork,
 off by default, and its tree is close to half a gigabyte, which the flake
