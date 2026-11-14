@@ -82,7 +82,7 @@ let
     }
   ];
 
-  cargoHash = "sha256-Dxwym+gWyhlGOpqUb3GoTdLy6CbUSxI86jw4Kagz3IA=";
+  cargoHash = "sha256-a3+zRinC9ESkgIL93LNgRFYlGq70e45gjsf6fhsCAVI=";
 
   # Fat LTO (Cargo.toml: lto = true) compiles every dependency as bitcode
   # (-C linker-plugin-lto) and links it in one rustc. That link is killed on
