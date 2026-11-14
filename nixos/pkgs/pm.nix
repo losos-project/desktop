@@ -12,6 +12,7 @@
   pkg-config,
   lld,
   llvmPackages,
+  aws-lc,
 }:
 
 let
@@ -57,6 +58,13 @@ rustPlatform.buildRustPackage {
     CC_wasm32_unknown_unknown = "clang";
     AR_wasm32_unknown_unknown = "llvm-ar";
   };
+
+  # nixpkgs' cargo setup hook forces AWS_LC_SYS_USE_SYSTEM=1 on every
+  # aws-lc-sys build (rustls' crypto provider), demanding a system install:
+  # without it the build script refuses to compile its vendored copy and
+  # panics. aws-lc is that install: its pkg-config files are what the
+  # build script probes, and its generated bindings ship in its dev output.
+  buildInputs = [ aws-lc ];
 
   # nixpkgs' rustc has no std for wasm32-wasip2, which build.rs wants for
   # one test fixture: a plugin that asks for WASI and must be refused. pm
