@@ -345,7 +345,7 @@ index 0000000..586bea1
 +  props[PROP_IS_PHONE] =
 +      g_param_spec_boolean ("is-phone", NULL, NULL,
 +                            FALSE,
-+                            GTK_PARAM_READABLE);
++                            G_PARAM_READABLE);
 +
 +  g_object_class_install_properties (object_class, LAST_PROP, props);
 +}
