@@ -28,7 +28,7 @@
 //! * **The active-user count.** `POST /ping` is what each signed-in user's
 //!   `losos-ping` timer sends once a day (`nixos/modules/ping.nix`): a
 //!   per-user id already hashed with the month, and the architecture. The
-//!   proxy adds the id to that month's HyperLogLog in Redis and answers with
+//!   proxy adds the id to that month's `HyperLogLog` in Redis and answers with
 //!   the policy that turns the browser and search engine choice screens on
 //!   once the count is large enough. [`ping`] and [`policy`] are that half.
 //!
@@ -108,7 +108,7 @@ pub enum Kind {
     Stream,
     /// Fetched and passed through byte for byte, for a small file whose client
     /// may not follow a redirect off the host it was pointed at. Bytes rather
-    /// than text because `SHA256SUMS.gpg` is a binary OpenPGP signature, which
+    /// than text because `SHA256SUMS.gpg` is a binary `OpenPGP` signature, which
     /// a decode to UTF-8 and back would corrupt.
     Inline,
 }
@@ -449,7 +449,7 @@ fn dates(date: &str) -> Option<Dates> {
 /// it.
 ///
 /// Output: `count <id> <region> <adds> <reads>`, or `bad <reason>`. `adds`
-/// is the HyperLogLogs to add the id to, as `key=seconds to keep`, joined by
+/// is the `HyperLogLogs` to add the id to, as `key=seconds to keep`, joined by
 /// commas. Every user is counted in the month's total and its
 /// architecture's; an EU user also in the month's and the day's EU counts.
 /// `reads` is four keys, joined by commas, whose counts [`policy`] wants:
@@ -489,9 +489,7 @@ pub fn ping(input: &str) -> String {
     let (keep_month, keep_day) = (KEEP_MONTH_DAYS * 86_400, KEEP_DAY_DAYS * 86_400);
     let mut adds = format!("actives:{month}={keep_month},actives:{month}:{arch}={keep_month}");
     if region == Region::Eu {
-        adds.push_str(&format!(
-            ",actives:{month}:eu={keep_month},actives:{day}:eu={keep_day}"
-        ));
+        let _ = write!(adds, ",actives:{month}:eu={keep_month},actives:{day}:eu={keep_day}");
     }
     format!(
         "count {id} {} {adds} actives:{month}:eu,actives:{last_month}:eu,\

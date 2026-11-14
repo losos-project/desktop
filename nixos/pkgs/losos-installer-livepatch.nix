@@ -73,7 +73,7 @@ writeShellApplication {
       read_config
       ref="$repository:$channel-$arch"
       mkdir -p "$work"
-      rm -rf "$work"/*
+      rm -rf "${"work:?"}"/*
       # CI for losos-project/desktop may be failing, so the bundle is not
       # published. Fall back to building the installer-live bundle locally
       # from the flake when nix and a checkout are available, and otherwise

@@ -30,6 +30,8 @@
 //! no filesystem here, no clock, no network and no environment: pm hands over a command
 //! string and takes an answer back.
 
+#![allow(clippy::same_length_and_capacity)] // wit-bindgen output
+
 wit_bindgen::generate!({ path: "../wit", world: "plugin" });
 
 use pm::plugin::{

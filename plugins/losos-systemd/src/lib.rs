@@ -29,6 +29,8 @@
 //! Nothing. One import, `log`, which returns nothing. pm hands over a file's text and
 //! takes a list of grants back.
 
+#![allow(clippy::same_length_and_capacity)] // wit-bindgen output
+
 wit_bindgen::generate!({ path: "../wit", world: "plugin" });
 
 use pm::plugin::{
@@ -131,18 +133,18 @@ fn grants_for(line_number: usize, key: &str, value: &str, out: &mut Vec<Grant>) 
 
     if EXEC_DIRECTIVES.contains(&key) {
         let command = strip_exec_prefixes(value);
-        if let Some(program) = command.split_whitespace().next() {
-            if is_path(program) {
-                out.push(Grant {
-                    permission: Permission::ExecPath(program.to_string()),
-                    evidence: evidence(program),
-                });
-                // Running anything at all means the service forks and execs.
-                out.push(Grant {
-                    permission: Permission::Spawn,
-                    evidence: evidence("executes a program"),
-                });
-            }
+        if let Some(program) = command.split_whitespace().next()
+            && is_path(program)
+        {
+            out.push(Grant {
+                permission: Permission::ExecPath(program.to_string()),
+                evidence: evidence(program),
+            });
+            // Running anything at all means the service forks and execs.
+            out.push(Grant {
+                permission: Permission::Spawn,
+                evidence: evidence("executes a program"),
+            });
         }
         return;
     }
