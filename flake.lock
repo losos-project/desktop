@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "derisk": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794649825,
+        "narHash": "sha256-2GGZ3xc6jhG0N1zToY9bQWIsjmrcw8lsHaX2MRyLGfw=",
+        "ref": "refs/heads/main",
+        "rev": "ea1ea3c6030051b892a796f864aa26205669becc",
+        "revCount": 550,
+        "type": "git",
+        "url": "https://github.com/losos-project/derisk"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://github.com/losos-project/derisk"
+      }
+    },
     "home-manager": {
       "inputs": {
         "nixpkgs": [
@@ -22,6 +38,22 @@
         "url": "https://github.com/nix-community/home-manager"
       }
     },
+    "mcsapi": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792664334,
+        "narHash": "sha256-EQDH3fA11ZsXy3lfKeh3Gm/aXfMlkc+42g2duFLsLDU=",
+        "ref": "refs/heads/main",
+        "rev": "46892ed49fe858d985f875d0b4e8dda63ae0fea1",
+        "revCount": 219,
+        "type": "git",
+        "url": "https://github.com/losos-project/mcsapi"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://github.com/losos-project/mcsapi"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1794386569,
@@ -35,10 +67,29 @@
         "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
       }
     },
+    "pm": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792321428,
+        "narHash": "sha256-oKGqAE4REMslW1qKEZqTQxKr/w31LXzqU//mF6KKShs=",
+        "ref": "refs/heads/master",
+        "rev": "406af1782b72f6f8cc926b6ca2ca5ffae2e714db",
+        "revCount": 207,
+        "type": "git",
+        "url": "https://github.com/losos-project/pm"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://github.com/losos-project/pm"
+      }
+    },
     "root": {
       "inputs": {
+        "derisk": "derisk",
         "home-manager": "home-manager",
-        "nixpkgs": "nixpkgs"
+        "mcsapi": "mcsapi",
+        "nixpkgs": "nixpkgs",
+        "pm": "pm"
       }
     }
   },

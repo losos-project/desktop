@@ -220,12 +220,13 @@ jobs:
           sudo systemctl restart nix-daemon
           echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
 
-      # submodules: derisk, mcsapi and pm are components/ submodules the flake
-      # builds from (flake.nix, `self.submodules`). All three are public, so
+      # derisk, mcsapi and pm are flake inputs (flake.nix) the flake fetches
+      # from the revisions flake.lock pins, so a plain checkout carries
+      # everything the build reads. All three repositories are public, so
       # the checkout needs no token for them.
       - &checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, submodules: true }
+        with: { persist-credentials: false }
 
       # The key that signs GRUB and the UKIs for Secure Boot
       # (docs/secure-boot.md), from the repository secret, where the Nix
@@ -974,7 +975,7 @@ jobs:
           sudo systemctl restart nix-daemon
           echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, submodules: true }
+        with: { persist-credentials: false }
       # The emulator runs in the bubblewrap sandbox that gives it its
       # libraries, which Ubuntu's AppArmor would stop making a user
       # namespace. KVM is open to every user on a LosOS PC, as here. The
@@ -1087,7 +1088,7 @@ jobs:
           sudo systemctl restart nix-daemon
           echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, submodules: true }
+        with: { persist-credentials: false }
       - name: Build the offline documentation
         id: build-docs
         run: |

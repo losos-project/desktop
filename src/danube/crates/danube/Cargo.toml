@@ -39,6 +39,11 @@ winit = { version = "0.30", default-features = false, features = ["wayland", "x1
 authenticator = { version = "0.5", default-features = false, features = ["crypto_rust"] }
 serde_cbor = "0.11"
 psl = "2"
+# The mcsapi crates, in the mcsapi repository: a checkout of it at
+# components/mcsapi is what this relative path reaches when danube is built
+# by cargo here. The flake's own build (nixos/pkgs/danube.nix) substitutes
+# the store path the mcsapi flake input fetched to before cargo reads this
+# manifest.
 mcsapi-components = { path = "../../../../components/mcsapi/crates/mcsapi-components" }
 mcsapi-theme = { path = "../../../../components/mcsapi/crates/mcsapi-theme" }
 

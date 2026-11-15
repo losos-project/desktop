@@ -11,18 +11,20 @@
   lib,
   rustPlatform,
   libxkbcommon,
+  # mcsapi's source, at the commit flake.lock pins (sources.nix).
+  source,
 }:
 
 rustPlatform.buildRustPackage {
   pname = "x2mcsapi";
   version = "0.1.0-unstable-2026-10-22";
 
-  # The components/mcsapi submodule, at the commit this tree records for it
-  # (flake.nix, `self.submodules`). cleanSource drops the submodule's .git
-  # file, so the source hash covers only the tree.
+  # cleanSourceWith gives the source its name for the build tree. The fetched
+  # source is already clean — a fetchGit tree has no .git — so this only
+  # names it.
   src = lib.cleanSourceWith {
     name = "mcsapi-source";
-    src = lib.cleanSource ../../components/mcsapi;
+    src = source;
   };
 
   cargoHash = "sha256-PdxnfWdAGSgN1XXeQ76iJ3wdut3KWIv+1f7cmoxjB/c=";

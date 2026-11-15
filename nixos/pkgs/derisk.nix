@@ -9,10 +9,10 @@
 # `derisk.agent` the Agent, the window that runs Claude Code on the desktop
 # (docs/agent.md).
 #
-# Pinned by the components/derisk submodule and moved by hand, like pm, because both derisk and the
-# mcsapi it builds against are moving fast. mcsapi comes in through
-# Cargo.lock's git entries, which the cargo vendor step fetches and cargoHash
-# covers.
+# Pinned by the derisk input in flake.lock and moved by hand, like pm,
+# because both derisk and the mcsapi it builds against are moving fast.
+# mcsapi comes in through Cargo.lock's git entries, which the cargo vendor
+# step fetches and cargoHash covers.
 {
   lib,
   rustPlatform,
@@ -34,6 +34,8 @@
   linux-pam,
   libpwquality,
   libvirt,
+  # derisk's source, at the commit flake.lock pins (sources.nix).
+  source,
   # derisk-gpui's GPUI (Zed's) links these, and finds the rest below at
   # run time.
   fontconfig,
@@ -52,12 +54,12 @@
 let
   version = "0.1.0-unstable-2026-10-29";
 
-  # The components/derisk submodule, at the commit this tree records for it
-  # (flake.nix, `self.submodules`). cleanSource drops the submodule's .git
-  # file, so the source hash covers only the tree.
+  # cleanSourceWith gives the source its name, for the build tree's layout.
+  # The fetched source is already clean — a fetchGit tree has no .git and no
+  # editor droppings — so this only names it.
   src = lib.cleanSourceWith {
     name = "derisk-source";
-    src = lib.cleanSource ../../components/derisk;
+    src = source;
   };
 
   # ocrs' two models, with which derisk reads every screenshot's text to

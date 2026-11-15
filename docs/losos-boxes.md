@@ -221,9 +221,9 @@ same crate and `cargoHash` as that repository's own `.#losos`. Its build
 script reads the admin UI's catalogue, palette, pane keywords and the salmon,
 and the crate links the envelope crate in `backend/access`. So a sparse
 checkout fetches those directories and nothing else, about 3 MB of a 400 MB
-tree. That is why it is a `fetchgit` pin and not a `components/` submodule,
-as [trust](trust.md) explains: the flake copies its submodules on every
-evaluation.
+tree. That is why it is a `fetchgit` pin and not a flake input, as
+[trust](trust.md) explains: a flake input fetches a whole repository, and
+the client needs 3 MB of a 400 MB tree.
 
 The commit and its hashes are in `nixos/pkgs/losos-pin.nix`. The LosOS
 repository moves them: on every release tag its `desktop-pin` workflow

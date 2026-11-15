@@ -31,7 +31,7 @@
 # reims' chosen commit, and the losos client, which the losos
 # repository's desktop-pin workflow updates in a pull request of its own.
 #
-# The two git pins need gh and a token, as the submodule moves in
+# The two git pins need gh and a token, as the component input moves in
 # tools/update-lockfiles do; without them they stay where they are.
 # Progress goes to stderr; stdout is a Markdown summary.
 set -euo pipefail

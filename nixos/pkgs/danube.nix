@@ -2,9 +2,9 @@
 # drawn inside an mcsapi window, and danube-sandbox, the Hakoniwa launcher
 # that sandboxes the browser and each of WebKit's web processes.
 #
-# Built from src/danube against the mcsapi components/mcsapi records, by
-# path, so the window draws with the same components and theme files as
-# derisk at the pinned commit.
+# Built from src/danube against the mcsapi input, whose components and theme
+# crates Cargo.toml reaches by path, so the window draws with the same
+# components and theme files as derisk at the pinned commit.
 {
   lib,
   rustPlatform,
@@ -23,28 +23,34 @@
   aria2,
   glib-networking,
   makeWrapper,
+  # mcsapi's source, at the commit flake.lock pins (sources.nix).
+  mcsapiSrc,
 }:
 
 rustPlatform.buildRustPackage {
   pname = "danube";
   version = "0.1.0";
 
-  # src/danube and the mcsapi submodule it takes its components from, at
-  # the paths Cargo.toml names them by.
+  # src/danube; the mcsapi crates Cargo.toml reaches by path join it in
+  # postPatch below, at the paths it names them by.
   src = lib.fileset.toSource {
     root = ../..;
-    fileset = lib.fileset.unions [
-      ../../src/danube
-      ../../components/mcsapi/Cargo.toml
-      ../../components/mcsapi/crates/mcsapi
-      ../../components/mcsapi/crates/mcsapi-ui
-      ../../components/mcsapi/crates/mcsapi-theme
-      ../../components/mcsapi/crates/mcsapi-components
-    ];
+    fileset = ../../src/danube;
   };
   cargoRoot = "src/danube";
   buildAndTestSubdir = "src/danube";
   cargoLock.lockFile = ../../src/danube/Cargo.lock;
+
+  # The mcsapi crates are path dependencies of danube
+  # (src/danube/crates/danube/Cargo.toml), named by their path out of this
+  # repository. In a checkout the path is the developer's own mcsapi clone;
+  # in the build it is the store path the mcsapi input fetched to, which is
+  # substituted before cargo reads the manifest. Path dependencies are not
+  # entries of Cargo.lock, so the vendor hash does not follow them.
+  postPatch = ''
+    substituteInPlace src/danube/crates/danube/Cargo.toml \
+      --replace-fail "../../../../components/mcsapi" "${mcsapiSrc}"
+  '';
 
   nativeBuildInputs = [
     pkg-config

@@ -100,7 +100,7 @@ nightly, and at 02:17 UTC the newest nightly becomes the weekly, monthly or
 yearly release that is due, with the same commit and files, since nothing
 in them depends on the cadence. Their releases are named the same way, from
 their own earlier names. Every Monday the OS's lockfile update moves its
-submodules to their weekly releases ([Keeping the pins
+derisk, mcsapi and pm inputs to their weekly releases ([Keeping the pins
 current](trust.md#keeping-the-pins-current)).
 
 ## Choosing a cadence

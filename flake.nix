@@ -34,12 +34,25 @@
     # desktop and the Halium target (nixos/halium/) want.
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
 
-    # derisk, mcsapi and pm are git submodules under components/, so the
-    # commit this tree carries for each of them is the one the image builds.
-    # Moving one is `git -C components/<name> checkout <rev>` and a commit
-    # here, plus a new cargoHash in nixos/pkgs when its Cargo.lock changed.
-    # Nix 2.27 and later read this and fetch the submodules with the flake.
-    self.submodules = true;
+    # derisk, mcsapi and pm, the three repositories the OS builds its own
+    # programs from. git+https rather than github:, for the api.github.com
+    # reason nixpkgs gives above. flake = false, because their sources are
+    # what is wanted and pm has no flake.nix: as sources they all behave the
+    # same. The commit each is pinned at lives in flake.lock, so the image
+    # builds exactly what the lock names, and `nix flake update <name>` moves
+    # one; tools/update-lockfiles moves them to their repositories' weekly
+    # releases (docs/trust.md, "The component inputs").
+    #
+    # They are read from the lock rather than passed through the overlay's
+    # arguments (nixos/pkgs/sources.nix says why), so nothing here forces
+    # their fetch; sources.nix's fetchGit and this fetcher resolve the same
+    # store path when both run.
+    derisk.url = "git+https://github.com/losos-project/derisk";
+    mcsapi.url = "git+https://github.com/losos-project/mcsapi";
+    pm.url = "git+https://github.com/losos-project/pm";
+    derisk.flake = false;
+    mcsapi.flake = false;
+    pm.flake = false;
 
     # Only for the check that builds the Home Manager module (nixos/home/pm.nix)
     # into a real Home Manager generation. A user's own Home Manager is what
@@ -57,6 +70,14 @@
       self,
       nixpkgs,
       home-manager,
+      # The component sources (flake.nix, `derisk`, `mcsapi` and `pm`): the
+      # evaluator passes every locked input here. The overlay reads them from
+      # the lock instead of these arguments, so its standalone imports
+      # resolve the same pin (nixos/pkgs/sources.nix); unused here, the flake
+      # never fetches them a second way.
+      derisk,
+      mcsapi,
+      pm,
     }:
     let
       inherit (nixpkgs) lib;

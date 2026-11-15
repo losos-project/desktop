@@ -160,14 +160,15 @@ in
   # Text and source files open in derisk's Text Editor, folders in Files,
   # and a .flatpakref or .flatpakrepo in the Store, the types each claims in
   # its desktop entry (pkgs/derisk.nix installs all three). Read from
-  # derisk's source, so a type added there is a default here without a
-  # second list to keep.
+  # derisk's source, at the commit flake.lock pins (pkgs/sources.nix), so a
+  # type added there is a default here without a second list to keep.
   xdg.mime.defaultApplications =
     let
+      deriskSource = import ../pkgs/sources.nix;
       claims =
         app:
         let
-          entry = builtins.readFile ../../components/derisk/crates/derisk-apps/data/org.derisk.${app}.desktop;
+          entry = builtins.readFile "${deriskSource.derisk}/crates/derisk-apps/data/org.derisk.${app}.desktop";
           line = lib.findFirst (lib.hasPrefix "MimeType=") "MimeType=" (lib.splitString "\n" entry);
         in
         lib.genAttrs (lib.filter (t: t != "") (lib.splitString ";" (lib.removePrefix "MimeType=" line))) (

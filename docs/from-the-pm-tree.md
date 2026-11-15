@@ -25,4 +25,4 @@
 | `tools/configure --version --channel` | `losos.version`, `losos.channel` | the flake derives the version from the commit date |
 | `tools/vm-test` | `nixos/tests/boot.nix` | boots the real image under UEFI |
 | `tools/` gates, `Containerfile`, `./do` | `nix flake check`, `nix fmt` | the gates checked generated recipes against pm's fingerprint table, and neither exists now |
-| pm, the system manager | pm, the system manager (`pm.nix`) | the `components/pm` submodule |
+| pm, the system manager | pm, the system manager (`pm.nix`) | the `pm` flake input |

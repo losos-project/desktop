@@ -125,7 +125,7 @@ lists this.
 ## How it is built
 
 `nixos/pkgs/derisk.nix` builds it as `derisk.agent`, a separate cargo build
-from the same `components/derisk` checkout and `cargoHash` as derisk. Its
+from the same derisk source and `cargoHash` as derisk. Its
 previews link wasmtime with WASI. derisk's own wasmtime, which runs the
 palette's plugins, is built without WASI on purpose, and cargo would give
 both the same features in one build.

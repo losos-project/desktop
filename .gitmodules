@@ -1,9 +1,0 @@
-[submodule "components/derisk"]
-	path = components/derisk
-	url = https://github.com/losos-project/derisk
-[submodule "components/mcsapi"]
-	path = components/mcsapi
-	url = https://github.com/losos-project/mcsapi
-[submodule "components/pm"]
-	path = components/pm
-	url = https://github.com/losos-project/pm
