@@ -40,6 +40,49 @@ Only the VM tests need KVM.
 > `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, as CI
 > does, or keep it across reboots in a file under `/etc/sysctl.d/`.
 
+## Building on a host running systemd-oomd
+
+On the usual multi-user install every builder runs under
+`nix-daemon.service`, inside `system.slice`, and the heavy derivations —
+WPE WebKit compiling, derisk's and pm's LTO links, `systemd-repart`
+assembling the image, the VM tests' guests — ask for more memory than a
+desktop keeps free. systemd-oomd watches only the cgroups a slice opts in
+to it, and a desktop distro's defaults watch `system.slice` (Fedora's kill
+line there is 80% memory pressure), so the build's pressure registers
+there. Past the line oomd kills the cgroup in that slice with the worst
+pressure, which is `nix-daemon.service` — every running build dies at
+once — or an innocent service that was merely standing beside the build.
+
+Give oomd a target that is the build, and stop the build before the
+machine swaps until it stops answering:
+
+```ini
+# /etc/systemd/system/nix-daemon.service.d/oomd.conf
+[Service]
+# Past the high line the kernel reclaims from the builders instead of
+# from the machine: a build that crosses it slows down, a desktop does
+# not. MemoryHigh takes no percentage; pick a byte count that leaves the
+# host's own work half of the RAM (10G of a 16 GB machine).
+MemoryHigh=10G
+# oomd watches this cgroup on its own, and at a line lower than its
+# slice's, so it trips first and what dies is the build: the running
+# builds are lost, the machine is not.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=50%
+```
+
+`systemctl daemon-reload` makes systemd read it, and the next start of
+the daemon applies it. `systemctl show system.slice -p
+ManagedOOMMemoryPressure
+-p ManagedOOMMemoryPressureLimit` says what a host watches today. A NixOS
+host writes the same through `systemd.services.nix-daemon.serviceConfig`,
+and a single-user install, whose builders live in the session, gets the
+same target from `systemd-run --user --scope -p
+ManagedOOMMemoryPressure=kill -p ManagedOOMMemoryPressureLimit=50% -- nix
+build …`. CI builds one derivation at a time (`--max-jobs 1`) for the
+same reason: parallel derivations filled a 16 GB runner until it stopped
+answering.
+
 > [!WARNING]
 > CI builds every other check first and boots the VM tests last. A VM test
 > that fails there is a warning and a line in the run's summary, not a red
