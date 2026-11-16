@@ -23,7 +23,7 @@ vm:
 
 # pm's plugins as WebAssembly components, for a pm installed outside the image:
 # the package the image carries (nixos/pkgs/pm-plugins.nix), so pm's own are
-# built from the components/pm pin rather than a checkout that can drift.
-# plugins/dist/share/pm/plugins holds them.
+# built from the pm input's pin in flake.lock rather than a checkout that can
+# drift. plugins/dist/share/pm/plugins holds them.
 plugins:
   nix build -L .#pm-plugins -o plugins/dist

@@ -108,7 +108,7 @@ store is visible inside the jail.
 
 pm's own tree already carries `sysupdate`, `sysext` and `systemd` plugins,
 so there is no losos copy of those; `just plugins` builds them from the
-`components/pm` pin (next section).
+pm input's pin (next section).
 
 ## `losos-systemd` — scan-source
 
@@ -163,7 +163,7 @@ just plugins    # nix build .#pm-plugins -o plugins/dist
 
 That leaves eight components in `dist/share/pm/plugins`: this tree's three,
 and five of pm's own — `libvirt`, `podman`, `sysext`, `sysupdate` and `systemd` — built
-from the `components/pm` submodule, the commit pm itself is built from, rather
+from the pm flake input, the commit pm itself is built from, rather
 than copied here to drift. Three read the sysupdate transfers and sysext
 definitions `nixos/` ships and name the systemd tools a recipe calls; `libvirt` boots a
 package's own kernel through the libvirt the image runs (`docs/pm.md`, "Virtual
@@ -187,4 +187,4 @@ Python gate did, and it went with the pm recipe tree. pm cannot catch the
 mismatch either: from pm's side a plugin built against an older contract is
 simply a plugin, right up to the point where a record gains a field and every
 component stops loading. Copy pm's `wit/plugin.wit` here when the
-`components/pm` pin moves.
+pm input's pin moves.

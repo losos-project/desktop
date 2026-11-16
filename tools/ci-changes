@@ -7,8 +7,8 @@
 # request that only edits a page or the proxy kept a typo fix queued behind
 # hours of rebuilding an image it cannot change. What a path can change is
 # known from where the flake reads it: the image is built from nixos/, src/,
-# plugins/, components/ and the flake itself, docs/ and website/ reach it
-# only as losos-docs (nixos/pkgs/losos-docs.nix), and the rest of the tree
+# plugins/, the component inputs in flake.lock, and the flake itself, docs/
+# and website/ reach it only as losos-docs (nixos/pkgs/losos-docs.nix), and the rest of the tree
 # is CI, the proxy or text for people. A path not named below counts as the
 # image's, so a new directory is built until someone says otherwise here.
 #

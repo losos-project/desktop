@@ -5,6 +5,8 @@
 # nixpkgs unchanged.
 final: prev:
 let
+  # The component sources, at the commits flake.lock pins (sources.nix).
+  sources = import ./sources.nix;
   # nixpkgs without this overlay: the packages that would rebuild against
   # the patched GTK below come from here, as cache.nixos.org has them.
   plain = import final.path { inherit (final.stdenv.hostPlatform) system; };
@@ -82,9 +84,9 @@ let
   );
 in
 {
-  pm = callWithMold ./pm.nix { };
+  pm = callWithMold ./pm.nix { source = sources.pm; };
   pm-plugins = callWithMold ./pm-plugins.nix { };
-  derisk = callWithMold ./derisk.nix { };
+  derisk = callWithMold ./derisk.nix { source = sources.derisk; };
   losos-installer = callWithMold ./losos-installer.nix { };
   # Reports a problem on the desktop as a GitHub issue (docs/reporting.md).
   losos-report = callWithMold ./losos-report.nix { };
@@ -231,12 +233,12 @@ in
       fi
     '';
   });
-  danube = callWithMold ./danube.nix { };
+  danube = callWithMold ./danube.nix { mcsapiSrc = sources.mcsapi; };
   # The system-wide ad blocker (docs/adblock.md).
   losos-adblock = callWithMold ./losos-adblock.nix { };
   # Backups to a LosOS box (docs/backup.md).
   losos-backup = callWithMold ./losos-backup.nix { };
-  x2mcsapi = callWithMold ./x2mcsapi.nix { };
+  x2mcsapi = callWithMold ./x2mcsapi.nix { source = sources.mcsapi; };
   # sonne.nix is gone: Sonne, the project's fork of Zed, took about half a
   # gigabyte of /usr for an editor, and its agent, the part the OS wanted,
   # is derisk's Agent now (derisk.nix, docs/agent.md).

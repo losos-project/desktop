@@ -4,10 +4,10 @@
 #
 # A pinned hash (a cargoHash, losos-docs' npm deps, a source archive) goes
 # stale when what it is fetched from changes: website/package-lock.json, a
-# submodule's Cargo.lock, or nixpkgs' own fetcher. Nix does not notice on a
-# machine that still has the old output, because the old hash names the same
-# store path, so the build reuses it. Main went red that way once already
-# (pm's plugins vendor hash). This compares the fixed-output derivations
+# component input's Cargo.lock, or nixpkgs' own fetcher. Nix does not notice
+# on a machine that still has the old output, because the old hash names the
+# same store path, so the build reuses it. Main went red that way once
+# already (pm's plugins vendor hash). This compares the fixed-output derivations
 # before and after a change: one whose derivation is new is built again with
 # --rebuild, which re-runs the fetch even when the output was substituted,
 # and the hash it reports replaces the pinned one.
@@ -31,15 +31,15 @@ usage() {
 
 # "<derivation> <hash>" for every fixed-output derivation in this
 # architecture's release whose hash is written in one of this repository's
-# own .nix files (components/ has its own). x2mcsapi is listed beside the
-# release: nothing in the image builds it, but its cargoHash follows
-# components/mcsapi's Cargo.lock as derisk's follows derisk's.
+# own .nix files. x2mcsapi is listed beside the release: nothing in the
+# image builds it, but its cargoHash follows the mcsapi input's Cargo.lock
+# as derisk's follows derisk's.
 list() {
   local system release x2mcsapi
   system=$(nix eval --raw --impure --expr builtins.currentSystem)
   release=$(nix eval --raw ".#packages.$system.release.drvPath")
   x2mcsapi=$(nix eval --raw ".#legacyPackages.$system.x2mcsapi.drvPath")
-  git ls-files -z '*.nix' ':!:components/' |
+  git ls-files -z '*.nix' |
     xargs -0 grep -oh 'sha256-[A-Za-z0-9+/]\{43\}=' | sort -u > "$work/pinned"
   nix derivation show -r "$release" "$x2mcsapi" |
     jq -r '.derivations | to_entries[]
@@ -77,7 +77,7 @@ while read -r drv hash; do
     echo "::warning::Could not fetch $drv again, so its hash $hash is unchecked."
     continue
   fi
-  git ls-files -z '*.nix' ':!:components/' | xargs -0 grep -lF "$hash" |
+  git ls-files -z '*.nix' | xargs -0 grep -lF "$hash" |
     while read -r file; do
       sed -i "s|$hash|$got|g" "$file"
       echo "$file: $hash -> $got"

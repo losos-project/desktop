@@ -3,25 +3,27 @@
 # pmd serves it over D-Bus.
 #
 # The image takes the OS from nixpkgs and keeps pm as the tool a user of the
-# running system builds and runs software with. It is pinned by the
-# components/pm submodule and moved by hand, because pm's plugin contract has
-# changed under this repository before.
+# running system builds and runs software with. It is pinned by the pm input
+# in flake.lock and moved by hand, because pm's plugin contract has changed
+# under this repository before.
 {
   lib,
   rustPlatform,
   pkg-config,
   lld,
   llvmPackages,
+  source,
   aws-lc,
 }:
 
 let
-  # The components/pm submodule, at the commit this tree records for it
-  # (flake.nix, `self.submodules`). cleanSource drops the submodule's .git
-  # file, so the source hash covers only the tree.
+  # cleanSourceWith gives the source its name, which sourceRoot below reads:
+  # unpacking a source directory puts it under a directory of that name.
+  # The fetched source is already clean — a fetchGit tree has no .git and no
+  # editor droppings — so this only names it.
   src = lib.cleanSourceWith {
     name = "pm-source";
-    src = lib.cleanSource ../../components/pm;
+    src = source;
   };
 
   # pm's build.rs compiles its bundled plugins from plugins/, a workspace of

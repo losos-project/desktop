@@ -4,12 +4,12 @@
 # (github.com/dasmatus/losos, admin-ui/tui), which builds the same crate as
 # its `.#losos`; this is that build, from a pinned commit.
 #
-# fetchgit with a sparse checkout rather than a components/ submodule: the
-# LosOS tree is about 140 MB, handbook pictures and the admin UI included,
-# which the flake would copy on every evaluation (docs/trust.md), and the
-# client needs only these directories. Its build script reads the admin UI's
-# catalogue, palette, pane keywords and the salmon, and the crate links the
-# envelope crate in backend/access by path, which is why those are here.
+# fetchgit with a sparse checkout rather than a flake input: the LosOS tree
+# is about 140 MB, handbook pictures and the admin UI included, which a
+# flake input would fetch whole (docs/trust.md), and the client needs only
+# these directories. Its build script reads the admin UI's catalogue,
+# palette, pane keywords and the salmon, and the crate links the envelope
+# crate in backend/access by path, which is why those are here.
 #
 # The pin is losos-pin.nix, which the LosOS repository rewrites in a pull
 # request here when it tags a release (.github/workflows/desktop-pin.yml

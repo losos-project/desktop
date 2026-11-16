@@ -10,9 +10,10 @@ stock glibc packages.
 `flake.nix` and `nixos/` are the OS. nixpkgs `nixos-unstable`, pinned in `flake.lock`,
 provides stock packages, normally substituted from cache.nixos.org.
 [`pm`](https://github.com/losos-project/pm) ships in the image as the system
-manager. derisk, mcsapi and pm are git submodules under `components/`, and
-their recorded commits are the pins (`docs/trust.md`, "The components/
-submodules"); clone with `--recurse-submodules`.
+manager. derisk, mcsapi and pm are flake inputs (`flake.nix`), and the
+revisions `flake.lock` pins them at are what the image builds
+(`docs/trust.md`, "The component inputs"); a plain clone is all a build
+needs.
 
 `README.md` points at the documentation. `docs/` is the documentation, one
 page per subject: how each piece is built, which outside inputs the build
@@ -84,9 +85,9 @@ still takes time, so don't start one to check a module edit.
   dependents rebuild in CI instead of substituting. `patches/` also holds
   the two gnome-control-center patches, which target 51.0 and nothing
   applies.
-- `components/` holds derisk, mcsapi and pm as git submodules. The flake
-  builds them from there; `nixos/pkgs/{derisk,x2mcsapi,pm}.nix` keep only
-  their `cargoHash` and build flags.
+- derisk, mcsapi and pm are flake inputs, pinned by `flake.lock` and read
+  through `nixos/pkgs/sources.nix`; `nixos/pkgs/{derisk,x2mcsapi,pm}.nix`
+  keep only their `cargoHash` and build flags.
 - `src/` holds the programs this repository writes. The overlay builds
   them; `losos-windows-installer` is also cross-built to a Windows `.exe` by
   `modules/windows-installer.nix` (`docs/windows-installer.md`).

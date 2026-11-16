@@ -9,7 +9,7 @@ where each section went.
 |---|---|
 | (the introduction) | [LosOS Desktop](index.md) |
 | What this trusts from outside | [What this trusts from outside](trust.md) |
-| The components/ submodules | [What this trusts from outside](trust.md#the-components-submodules) |
+| The component inputs | [What this trusts from outside](trust.md#the-component-inputs) |
 | Building | [Building](building.md) |
 | glibc and stock packages | [glibc and stock packages](packages.md) |
 | The memory allocator | [The memory allocator](allocator.md) |

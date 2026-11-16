@@ -16,7 +16,7 @@ generated from [`docs/`](docs/index.md), so edit it there.
 
 ## Building
 
-Clone with `git clone --recurse-submodules`, then:
+Clone the repository, then:
 
 ```sh
 nix build --impure              # the disk image; dd it to a disk and boot

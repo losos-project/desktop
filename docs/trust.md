@@ -18,8 +18,8 @@ Everything the flake builds from, besides this repository:
   upstream compilers, so it is not only source. Each copied flat or NAR output
   is checked against its derivation's hash, and outputs that use other hash
   methods are rejected.
-- **pm**, the `components/pm` submodule from `github.com/losos-project/pm`,
-  at the commit this tree records, built by `nixos/pkgs/pm.nix`.
+- **pm**, the `pm` flake input from `github.com/losos-project/pm`, pinned by
+  the revision `flake.lock` records, built by `nixos/pkgs/pm.nix`.
 - **crates.io**, for the dependencies of pm, losos-security,
   losos-installer and losos-hardware, each pinned by `Cargo.lock` and checked
   by hash.
@@ -39,12 +39,12 @@ Everything the flake builds from, besides this repository:
   by `nixos/modules/nvidia.nix`, and they load only on a machine with
   [a card the driver supports](drivers.md). The
   open kernel module is built from NVIDIA's MIT/GPL source.
-- **derisk**, the `components/derisk` submodule from
-  `github.com/losos-project/derisk`, at the commit this tree records, built
-  by `nixos/pkgs/derisk.nix`. Its crates, mcsapi among them, are pinned by
-  its `Cargo.lock` and `cargoHash`. It is the desktop, the display manager
-  and the portal backend. The `components/mcsapi` submodule is the same
-  mcsapi commit, and builds `x2mcsapi`.
+- **derisk**, the `derisk` flake input from `github.com/losos-project/derisk`,
+  pinned by the revision `flake.lock` records, built by
+  `nixos/pkgs/derisk.nix`. Its crates, mcsapi among them, are pinned by its
+  `Cargo.lock` and `cargoHash`. It is the desktop, the display manager and
+  the portal backend. The `mcsapi` flake input is the same mcsapi commit,
+  and builds `x2mcsapi`.
 - **ocrs' OCR models**, `text-detection.onnx` and `text-recognition.onnx`,
   fetched by `nixos/pkgs/derisk.nix` from ocrs' own bucket,
   `ocrs-models.s3-accelerate.amazonaws.com`, and pinned by hash. The URLs
@@ -94,23 +94,31 @@ Everything the flake builds from, besides this repository:
   pinned by version. Nix is needed to build Nix, so this binary is the one
   bootstrap. After it, `.#nix` is the nixpkgs Nix package for a build host.
 
-## The components/ submodules
+## The component inputs
 
-derisk, mcsapi and pm are git submodules under `components/`, and the flake
-builds them from there, through `self.submodules = true` in `flake.nix`, which
-Nix 2.27 and later honour. The commit recorded for each submodule is the pin.
-A clone needs `git clone --recurse-submodules`, or `git submodule update
---init`, and `git -C components/<name> log` shows exactly what the image
-builds. To move one, run `git -C components/<name> checkout <rev>`, commit
-here, and set a new `cargoHash` in its `nixos/pkgs/*.nix` if its `Cargo.lock`
-changed. There is no source hash to update, because the submodule commit
-already names the tree. Running `tools/nix-refresh-hashes --list > before.txt`
-before the move and `tools/nix-refresh-hashes before.txt` after it finds and
-rewrites that `cargoHash`. derisk's own `Cargo.lock` still fetches mcsapi by
-git revision, so move `components/mcsapi` to the revision that lock names.
+derisk, mcsapi and pm are flake inputs (`flake.nix`), and the flake builds
+them from the revisions `flake.lock` pins each at, which `nixos/pkgs/
+sources.nix` fetches with `builtins.fetchGit`. The lock's revision and
+`narHash` are the pin: a fetch that yields a different tree fails it, and
+`nix flake metadata` shows exactly what the image builds. A clone needs no
+flags, since the sources are fetched at evaluation, not checked out. To move
+one, run `tools/update-lockfiles`, or by hand `nix flake lock --override-input
+<name> git+https://github.com/losos-project/<name>?rev=<rev>`, and set a new
+`cargoHash` in its `nixos/pkgs/*.nix` if its `Cargo.lock` changed. There is no
+source hash to update, because the locked commit already names the tree.
+Running `tools/nix-refresh-hashes --list > before.txt` before the move and
+`tools/nix-refresh-hashes before.txt` after it finds and rewrites that
+`cargoHash`. derisk's own `Cargo.lock` still fetches mcsapi by git revision,
+so keep the `mcsapi` input at the revision that lock names.
 Every Monday the lockfile update moves all three to releases ([Keeping the
 pins current](#keeping-the-pins-current)), and a move by hand in between
 stays.
+
+The sources are read from the lock rather than passed through the overlay,
+because the overlay is imported standalone — by the OS's own module set
+(`nixos/modules/base.nix`) and by every VM test (`nixos/tests/*.nix`) — and
+threading three arguments through all of those would buy the store path the
+lock already names.
 
 ## Keeping the pins current
 
@@ -118,19 +126,20 @@ Every Monday the `lockfiles` workflow, `.github/workflows/lockfiles.yml`,
 runs `tools/update-lockfiles`. A person can run it the same way. It does
 four things:
 
-- `nix flake update` moves nixpkgs and Home Manager in `flake.lock`.
-- `cargo update` moves every `Cargo.lock` outside `components/`, and
+- `nix flake update` moves nixpkgs and Home Manager in `flake.lock`, named,
+  so it cannot move the component inputs below a second way.
+- `cargo update` moves every `Cargo.lock`, and
   `npm update --package-lock-only` every `package-lock.json`, each only as
   far as its manifest allows, with cargo and npm from the new nixpkgs.
-- The submodules move to releases. derisk, mcsapi and pm publish GitHub
-  releases on the same cadences as the OS ([Release
+- The component inputs move to releases. derisk, mcsapi and pm publish
+  GitHub releases on the same cadences as the OS ([Release
   cadences](releases.md#release-cadences)), and cut their weekly ones at
-  02:17 UTC, before this runs. `components/derisk` and `components/pm` move
-  to their repository's newest weekly release, and `components/mcsapi` to
-  the revision derisk's `Cargo.lock` names at that release, so the two
-  agree. A pin only moves forward, so one moved past the release by hand stays
-  until a newer release passes it. Inside the submodules nothing else
-  moves, since each repository updates its own lockfiles the same way.
+  02:17 UTC, before this runs. The `derisk` and `pm` inputs move to their
+  repository's newest weekly release, and `mcsapi` to the revision derisk's
+  `Cargo.lock` names at that release, so the two agree. A pin only moves
+  forward, so one moved past the release by hand stays until a newer
+  release passes it. Inside those repositories nothing else moves, since
+  each repository updates its own lockfiles the same way.
 - `tools/update-packages` moves the custom packages' own upstream pins,
   each forward only and with the hash its upstream source lists, so a
   fetch no runner can reach never leaves a stale hash behind:

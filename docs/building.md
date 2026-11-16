@@ -1,10 +1,5 @@
 # Building
 
-> [!IMPORTANT]
-> Clone with `git clone --recurse-submodules`: derisk, mcsapi and pm are git
-> submodules under `components/` ([What this trusts from
-> outside](trust.md#the-components-submodules)).
-
 The flake reads a few environment variables to decide where an image updates
 from, so pass `--impure` when you build an image, installer, QCOW2, release,
 UKI or VM. With none set, the image updates from the channel's newest GitHub
