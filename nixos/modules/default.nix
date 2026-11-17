@@ -38,6 +38,7 @@
     ./macos-apps.nix
     ./android-apps.nix
     ./flatpak-machine.nix
+    ./danube-machine.nix
     # Security keys and smart card readers, lent to the machines.
     ./tokens.nix
     # Signing in with the Slovak eID card, through the eID machine.

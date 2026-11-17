@@ -162,6 +162,20 @@ let
               bash ${guestRun} --list > $out/share/losos/machines/${name}.apps
           ''
         ) (lib.attrValues guests)
+        + lib.concatMapStrings (
+          { name, file, apps }:
+          ''
+            qemu-img convert -f qcow2 -O qcow2 -c ${file} \
+              $out/share/losos/machines/${name}.qcow2
+            ${lib.optionalString (apps != null) ''
+              printf '%s\n' ${lib.escapeShellArg apps} > $out/share/losos/machines/${name}.apps
+            ''}
+          ''
+        ) (lib.mapAttrsToList (name: f: {
+          inherit name;
+          file = f.file;
+          apps = f.apps;
+        }) config.losos.machines.foreignTemplates)
       );
 
   # losos-guest-run as a build runs it, for the lists above: the user and
@@ -203,6 +217,39 @@ in
       share/losos/machines/<name>.qcow2, the name pm records as a machine's
       template. A module that needs a machine of its own for something adds
       one here, as losos-boxes.nix's LosOS boxes machine does.
+    '';
+  };
+
+  options.losos.machines.foreignTemplates = lib.mkOption {
+    type = lib.types.attrsOf (
+      lib.types.submodule {
+        options = {
+          file = lib.mkOption {
+            type = lib.types.path;
+            description = "The disk image the template ships as, qcow2.";
+          };
+          apps = lib.mkOption {
+            type = lib.types.nullOr lib.types.lines;
+            default = null;
+            description = ''
+              The <name>.apps listing, in losos-guest-run --list's form: one
+              line per app, its desktop file ID, a tab, and its name. The
+              desktop offers a machine's apps from it while the machine is
+              off.
+            '';
+          };
+        };
+      }
+    );
+    default = { };
+    description = ''
+      Machine templates that are not NixOS guests of this flake, by name: a
+      disk image another distribution built, shipped as
+      share/losos/machines/<name>.qcow2 like the guests' and made into
+      machines by losos.machines.system the same way. What the guest needs to
+      fit the desktop is installed in the machine at its first boot, as the
+      machines from an installer CD have it run by hand — the Linux tools CD's
+      setup.sh, unattended (danube-machine.nix does it with cloud-init).
     '';
   };
 
@@ -277,8 +324,10 @@ in
     environment.pathsToLink = [ "/share/losos/machines" ];
 
     assertions = lib.mapAttrsToList (name: machine: {
-      assertion = config.losos.machines.guests ? ${machine.template};
-      message = "losos.machines.system.${name}: there is no template ${machine.template} in losos.machines.guests";
+      assertion =
+        config.losos.machines.guests ? ${machine.template}
+        || config.losos.machines.foreignTemplates ? ${machine.template};
+      message = "losos.machines.system.${name}: there is no template ${machine.template} in losos.machines.guests or losos.machines.foreignTemplates";
     }) config.losos.machines.system;
 
     # Makes losos.machines.system's machines through pm, as root. pm runs a
