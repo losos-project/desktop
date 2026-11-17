@@ -95,8 +95,8 @@ in
           machine.fail("test -d /sys/module/nvidia")
 
       with subtest("the kernel is locked down, takes only signed modules and hardens BPF"):
-          # kernel-hardening.nix. The mode is forced in the kernel's build,
-          # so the command line has nothing to say about it.
+          # kernel-hardening.nix: lockdown=integrity and module.sig_enforce=1
+          # ride in on the command line the UKI carries.
           machine.succeed("grep -q '\\[integrity\\]' /sys/kernel/security/lockdown")
           machine.succeed("grep -qx Y /sys/module/module/parameters/sig_enforce")
           # NVIDIA's open module is signed (nvidia.nix), or it could never

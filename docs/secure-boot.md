@@ -214,8 +214,11 @@ instead would show it to every build, fetchers with network access included.
 - systemd-stub uses only the command line built into the UKI. It already
   did, since GRUB never passes a UKI any arguments.
 - The kernel's lockdown and module signing are as
-  [kernel hardening](kernel-hardening.md) describes, with or without Secure
-  Boot. Secure Boot adds that the next kernel is checked too.
+  [kernel hardening](kernel-hardening.md) describes, on every boot GRUB
+  starts: each one carries the command line built into the UKI, or the one
+  cut from it beside it. Secure Boot adds GRUB's own lockdown, which refuses
+  a kernel hand-rolled at GRUB's prompt, and that the next kernel is checked
+  too.
 
 ## Tested
 
