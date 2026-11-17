@@ -185,6 +185,11 @@ kernel beside them. It then offers:
 > wrong](troubleshooting.md#no-one-can-administer-the-machine)). With Secure
 > Boot on, GRUB ignores them ([Secure Boot](secure-boot.md#while-secure-boot-is-on)).
 
+The menu's editor, which `e` opens in stock GRUB, is patched out
+(`nixos/pkgs/patches/grub`). An edited entry starts whatever command line it
+is made to name, and every boot is meant to start the one the release was
+built with ([kernel hardening](kernel-hardening.md)). The prompt stays.
+
 A UKI takes kernel arguments only in place of its whole command line, so on
 UEFI, GRUB puts the UKI's own command line from the `.grub` file in front of
 `losos_extra`. On x86_64 it then starts the kernel and initrd beside the UKI
