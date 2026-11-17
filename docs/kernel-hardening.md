@@ -7,8 +7,8 @@ them.
 
 | Defence | Where it is set | What the report reads |
 |---|---|---|
-| Lockdown, integrity mode | the kernel's build | `/sys/kernel/security/lockdown` says `[integrity]` |
-| Module signatures | the kernel's build | `/sys/module/module/parameters/sig_enforce` is `Y` |
+| Lockdown, integrity mode | the kernel's command line | `/sys/kernel/security/lockdown` says `[integrity]` |
+| Module signatures | nixpkgs' build signs, the command line enforces | `/sys/module/module/parameters/sig_enforce` is `Y` |
 | IOMMU, strict | the kernel's command line | `/sys/class/iommu` lists the machine's IOMMUs |
 | Unprivileged BPF off | `kernel.unprivileged_bpf_disabled = 1` | the sysctl |
 | BPF JIT hardening | `net.core.bpf_jit_harden = 2` | the sysctl |
@@ -26,10 +26,11 @@ and any kernel module that does not carry a valid signature. Without that
 last rule the rest would not hold. A module is kernel code, so if root could
 load any module, it could switch lockdown off again.
 
-nixpkgs builds its kernel with the lockdown module and module signatures but
-enforces neither. This image builds its own kernel that enforces both. The
-cost is that the kernel, and every package built against it, comes from this
-project's CI and its cache instead of cache.nixos.org.
+nixpkgs builds its kernel with the lockdown LSM and module signatures but
+enforces neither. The image enforces both on the kernel's command line, so
+the kernel itself is nixpkgs' own, from cache.nixos.org, and so is every
+package built against it. What this project builds is only a second link of
+that kernel with the system's module certificates in it, below.
 
 nixpkgs signs each module with kmodigest as it is installed. kmodigest makes
 every module a certificate of its own from the module's contents, so the
@@ -41,14 +42,20 @@ adds none, so `kernel-hardening.nix` links the compiled kernel into a second
 image with the certificates of the system's whole module tree in it, which
 takes under a minute. The UKI and the VM tests both boot that image. The plain build would load no module at all.
 
-The build forces integrity mode with `LOCK_DOWN_KERNEL_FORCE_INTEGRITY`
-instead of asking for it with `lockdown=` on the command line. Without Secure
-Boot, systemd-stub accepts a command line from the boot loader, and nothing
-on the command line can lower a forced mode. Confidentiality mode would also
-stop root from reading kernel memory through perf, kprobes, tracefs and BPF.
-That takes profilers and tracing away from anyone developing on the machine,
-and the gain only matters once root is the attacker and the boot chain is
-signed.
+The command line asks for integrity mode with `lockdown=integrity` and
+enforcement with `module.sig_enforce=1`, and both hold on the way in.
+`lockdown=` is an early parameter, so the kernel locks down before anything
+boots. Nothing can lower it afterwards: a write to
+`/sys/kernel/security/lockdown` can only raise the mode, and the parameter
+itself takes `integrity` or `confidentiality` and nothing else, so there is
+no word a boot loader could add to undo it. `sig_enforce` is an enable-only
+switch: once on, nothing turns it off. And the command line is built into
+the UKI, which GRUB starts without arguments ([Secure
+Boot](secure-boot.md)), so nothing between power and boot can put another
+one in its place. Confidentiality mode would also stop root from reading
+kernel memory through perf, kprobes, tracefs and BPF. That takes profilers
+and tracing away from anyone developing on the machine, and the gain only
+matters once root is the attacker and the boot chain is signed.
 
 ### What it costs
 
@@ -107,8 +114,14 @@ Linux privilege escalation bugs have gone through it.
 - **Secure Boot off.** Lockdown protects the kernel that is running, not the
   next one. With Secure Boot off, or on an image built without LosOS's key,
   root can still write a kernel of its choosing to the ESP and reboot into
-  it. With [Secure Boot](secure-boot.md) on and LosOS's key enrolled, the
-  firmware and shim refuse a kernel that key did not sign.
+  it. The same machines have GRUB's prompt, and a kernel started there
+  without its command line runs without the lockdown and the signature
+  enforcement, which are asked for on the command line: press `c`, and
+  `linux` starts the kernel beside a UKI with no arguments of the release's
+  in it. A BIOS machine has no Secure Boot to turn on, so there the prompt
+  is always this open. With [Secure Boot](secure-boot.md) on and LosOS's key
+  enrolled, GRUB locks itself down, the prompt needs it off in the firmware
+  first, and the firmware and shim refuse a kernel that key did not sign.
 - **The pre-boot DMA window.** `efi=disable_early_pci_dma` would clear bus
   mastering on PCI bridges before the kernel's IOMMU takes over. It is left
   off because the kernel's own help for it warns that it breaks some

@@ -43,10 +43,17 @@ in
     # systemd loads, and those cost too little to compile to be worth sparing.
     kernel.sysctl."net.core.bpf_jit_harden" = 2;
 
+    # The kernel image as linked carries no module certificates: nixpkgs
+    # leaves room for them and puts them in only when asked. Without them
+    # this kernel would load no module at all, its own included. This is a
+    # second link of nixpkgs' own kernel, not a build of it.
+    uki.settings.UKI.Linux = lib.mkIf pc "${kernelImage}/${kernelFile}";
+
     # nixpkgs' kernel has the lockdown LSM and module signatures but enforces
-    # neither, so both are forced here, and that kernel and every module
-    # package built against it come from this project's CI rather than
-    # cache.nixos.org.
+    # neither, so both are asked for here, on the kernel's command line. That
+    # leaves the kernel nixpkgs' own, from cache.nixos.org, and every module
+    # package built against it with it; what this project builds is only the
+    # second link of that kernel with the module certificates in it, below.
     #
     # Lockdown keeps root from changing the running kernel: no /dev/mem, no
     # unsigned kexec, no raw PCI or MSR writes, and no unsigned modules,
@@ -57,45 +64,29 @@ in
     # (nvidia.nix). The kernel trusts those certificates only once they are
     # in its image, which is what the image below is for.
     #
-    # Integrity mode is forced in the build rather than set with lockdown=
-    # on the command line: systemd-stub takes a command line from the boot
-    # loader when Secure Boot is off, and a forced mode cannot be lowered
-    # from there. Integrity rather than confidentiality, which would also
-    # stop root reading kernel memory through perf, kprobes, tracefs and
-    # BPF and so take profilers and tracing away (docs/kernel-hardening.md).
+    # lockdown= is an early parameter, so the kernel locks down before
+    # anything runs on its way up. Nothing can lower it afterwards: writing
+    # /sys/kernel/security/lockdown can only raise the mode, and the
+    # parameter itself takes integrity or confidentiality and nothing else.
+    # The command line is built into the UKI, and GRUB starts the UKI
+    # without arguments (docs/secure-boot.md), so nothing between power and
+    # boot can put another one in its place. sig_enforce is an enable-only
+    # switch: once on, nothing turns it off.
+    #
+    # Integrity rather than confidentiality, which would also stop root
+    # reading kernel memory through perf, kprobes, tracefs and BPF and so
+    # take profilers and tracing away (docs/kernel-hardening.md).
     #
     # Locked down, the kernel refuses to hibernate, however well the image
     # is protected, which is why hibernate.nix is gone (docs/hibernation.md).
-    kernelPatches = lib.mkIf pc [
-      {
-        name = "losos-lockdown";
-        patch = null;
-        # mkForce where nixpkgs' common-config.nix said no until October
-        # 2026, so that it cannot again.
-        structuredExtraConfig = with lib.kernel; {
-          SECURITY_LOCKDOWN_LSM = lib.mkForce yes;
-          # Before the other LSMs and the rest of early boot, so nothing the
-          # kernel does on its way up runs unlocked.
-          SECURITY_LOCKDOWN_LSM_EARLY = yes;
-          LOCK_DOWN_KERNEL_FORCE_INTEGRITY = yes;
-          MODULE_SIG = lib.mkForce yes;
-          MODULE_SIG_ALL = yes;
-          MODULE_SIG_SHA512 = yes;
-          # Lockdown already refuses an unsigned module. Forcing it as well
-          # makes /sys/module/module/parameters/sig_enforce say so, which is
-          # what losos-security reads.
-          MODULE_SIG_FORCE = yes;
-        };
-      }
-    ];
-
-    # The kernel image as built carries no module certificates: nixpkgs
-    # leaves room for them and puts them in only when asked. Without them
-    # this kernel would load no module at all, its own included.
-    uki.settings.UKI.Linux = lib.mkIf pc "${kernelImage}/${kernelFile}";
-
     kernelParams = lib.mkIf pc (
       [
+        "lockdown=integrity"
+        # Lockdown already refuses an unsigned module. Saying it as well
+        # makes /sys/module/module/parameters/sig_enforce say so, which is
+        # what losos-security reads.
+        "module.sig_enforce=1"
+
         # Translate every device's DMA through the IOMMU rather than letting a
         # driver ask for an identity mapping. That is already the build's
         # default; saying it keeps a future default from turning it off.

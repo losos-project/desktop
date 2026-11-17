@@ -245,6 +245,18 @@ in
   # Not a package: every package in nixpkgs, as a pm package's contents.
   pm-payloads = import ./pm-payloads.nix { inherit (final) lib pkgsStatic runCommand; };
 
+  # GRUB with the menu editor patched out. An edited entry starts whatever
+  # command line it is made to name, and every boot is meant to start the
+  # command line the release was built with (docs/kernel-hardening.md). The
+  # prompt stays: it is how losos_extra reaches the recovery shell
+  # (docs/troubleshooting.md). Both builds, the EFI program and the BIOS
+  # core, carry the same menu (grub-image.nix).
+  # grub2_efi comes off this grub2 through nixpkgs' own .override, patches
+  # and all.
+  grub2 = prev.grub2.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ patchesIn ./patches/grub;
+  });
+
   # Mobile-friendly toolkits that keep the system's icons (docs/nixos.md,
   # "GTK and Qt on a phone" and "One icon theme").
   # Replacing them here, rather than patching each application, gives every
