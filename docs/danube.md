@@ -47,10 +47,10 @@ closures for signals, which GObject frees with the connection. `engine.rs`
 holds only the tab logic on top of them and has no `unsafe` in it.
 
 nixpkgs has only WebKitGTK, so `nixos/pkgs/wpewebkit.nix` builds the WPE port
-from the WPE release of the same WebKit version, with nixpkgs' WebKitGTK
-patches. It builds only the WPEPlatform API, with the headless and Wayland
-platforms. No upstream cache has it, so CI compiles it once per architecture
-and keeps it in the project's cache.
+from nixpkgs' own WebKit release tarball — the one its WebKitGTK already pins
+and hashes — with nixpkgs' WebKitGTK patches. It builds only the WPEPlatform
+API, with the headless and Wayland platforms. No upstream cache has it, so CI
+compiles it once per architecture and keeps it in the project's cache.
 
 ![Danube's main thread runs WebKit under GLib's loop and its window thread runs winit and egui; two bounded channels carry commands one way and events and frames the other; each web process has its own sandbox; tabs and menus go to derisk over the agent socket and picked commands come back](images/danube.svg)
 

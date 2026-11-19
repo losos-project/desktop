@@ -94,6 +94,42 @@ Everything the flake builds from, besides this repository:
   pinned by version. Nix is needed to build Nix, so this binary is the one
   bootstrap. After it, `.#nix` is the nixpkgs Nix package for a build host.
 
+## What may be built from source
+
+Only the project's own repositories are compiled here: this one, and derisk,
+mcsapi and pm, which `flake.lock` pins under `losos-project`. Everything else
+the image runs is one of two things.
+
+- **A nixpkgs package**, which substitutes from cache.nixos.org. That is the
+  whole of nixpkgs, with the packages this overlay patches — GTK 3 and 4 and
+  Qt 6, which get the adaptive and icon-theme patches ([GTK and Qt on a
+  phone](gtk-qt-phone.md)), and GRUB, whose menu editor is patched out
+  ([Kernel hardening](kernel-hardening.md)). Their source and their hash are
+  nixpkgs', so they trust nothing outside it; they compile because a patched
+  package is not the one the cache holds, and no cache can hold it.
+- **A distributor's prebuilt package**, unpacked as it was published and
+  never compiled: Fedora's signed shim, Droidian's generic system image,
+  Google's Android SDK and emulator images, and Arch's cloud image that the
+  Danube machine boots. Each is pinned by the distributor's own version and
+  a hash in this tree, as the list above says.
+
+What would otherwise need a patch on someone else's code is set at run time
+instead: a sysctl, a kernel command line, an environment variable, a
+configuration file. `kernel-hardening.nix` is the model — nixpkgs' kernel,
+from cache.nixos.org, with lockdown and the IOMMU asked for on the command
+line — and `tools/source-policy` is the check.
+
+It reads every fetch in the tree and fails on one whose origin is neither
+`losos-project`, nor nixpkgs, nor a distributor's package, and it runs as
+`checks.<system>.source-policy` in `nix flake check`. It prints the debt it
+knows about on every run, each entry with its reason: the boxes client
+(`losos`) and the admin panes, whose repository is not yet under
+`losos-project` and which publish no binaries; Reims' GPU backend, which no
+distributor packages; and libhybris with its Android headers, which no
+distributor builds with the GLVND vendor layout [Halium](halium.md) needs. A
+new fetch has to be argued for in that script, and the list is meant to
+shrink.
+
 ## The component inputs
 
 derisk, mcsapi and pm are flake inputs (`flake.nix`), and the flake builds
@@ -143,8 +179,7 @@ four things:
 - `tools/update-packages` moves the custom packages' own upstream pins,
   each forward only and with the hash its upstream source lists, so a
   fetch no runner can reach never leaves a stale hash behind:
-  wpewebkit to the WPE release of the WebKit version nixpkgs' WebKitGTK
-  is at, libhybris to its master's head, android-headers to the head of
+  libhybris to its master's head, android-headers to the head of
   the halium-16.0 branch that every supported Halium base shares,
   halium-gsi to Droidian's newest `android-system-gsi-34` in its trixie
   repository, and the Android emulator to Google's stable channel, whose

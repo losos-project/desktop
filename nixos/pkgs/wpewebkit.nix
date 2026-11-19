@@ -1,7 +1,14 @@
 # WPE WebKit, the WebKit port with no toolkit of its own, which the Danube
 # browser (src/danube) embeds. nixpkgs packages only WebKitGTK, so this is
 # its WebKitGTK of the same version built as the WPE port instead: the same
-# dependencies and patches, wpewebkit.org's tarball, and no GTK.
+# dependencies, the same patches, and the same release tarball, with no GTK.
+#
+# The tarball is nixpkgs' own (`webkitgtk.src`), not one fetched from
+# wpewebkit.org: WebKit's release tarballs carry every port, so the source of
+# a package nixpkgs already pins and hashes is the source of this one, and
+# the only fetch left is nixpkgs' (docs/trust.md, "What may be built from
+# source"). What stays ours is the port selection and one patch, which a
+# prebuilt package from another distributor could not carry.
 #
 # Only the WPEPlatform API is built (docs/danube.md). Its headless platform
 # hands each rendered frame to the embedder, which is how Danube draws the
@@ -12,7 +19,6 @@
   lib,
   stdenv,
   webkitgtk,
-  fetchurl,
   fontconfig,
   libdrm,
   libgbm,
@@ -25,15 +31,12 @@
 
 webkitgtk.overrideAttrs (old: {
   pname = "wpewebkit";
-  version = "2.54.2";
-  name = "wpewebkit-2.54.2";
+  inherit (old) version;
+  name = "wpewebkit-${old.version}";
 
-  # The WPE release of the WebKit version nixpkgs' WebKitGTK is at; move
-  # them together so nixpkgs' patches keep applying.
-  src = fetchurl {
-    url = "https://wpewebkit.org/releases/wpewebkit-2.54.2.tar.xz";
-    hash = "sha256-8yhOGeR/y1rIxjwuHBE9vWWyQj64pUX1s0VweCkAT1Y=";
-  };
+  # nixpkgs' WebKit release tarball, at the version nixpkgs pins: moving
+  # nixpkgs moves this with it, so nixpkgs' patches keep applying.
+  src = old.src;
 
   # One patch of ours: the program that sandboxes each web process can be
   # named at run time, which is how Danube puts them in Hakoniwa

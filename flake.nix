@@ -311,6 +311,10 @@
           # Reims' GPU backend for those guests. Nothing in the image uses
           # it, so without this nothing would build it.
           reims-vgpu-backend = self.legacyPackages.${system}.reims-vgpu-backend;
+          # Nothing outside the losos-project namespace is compiled from
+          # source (docs/trust.md, "What may be built from source"), and no
+          # fetch is added that this check has not been told about.
+          source-policy = self.legacyPackages.${system}.source-policy;
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           # Every GSI module and assertion, libhybris's build, and the

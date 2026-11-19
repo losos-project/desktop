@@ -35,6 +35,16 @@ We use Conventional Commits in order for changes to be easily findable and sorta
 
 There are also some pre-push changes THAT YOU SHOULD NEVER EVER SKIP UNDER ANY CIRCUMSTANCES.
 
+# Source policy
+
+Only projects in the `losos-project` GitHub namespace are built from source:
+this repository, and derisk, mcsapi and pm from `flake.lock`. Everything else
+comes from nixpkgs, which substitutes from cache.nixos.org, or as a
+distributor's prebuilt package; behaviour that would otherwise need a patch on
+someone else's code is set at run time (sysctl, kernel cmdline, env, config).
+`tools/source-policy` enforces this and runs in `nix flake check`; read
+`docs/trust.md`, "What may be built from source", before adding a fetch.
+
 # Bend
 
 Use Bend primarily for validation alongside existing scripts. Set it up using `curl -fsSL https://bend-lang.com/install.sh | sh` and then adding the `bend` binary to `$PATH`.

@@ -18,7 +18,8 @@ nixpkgs' stdenv and a `rustPlatform` built on it, both through
 `stdenvAdapters.useMoldLinker`, so the C compiler and the `cc` that rustc
 links with both pass `-fuse-ld=mold`. A package added later links with mold
 just by being called through the helper, and there is no list to keep. WPE
-WebKit, which [Danube](danube.md) draws, is built from nixpkgs' own package
-set and keeps its linker. Packages taken from nixpkgs unchanged keep its
+WebKit, which [Danube](danube.md) draws, is nixpkgs' WebKitGTK built as the
+WPE port from nixpkgs' own tarball, and keeps its linker. Packages taken from
+nixpkgs unchanged keep its
 linker too, because giving them a different stdenv would mean none of them
 substitute from cache.nixos.org.

@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# Enforce the source policy (docs/trust.md, "What may be built from source").
+#
+# Only projects in the losos-project GitHub namespace are compiled by this
+# repository. Everything else the image runs is either a nixpkgs package,
+# which substitutes from cache.nixos.org, or a package some distributor
+# already built, unpacked as it published it. Behaviour that would otherwise
+# need a patch on someone else's code is set at run time instead: a sysctl, a
+# kernel command line, an environment variable, a configuration file.
+#
+# The policy is about source declarations, so the tree is the ground truth:
+# every `src` here is either a path in this repository, an attribute of a
+# nixpkgs package, or a fetch. This reads the origin of every fetch — the
+# `url` or `owner` it names, and the git inputs flake.lock pins — and fails
+# on one the table below does not account for. It runs in seconds and builds
+# nothing, which is why it is a `nix flake check` of its own.
+#
+#   tools/source-policy [ROOT]     ROOT defaults to the repository
+#
+# Each origin below is one line: pattern, kind, and why. A fetch whose origin
+# matches no pattern is a violation unless EXCEPTIONS names both its file and
+# its origin; an exception is debt with a reason, not a permission, and every
+# one is printed on every run so it cannot be forgotten.
+set -euo pipefail
+
+root=${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+cd "$root"
+
+# Where a source may come from. First match wins.
+#   losos-project  the project's own code, which this repository builds
+#   nixpkgs        nixpkgs' own tree, which substitutes from cache.nixos.org
+#   prebuilt       a distributor's compiled package, unpacked, never compiled
+#   data           a fixed file with no code in it
+#   check-only     read by `nix flake check` alone, never by the image
+ORIGINS=$(cat <<'EOF'
+github.com/losos-project/|losos-project|the project's own repositories
+channels.nixos.org/|nixpkgs|the pinned nixpkgs channel tarball
+releases.nixos.org/|nixpkgs|a nixpkgs release tarball
+cache.nixos.org/|nixpkgs|the binary cache
+production.repo.droidian.org/|prebuilt|Droidian's apt repository, as halium-gsi.nix unpacks it
+kojipkgs.fedoraproject.org/|prebuilt|Fedora's signed shim, as shim-signed.nix unpacks it
+dl.google.com/android/|prebuilt|Google's Android SDK and emulator images
+geo.mirror.pkgbuild.com/|prebuilt|Arch's cloud image, which danube-machine.nix boots as it published it
+ocrs-models.s3-accelerate.amazonaws.com/|data|ocrs' OCR models, data that rten runs
+github.com/nix-community/home-manager|check-only|nix flake check's Home Manager generation
+EOF
+)
+
+# Debt the policy cannot pay yet: file, origin, why. Kept narrow — the file
+# and the origin both have to match — and reviewed whenever either changes.
+EXCEPTIONS=$(cat <<'EOF'
+nixos/pkgs/losos.nix|github.com/dasmatus/losos|the boxes client: the project's own code, but its repository is not yet under losos-project and it publishes no binaries
+nixos/pkgs/losos-admin-panes.nix|github.com/dasmatus/losos|the same repository as losos.nix, and not in the image yet
+nixos/pkgs/reims-vgpu-backend.nix|github.com/aquarat/reims-vgpu|upstream publishes no release and no distributor packages it, so there is nothing prebuilt to pull
+nixos/pkgs/libhybris.nix|github.com/libhybris/libhybris|no distributor builds libhybris with the GLVND vendor layout Halium here needs; a phone is needed to verify a replacement
+nixos/pkgs/android-headers.nix|github.com/Halium/android-headers|libhybris' build input, and libhybris cannot be replaced yet
+EOF
+)
+
+FETCHES='fetchurl|fetchgit|fetchFromGitHub|fetchzip|fetchTarball|builtins\.fetchGit'
+
+origin_kind() {
+  local url=$1 pattern kind
+  while IFS='|' read -r pattern kind _; do
+    [ -n "$pattern" ] || continue
+    # shellcheck disable=SC2053 # a glob on purpose
+    if [[ $url == *$pattern* ]]; then
+      echo "$kind"
+      return
+    fi
+  done <<<"$ORIGINS"
+  echo violation
+}
+
+# The exception covering FILE and URL, if any; its reason is left in `reason`.
+exception_for() {
+  local file=$1 url=$2 efile eorigin why
+  reason=
+  while IFS='|' read -r efile eorigin why; do
+    [ -n "$efile" ] || continue
+    if [ "$efile" = "$file" ] && [[ $url == *$eorigin* ]]; then
+      reason=$why
+      return 0
+    fi
+  done <<<"$EXCEPTIONS"
+  return 1
+}
+
+# Strip the scheme, which is not what the policy is about.
+strip_scheme() { sed -E 's#^(git\+)?(https?)://##'; }
+
+# The origins FILE's fetches name. A `url` or `owner` counts only when the
+# eight lines above it open a fetch, so a permission's `owner = "root"` and a
+# test's `url = "http://gateway.local:8443"` are not sources.
+origins_in() {
+  local file=$1 line number start
+  while IFS= read -r line; do
+    number=${line%%:*}
+    start=$((number > 8 ? number - 8 : 1))
+    sed -n "${start},${number}p" "$file" | grep -qE "$FETCHES" || continue
+    printf '%s\n' "${line#*:}" |
+      grep -oE '(https?|git\+https?)://[^"]+' |
+      strip_scheme || true
+  done < <(grep -nE '\burl = "' "$file" || true)
+
+  while IFS= read -r line; do
+    number=${line%%:*}
+    start=$((number > 8 ? number - 8 : 1))
+    sed -n "${start},${number}p" "$file" | grep -q 'fetchFromGitHub' || continue
+    # fetchFromGitHub names its repository in two attributes; the policy
+    # cares about both halves, since the owner is the namespace.
+    owner=$(printf '%s\n' "${line#*:}" | sed -E 's/.*owner = "([^"]+)".*/\1/')
+    repo=$(sed -n "${number},$((number + 4))p" "$file" |
+      sed -nE 's/.*\brepo = "([^"]+)".*/\1/p' | head -1)
+    printf 'github.com/%s%s\n' "$owner" "${repo:+/$repo}"
+  done < <(grep -nE '\bowner = "' "$file" || true)
+}
+
+declare -A counts=()
+declare -a violations=() debts=() files
+
+# The tree, minus what is not ours to read.
+mapfile -t files < <(
+  find . \( -name '*.nix' -o -name 'flake.lock' \) |
+    grep -Ev '^\./(\.git|plugins/dist|result)' |
+    sort
+)
+
+for file in "${files[@]}"; do
+  file=${file#./}
+  if [ "$file" = flake.lock ]; then
+    # Every input the lock pins, by the URL it fetches.
+    mapfile -t origins < <(grep -oE '"url": "[^"]+"' "$file" | cut -d'"' -f4 | strip_scheme | sort -u)
+  else
+    mapfile -t origins < <(origins_in "$file" | sort -u)
+  fi
+
+  for origin in "${origins[@]}"; do
+    [ -n "$origin" ] || continue
+    kind=$(origin_kind "$origin")
+    if [ "$kind" = violation ]; then
+      if exception_for "$file" "$origin"; then
+        debts+=("$file: $origin — $reason")
+        counts[exception]=$((${counts[exception]:-0} + 1))
+      else
+        violations+=("$file: $origin")
+      fi
+    else
+      counts[$kind]=$((${counts[$kind]:-0} + 1))
+    fi
+  done
+done
+
+printf 'source policy: '
+for kind in losos-project nixpkgs prebuilt data check-only exception; do
+  [ -n "${counts[$kind]:-}" ] && printf '%s %s, ' "$kind" "${counts[$kind]}"
+done
+printf '%s violation(s)\n' "${#violations[@]}"
+
+if [ "${#debts[@]}" -gt 0 ]; then
+  echo
+  echo "known debt (EXCEPTIONS in tools/source-policy):"
+  printf '  %s\n' "${debts[@]}"
+fi
+
+if [ "${#violations[@]}" -gt 0 ]; then
+  echo >&2
+  echo "these sources are outside the policy (docs/trust.md, \"What may be built from source\"):" >&2
+  printf '  %s\n' "${violations[@]}" >&2
+  echo >&2
+  echo "Build it from the losos-project namespace, take it from nixpkgs, or pull a" >&2
+  echo "distributor's prebuilt package and set the behaviour at run time instead." >&2
+  exit 1
+fi

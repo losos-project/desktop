@@ -157,6 +157,10 @@ in
   # This repository's documentation, for reading offline; built by Node, so
   # nothing to link.
   losos-docs = final.callPackage ./losos-docs.nix { };
+  # The source policy (docs/trust.md, "What may be built from source"): fails
+  # when something outside the losos-project namespace would be compiled from
+  # source instead of taken from nixpkgs or a distributor's package.
+  source-policy = final.callPackage ./source-policy.nix { };
   # Halium (nixos/halium/): Android's HAL headers, libhybris, which loads
   # the vendor's bionic-linked GPU and HAL libraries into glibc processes,
   # and the generic Android system image that starts those HALs. That image

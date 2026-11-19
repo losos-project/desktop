@@ -10,9 +10,6 @@
 # from, so a fetch on an architecture no runner can build never leaves a
 # stale hash behind:
 #
-# - wpewebkit: the WPE release of the WebKit version nixpkgs' WebKitGTK
-#   (webkitgtk_6_0) is at, which is what the pin's own comment asks it to
-#   follow. The hash is the new tarball's, downloaded once.
 # - libhybris: master's head, compared forward only. The hash is the tree
 #   NAR that nix flake prefetch reports, which is the same hash fetchgit
 #   pins (checked against a pin that is current).
@@ -132,24 +129,8 @@ deb_newer() {
 }
 
 if command -v gh > /dev/null && gh auth status > /dev/null 2>&1; then
-  echo "Checking wpewebkit" >&2
-  file=nixos/pkgs/wpewebkit.nix
-  pinned=$(pinned_version "$file")
-  # The WebKitGTK the overlay's wpewebkit is built from (pkgs/default.nix
-  # passes webkitgtk_6_0); the alias without an ABI is a throw.
-  upstream=$(nix eval --raw --inputs-from . nixpkgs#webkitgtk_6_0.version 2>/dev/null) || upstream=
-  if [ -n "$upstream" ] && newer_version "$pinned" "$upstream"; then
-    if hash=$(download "https://wpewebkit.org/releases/wpewebkit-$upstream.tar.xz"); then
-      # The version is in the version, the name and the tarball URL.
-      sed -i "s|$pinned|$upstream|g" "$file"
-      sed -i "s|$(pinned_hash "$file")|$hash|g" "$file"
-      echo "- \`$file\`: $pinned to $upstream" >> "$summary"
-    else
-      echo "::warning::wpewebkit.org has no $upstream tarball; wpewebkit stays at $pinned" >&2
-    fi
-  else
-    echo "wpewebkit stays at $pinned; nixpkgs' webkitgtk_6_0 is at $upstream" >&2
-  fi
+  # wpewebkit has nothing to update: its source and version are nixpkgs'
+  # (nixos/pkgs/wpewebkit.nix), so `nix flake update nixpkgs` moves it.
 
   echo "Checking libhybris" >&2
   repo=libhybris/libhybris
