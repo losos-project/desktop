@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" width="900" height="330" role="img">
 <title>What the Windows installer does to the disk</title>
-<desc>Before: the ESP, MSR, C: and Recovery. The installer shrinks C: and adds a 512 MB XBOOTLDR partition with the UKI and slot A's verity and /usr partitions in the freed space, and puts GRUB on the ESP. LosOS's first boot then creates slot B, root, home and swap in the rest. Recovery stays where it was.</desc>
+<desc>Before: the ESP, MSR, C: and Recovery. The installer shrinks C: and adds a 512 MB XBOOTLDR partition with the UKI and slot A's verity and /usr partitions in the freed space, and puts Limine on the ESP. LosOS's first boot then creates slot B, root, home and swap in the rest. Recovery stays where it was.</desc>
 <style>
 text { font-family: Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 14px; fill: #e5e7eb; }
 .b { font-weight: 600; }
@@ -26,7 +26,7 @@ text { font-family: Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue
 <text x="25" y="194" class="b">The installer</text>
 <rect x="135" y="161" width="106" height="56" rx="5" fill="#2d2614" stroke="#fbbf24" stroke-width="1.5"/>
 <text x="188.0" y="186" class="b" text-anchor="middle">ESP</text>
-<text x="188.0" y="203" class="s" text-anchor="middle">+ GRUB</text>
+<text x="188.0" y="203" class="s" text-anchor="middle">+ Limine</text>
 <rect x="245" y="161" width="36" height="56" rx="5" fill="#172033" stroke="#3b4a63" stroke-width="1.5"/>
 <text x="263.0" y="194" class="s" text-anchor="middle">MSR</text>
 <rect x="285" y="161" width="176" height="56" rx="5" fill="#172033" stroke="#3b4a63" stroke-width="1.5"/>

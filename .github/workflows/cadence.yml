@@ -8,7 +8,9 @@
 # cadence. That run builds the same commit again with LOSOS_CHANNEL set to
 # the cadence, almost all of it from the cache, because the cadence a system
 # follows by default is part of /usr (docs/releases.md); then it publishes
-# the release, a yearly one as the repository's latest.
+# the release, a yearly one as the repository's latest. The release's
+# title names the nightly it promotes and the day it is published
+# (ci.yml, publish). The tag stays <cadence>-<stamp> of that nightly.
 #
 # Every nightly published is one whose build finished on both architectures,
 # so the newest nightly is the newest build to release. A cadence whose run

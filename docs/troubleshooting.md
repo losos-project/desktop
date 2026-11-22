@@ -111,39 +111,31 @@ A running system is administered only through
 updates and nothing else. It needs an administrator who can sign in, pm's
 system service and polkit. When something needs more than that, or one of
 those is missing, the way in is a root shell for one boot. Someone at the
-machine chooses it at GRUB's menu, and nothing in a running system can give
-one:
+machine asks for it in the boot menu, and nothing in a running system can
+give one.
 
-1. When the boot menu shows, press `c` for GRUB's prompt.
-2. Type `set losos_extra=systemd.debug_shell`, Enter, then
-   `export losos_extra`, Enter.
-3. Press Escape to go back to the menu, and Enter to start the newest
-   version.
+On a PC that starts by legacy BIOS, Limine's menu entry carries the kernel
+command line, and its editor is on
+([Boot loader and boot screen](boot-loaders.md#the-menu)):
+
+1. When the boot menu shows, highlight the newest version and press `E`.
+2. Add ` systemd.debug_shell` to the end of the `cmdline:` line.
+3. Press F10 (or Ctrl+X) to start it.
 4. Once the login screen shows, press Ctrl+Alt+F9. tty9 is a root shell,
    with no password.
 
 From there, `homectl create <name> --member-of=wheel` makes a new
 administrator, for example, and `journalctl -u pm-system -b` says why pm's
-service did not start. The arguments last one boot, and the shell stays open
+service did not start. The edit lasts one boot, and the shell stays open
 while the system runs, so run `systemctl reboot` when done. The shell is
-systemd's debug shell. `losos_extra` holds kernel arguments that GRUB adds to
-the command line the release was built with, as
-[Boot loader and boot screen](boot-loaders.md#grubs-menu) describes. On UEFI,
-setting it makes GRUB give the arguments the UKI's whole command line in
-front of them, because a UKI takes arguments only as a replacement for its
-whole command line. An x86_64 PC starts the kernel kept beside the UKI with
-them, as on a BIOS. An aarch64 PC hands them to the UKI itself.
+systemd's debug shell.
 
 > [!IMPORTANT]
-> An aarch64 PC with Secure Boot on starts without the arguments, because
-> its UKI then ignores any it is given. Turn Secure Boot off in the
-> firmware's settings for that one boot.
-
-> [!IMPORTANT]
-> With Secure Boot on, GRUB ignores `losos_extra` and says so, because the
-> kernel beside the UKI is not signed. Turn Secure Boot off in the
-> firmware's settings first. The enrolled key stays, so turning it back on
-> afterwards needs no new enrollment ([Secure Boot](secure-boot.md)).
+> Under UEFI, Limine's entry chainloads the UKI and has no command line to
+> edit, and a UKI takes kernel arguments only in place of its whole command
+> line. The GRUB prompt and `losos_extra` that gave UEFI PCs the shell went
+> with GRUB, and no Limine way to the shell has been worked out for UEFI
+> yet.
 
 The shell does not open anyone's home. Each home is its own encrypted image,
 which only its owner's password unlocks. [The rest of the disk](layout.md),

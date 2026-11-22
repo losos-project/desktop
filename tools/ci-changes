@@ -70,7 +70,7 @@ else
         ;;
       # Neither the flake nor CI reads these. The other workflows test
       # what they cover themselves (docs.yml, app-windows.yml).
-      .github/* | README.md | CLAUDE.md | LICENSES/* | REUSE.toml | .editorconfig | .envrc | .gitignore | \
+      .github/* | README.md | AGENTS.md | CLAUDE.md | CONTRIBUTING.md | LICENSES/* | REUSE.toml | .editorconfig | .envrc | .gitignore | \
         Justfile | quickemu/* | fix-ci-runner.patch | tools/update-lockfiles | tools/nix-refresh-hashes) ;;
       *)
         image=true

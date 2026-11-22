@@ -11,12 +11,12 @@ live system, `nixos/installer/`, on its own ISO, and
 > A machine that keeps Windows uses the [Windows installer](windows-installer.md)
 > instead, which installs the same release beside it.
 
-Under UEFI, the ISO's appended FAT partition holds GRUB as
-`EFI/BOOT/BOOT<ARCH>.EFI`, which chainloads the installer's UKI from the ISO
-9660 filesystem. On x86_64 a legacy BIOS starts it too, through GRUB, from a
-disc or a USB stick. Either way, [GRUB's menu and the Plymouth
-splash](boot-loaders.md) after it look the same as on an installed system and
-say "LosOS Desktop installer". The initrd then mounts the ISO by its volume
+Under UEFI, the ISO's appended FAT partition holds Limine as
+`EFI/BOOT/BOOT<ARCH>.EFI`, which chainloads the installer's UKI from that
+partition. On x86_64 a legacy BIOS starts it too, through Limine's CD boot
+image, from a disc or a USB stick. Either way, [Limine's menu and the
+Plymouth splash](boot-loaders.md#the-installer-iso) after it look as they do
+on an installed system, and Plymouth says "LosOS Desktop installer". The initrd then mounts the ISO by its volume
 label, and the Nix store from a squashfs on it.
 
 The live system runs NetworkManager with NixOS's defaults, as the installed
@@ -59,8 +59,10 @@ failure page says so without naming the tools. Then:
    because repart adds the new ESP to the kernel itself to format it, and it
    could not do that while the kernel still knew an old partition with the
    same number.
-2. `systemd-repart --empty=force` lays out the ESP, with GRUB and an empty
-   `grubenv` copied in, a BIOS boot partition for GRUB on x86_64, and both
+2. `systemd-repart --empty=force` lays out the ESP, with the files
+   `grub.nix` puts on the image's ESP copied in (Limine, a first menu with
+   no entries, its wallpaper and an empty `grubenv`), a BIOS boot partition
+   for Limine on x86_64, and both
    `/usr` slots at full size, labelled `_empty`. sysupdate refuses a disk
    with only one slot. These are `disk.nix`'s own definitions, so the disk is
    laid out the way the installed system expects to find it.
@@ -77,9 +79,10 @@ failure page says so without naming the tools. Then:
    verifies the signed manifest and every resulting file before
    `systemd-sysupdate update` writes the slots, using the same transfer
    definitions as `update.nix`, aimed at the chosen disk instead of
-   `auto` and at the new ESP, mounted under `/run/losos-installer`. On
-   x86_64, `losos-grub-bios-install` then writes GRUB into the MBR and the
-   BIOS boot partition, so the disk starts on a legacy BIOS as well.
+   `auto` and at the new ESP, mounted under `/run/losos-installer`.
+   `losos-limine-menu` then writes Limine's menu from the UKIs now on the
+   disk and, on x86_64, Limine's boot code into the MBR and the BIOS boot
+   partition, so the disk starts on a legacy BIOS as well.
 4. The machine reboots into the installed system. Its first boot creates
    root, `/home` and swap from `disk.nix`, the same way an image written with
    `dd` does. With a [PIN at startup](#asking-for-a-pin-at-startup), the
@@ -98,7 +101,7 @@ desktop disk image as `try.qcow2` for an ephemeral try session. A install reads
 the release at `/iso/release` instead of the network, and derisk skips the
 Network page. CI sets `UPDATE_SIGNING_KEY_FILE` so the embedded manifest matches
 what published releases use; a local build without it checks file hashes only.
-Choose **Try LosOS Desktop** on the welcome page, or the matching GRUB entry
+Choose **Try LosOS Desktop** on the welcome page, or the matching Limine entry
 (`losos.try=1`), to run the desktop in QEMU with a fresh overlay in tmpfs:
 nothing on the machine's own disks is touched.
 

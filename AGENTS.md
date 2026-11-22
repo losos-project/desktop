@@ -14,34 +14,39 @@ or
 find .
 ```
 
-whichever is better.
+whichever is better. `flake.nix` and the modules in `nixos/` are the OS,
+`src/` holds this repository's own programs, `docs/` says how each piece is
+built, and `website/` turns `docs/` into the documentation site.
 
 # Where can I learn about the OS?
 
-There is a handbook at `handbook/` where you can learn more about the OS.
+The docs are in `docs/`, starting at `docs/index.md`. Building is in
+`docs/building.md` and the comment at the top of `flake.nix`.
 
 # How can I start working?
 
-Make sure you have installed Nix and `devenv`. After you've installed it, run `devenv shell` or `devenv test` depending on situation
+Make sure you have installed Nix with flakes enabled. Run `nix develop` for
+the dev shell (or let direnv load it: `.envrc` is `use flake`). Then:
+
+```bash
+nix build --impure      # the disk image (just build)
+nix flake check         # both architectures, the tests, and with KVM the VM boot tests (just check)
+nix run .#vm --impure   # boot the image in QEMU with UEFI firmware (just vm)
+nix fmt                 # format, as CI's format check expects (just fmt)
+```
+
+`docs/building.md` has the rest, including why `--impure` is needed.
 
 Please also read the PR template at `.github/pull_request_template.md` to learn more.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) is the long version of this: getting a
-shell, the gates and what each one catches, and the starter tasks.
+[CONTRIBUTING.md](CONTRIBUTING.md) is one line on purpose: read the docs
+and/or ask your agent about this codebase before deciding to do anything.
 
 I've automated (with the help of agents) the most annoying parts.
 
 We use Conventional Commits in order for changes to be easily findable and sortable.
 
-There are also some pre-push changes THAT YOU SHOULD NEVER EVER SKIP UNDER ANY CIRCUMSTANCES.
-
-# Bend
-
-Use Bend primarily for validation alongside existing scripts. Set it up using `curl -fsSL https://bend-lang.com/install.sh | sh` and then adding the `bend` binary to `$PATH`.
-
-- run `bend guide` to learn it
-- use `LAWS.bend` to keep important rules
-- run `bend PROOF.bend` before committing
-- parallelize the code whenever possible, with hard bans on build times since we don't have enough RAM right now (optimize within code and find redundant/compile-time-prolonging stuff that should be removed).
+Run `nix fmt` and `nix flake check` before pushing. CI runs the same checks,
+and they are not to be skipped.
 
 Do not put anything under this line.

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 425" width="900" height="425" role="img">
 <title>What the installer ISO does</title>
-<desc>derisk installer owns the screen and the network and talks JSON lines to losos-installer serve, which owns the disks. The backend lays out the chosen disk with systemd-repart, fills slot A with systemd-sysupdate from the GitHub release of its own version, the channel when there is none, or a LOSOS-RELEASE disk, writes GRUB on x86_64, and the machine reboots into the installed system.</desc>
+<desc>derisk installer owns the screen and the network and talks JSON lines to losos-installer serve, which owns the disks. The backend lays out the chosen disk with systemd-repart, fills slot A with systemd-sysupdate from the GitHub release of its own version, the channel when there is none, or a LOSOS-RELEASE disk, writes Limine's menu, and its BIOS boot code on x86_64, and the machine reboots into the installed system.</desc>
 <style>
 text { font-family: Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 14px; fill: #e5e7eb; }
 .b { font-weight: 600; }

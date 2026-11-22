@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" width="900" height="300" role="img">
 <title>Boot counting: how a new version is tried and kept or given up</title>
-<desc>sysupdate installs a new UKI with three tries in its name. Each start of it uses a try. Reaching boot-complete.target blesses it by removing the count. When the tries run out the loader starts the older version, and the new one is renamed to +0-3 so it stays last in the menu.</desc>
+<desc>sysupdate installs a new UKI with three tries in its name. Each start of it uses a try. Reaching boot-complete.target blesses it by removing the count. When the tries run out the new one is left as +0-3, and the menu puts it after the older version.</desc>
 <style>
 text { font-family: Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; font-size: 14px; fill: #e5e7eb; }
 .b { font-weight: 600; }
@@ -12,7 +12,7 @@ text { font-family: Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue
 <defs><marker id="h38bdf8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker><marker id="t38bdf8" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#38bdf8"/></marker><marker id="h9aa8bc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9aa8bc"/></marker><marker id="t9aa8bc" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#9aa8bc"/></marker><marker id="ha3e635" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#a3e635"/></marker><marker id="ta3e635" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#a3e635"/></marker><marker id="hfb7185" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#fb7185"/></marker><marker id="tfb7185" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" fill="#fb7185"/></marker></defs>
 <rect width="900" height="300" rx="12" fill="#0f1524"/>
 <text x="25" y="34" class="t">Boot counting</text>
-<text x="25" y="55" class="s">GRUB keeps the count in grubenv, and losos-grub-bless.service settles it in the file name.</text>
+<text x="25" y="55" class="s">losos-limine-trial.service spends a try in the file name, and losos-grub-bless.service settles it.</text>
 <rect x="25" y="120" width="215" height="70" rx="8" fill="#132a3a" stroke="#38bdf8" stroke-width="1.5"/>
 <text x="132.5" y="151.0" class="b" text-anchor="middle">sysupdate installs</text>
 <text x="132.5" y="168.0" class="ms" text-anchor="middle">losos-desktop_&lt;v&gt;+3-0.efi</text>
@@ -25,7 +25,7 @@ text { font-family: Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue
 <text x="690.0" y="128.0" class="s" text-anchor="middle">blessed: losos-desktop_&lt;v&gt;.efi, the new default</text>
 <rect x="510" y="175" width="360" height="60" rx="8" fill="#2e1a24" stroke="#fb7185" stroke-width="1.5"/>
 <text x="690.0" y="201.0" class="b" text-anchor="middle">Tries ran out</text>
-<text x="690.0" y="218.0" class="s" text-anchor="middle">the older version starts; the new one becomes +0-3</text>
+<text x="690.0" y="218.0" class="s" text-anchor="middle">left as +0-3; the older version is the default</text>
 <path d="M450,140 L480,140 L480,115 L508,115" fill="none" stroke="#a3e635" stroke-width="1.6" marker-end="url(#ha3e635)"/>
 <text x="485" y="103" class="s" text-anchor="end">came up</text>
 <path d="M450,170 L480,170 L480,205 L508,205" fill="none" stroke="#fb7185" stroke-width="1.6" marker-end="url(#hfb7185)"/>

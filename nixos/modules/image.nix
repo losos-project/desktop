@@ -170,13 +170,18 @@ in
         ''}
       '';
 
-  system.build.releaseArtifacts =
+  # The UKI and the two /usr halves, cut and compressed once. The GitHub
+  # release and the installer ISO's embedded squashfs both ship these bytes.
+  # Cutting them again inside each consumer xz'd an 8G /usr twice per
+  # architecture (about 16 minutes on a runner) and could hash two
+  # different xz streams.
+  system.build.updateImages =
     let
       image = config.system.build.disk;
       raw = "${config.image.baseName}.raw";
       prefix = "${id}_${version}";
     in
-    pkgs.runCommand "${prefix}-release"
+    pkgs.runCommand "${prefix}-update-images"
       {
         nativeBuildInputs = with pkgs.buildPackages; [
           jq
@@ -214,11 +219,29 @@ in
         echo "/usr is $(numfmt --to=iec "$usr") of its ${cfg.usrSize} slot"
 
         cp ${config.system.build.uki}/${ukiFile} ${prefix}_${arch.name}.efi
-        # What GRUB starts this version from on a BIOS PC or for the
+        # What Limine starts this version from on a BIOS PC or for the
         # recovery shell (uki-files.nix), named as sysupdate fetches them.
         cp ${config.system.build.ukiReleaseFiles}/* .
         extract ${arch.usr}
         extract ${arch.usrVerity}
+      '';
+
+  system.build.releaseArtifacts =
+    let
+      image = config.system.build.disk;
+      raw = "${config.image.baseName}.raw";
+      prefix = "${id}_${version}";
+    in
+    pkgs.runCommand "${prefix}-release"
+      {
+        nativeBuildInputs = with pkgs.buildPackages; [
+          xz
+        ];
+      }
+      ''
+        mkdir -p $out
+        cd $out
+        cp -a --link ${config.system.build.updateImages}/. . || cp -a ${config.system.build.updateImages}/. .
 
         xz --threads=$NIX_BUILD_CORES -c ${image}/${raw} > ${prefix}_${arch.name}.raw.xz
         cp ${config.system.build.installerIso} ${prefix}_${arch.name}-installer.iso
@@ -240,23 +263,15 @@ in
       # Matches UPDATE_SIGNING_FPR in .github/workflows/ci.yml; the push job
       # checks out no code, so both are maintained together.
       signingFpr = "7FD984194AB8DDFF17DA0B0CDCDCF53B64988CBD";
-      image = config.system.build.disk;
-      raw = "${config.image.baseName}.raw";
     in
     pkgs.callPackage ../pkgs/installer-embedded-release.nix {
       inherit
-        image
-        raw
         id
         version
-        arch
-        ukiFile
         signingKeyFile
         signingFpr
         ;
-      inherit (cfg) usrSize;
-      uki = config.system.build.uki;
-      ukiReleaseFiles = config.system.build.ukiReleaseFiles;
+      payloads = config.system.build.updateImages;
     };
 
   # The desktop qcow2 the same flake built, for an ephemeral try session from
