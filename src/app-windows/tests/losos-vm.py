@@ -305,6 +305,56 @@ def boot(args, machine):
     return qemu
 
 
+def grub(args, machine, run):
+    """Stops GRUB's countdown and boots the image's entry by hand, with a
+    root shell on the second serial port that the rest is driven from.
+
+    The published nightly this job boots is still GRUB. Limine images take
+    the other path.
+    """
+    if not run.step("GRUB menu", machine.wait_serial("executed automatically", 600)):
+        return False
+    machine.key("up", every=0.5)
+    machine.key("c", every=1)
+    v = f"losos-desktop_{args.version}"
+    prompts = 1
+    for line in [
+        "set root=(hd0,gpt1)",
+        "probe --set=losos_esp --part-uuid (hd0,gpt1)",
+        f"source /EFI/Linux/{v}.grub",
+        f"linux /EFI/Linux/{v}.linux $losos_cmdline console=ttyS0 systemd.debug_shell=ttyS1",
+        f"initrd /EFI/Linux/{v}.initrd",
+        "boot",
+    ]:
+        # Keys typed while GRUB is still loading the previous line's file go
+        # missing (an Intel runner lost the u of "Linux" in the initrd's
+        # path, and the kernel panicked without it), so each line waits for
+        # GRUB's next prompt, and is checked against GRUB's echo on the
+        # serial port before Enter and typed again when it does not match.
+        # GRUB wraps a long line at 80 columns, hence the line breaks taken
+        # out of the echo.
+        end = time.time() + 300
+        while machine.serial().count("grub>") < prompts and time.time() < end:
+            time.sleep(0.2)
+        for attempt in range(4):
+            if attempt:
+                log(f"GRUB echoed {echo!r} for {line!r}, typing it again")
+                machine.key("ctrl+a", "ctrl+k", every=0.5)
+            since = len(machine.serial())
+            machine.type(line, every=0.1)
+            end = time.time() + 5
+            while True:
+                echo = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\r\n]", "", machine.serial()[since:])
+                if echo.endswith(line) or time.time() > end:
+                    break
+                time.sleep(0.2)
+            if echo.endswith(line):
+                break
+        prompts = machine.serial().count("grub>") + 1
+        machine.key("ret", every=1)
+    return True
+
+
 def limine(args, machine, run):
     """Stops Limine's countdown and boots the image's entry with a root
     shell on the second serial port that the rest is driven from.
@@ -341,6 +391,20 @@ def limine(args, machine, run):
     machine.key("f10", every=1)
     log(f"booting {args.version} from Limine")
     return True
+
+
+def boot_menu(args, machine, run):
+    """The job boots the newest published nightly, which is still GRUB.
+    A Limine image prints a different countdown. Drive whichever appears."""
+    end = time.time() + 600
+    while time.time() < end:
+        serial = machine.serial()
+        if "Booting automatically" in serial:
+            return limine(args, machine, run)
+        if "executed automatically" in serial:
+            return grub(args, machine, run)
+        time.sleep(0.2)
+    return run.step("boot menu", False)
 
 
 def sign_in(machine, run):
@@ -534,7 +598,7 @@ def main():
     qemu = boot(args, machine)
     ok = False
     try:
-        if limine(args, machine, run) and sign_in(machine, run):
+        if boot_menu(args, machine, run) and sign_in(machine, run):
             if args.only_boot:
                 ok = True
             elif start_client(machine, run):
