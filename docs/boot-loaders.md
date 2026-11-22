@@ -1,16 +1,12 @@
 # Boot loader and boot screen
 
-LosOS boots with Limine on every PC. On UEFI it starts from the ESP. On an
-x86_64 PC that starts by legacy BIOS, or by UEFI's Compatibility Support
-Module with UEFI turned off, it starts from the MBR. One disk carries both,
-so the same image, the same install and the same updates start on either
-kind of firmware. Both draw the salmon on the same dark ground, with the
-chosen line in the accent colour, and both hand over to the same Plymouth
-splash. arm64 has no BIOS, so only the UEFI half applies there.
-
-Limine has no theme language. The salmon is a wallpaper, centred, and the
-ground, ink and accent are the terminal colours. The countdown is Limine's
-own three seconds. The menu text is not placed where GRUB's theme placed it.
+LosOS boots with [Limine](https://github.com/limine-bootloader/limine) on
+every PC. On UEFI it starts from the ESP. On an x86_64 PC that starts by
+legacy BIOS, or by UEFI's Compatibility Support Module with UEFI turned off,
+it starts from the MBR. One disk carries both, so the same image, the same
+install and the same updates start on either kind of firmware, and both hand
+over to the same Plymouth splash. arm64 has no BIOS, so only the UEFI half
+applies there.
 
 ```
 UEFI   firmware -> ESP: Limine -> chainloads the newest UKI -> systemd-stub
@@ -19,15 +15,37 @@ BIOS   firmware -> MBR -> BIOS boot partition: Limine
 then   the systemd initrd, under Plymouth -> the login screen
 ```
 
-![UEFI firmware starts GRUB, which chainloads the UKI; a legacy BIOS starts GRUB from the MBR and the BIOS boot partition, which starts the UKI's kernel, initrd and command line from files beside it. Both reach the same systemd initrd and the /usr slot usrhash= names](images/boot-loaders.svg)
+![UEFI firmware starts Limine from the ESP, which chainloads the UKI; a legacy BIOS starts Limine from the MBR and the BIOS boot partition, which starts the UKI's kernel, initrd and command line from files beside it. Both reach the same systemd initrd and the /usr slot usrhash= names](images/boot-loaders.svg)
 
-Under either firmware, GRUB finds the same versions on the ESP, counts the
-tries of a new one, and falls back to the older one. The two `/usr` slots and
-rollback work the same way on both.
+Limine has no script language, so the menu is a plain `limine.conf` that
+`losos-limine-menu` rewrites from the UKI file names on the disk (see
+[The menu](#the-menu)). Under either firmware it lists the same versions, and
+the two `/usr` slots and rollback work the same way on both.
 
 ## What it looks like
 
-![GRUB's menu on UEFI: the salmon on the dark ground, "LosOS Desktop" under it, the newest version highlighted in the accent colour above the older one and Firmware settings, and "Starting in 2 s" below](images/boot-grub-menu.png)
+Limine draws its own menu. The `limine.conf` that `losos-limine-menu` writes
+asks for:
+
+- the salmon, `limine/salmon.png` on the ESP, centred
+  (`wallpaper_style: centered`) on the dark ground (`backdrop: 0a0e12`);
+- the terminal and interface colours of the same palette, with "LosOS
+  Desktop" as the branding line at the top;
+- a three-second countdown (`timeout: 3`);
+- the menu on the serial port as well (`serial: yes`, at 115200 baud on a
+  BIOS).
+
+Each entry is listed by its name, which is the UKI's file name, and the line
+under the menu shows the highlighted entry's comment, "LosOS Desktop
+`<version>`". Limine's own help line offers the arrow keys, Enter to boot,
+`E` to edit an entry, `B` for a blank entry and, on UEFI, `S` for the
+firmware's setup.
+
+> [!NOTE]
+> There is no screenshot of the Limine menu here yet. Under QEMU with OVMF,
+> the `limine.conf` above made Limine draw a plain text menu without the
+> salmon or the colours. The same file without `serial: yes` drew the salmon
+> and the colours.
 
 The menu, the splash systemd-stub shows while the kernel loads, and the
 Plymouth splash all come from one picture, `nixos/branding/salmon.png`. It
@@ -37,15 +55,12 @@ Fisheries photo, and `nixos/branding/CREDITS.md` credits it.
 the dark palette that derisk and LosOS's WebUI share. Replace that one file
 and all of them change.
 
-- **GRUB**, from the `grub/` output of `nixos/branding/default.nix`, shows
-  the salmon, the system's name, the menu with the chosen entry in the
-  accent colour, and a countdown. On UEFI, GRUB uses the screen's own mode.
-  On a BIOS it uses 1024x768, which Linux keeps as its framebuffer. If GRUB
-  cannot set a mode, the menu is text. GRUB also writes it to the first
-  serial port.
+- **Limine**'s wallpaper is `limine/salmon.png`, from the `limine/` output of
+  `nixos/branding/default.nix`. That output also still has a `grub/`
+  directory with the old GRUB theme's pieces, which nothing on the disk uses.
 - **systemd-stub** shows the UKI's `.splash`, the salmon and the name on
   black, centred while the kernel and initrd load. That keeps the screen
-  from going dark between GRUB and Plymouth. `nixos/modules/splash.nix` sets
+  from going dark between the boot loader and Plymouth. `nixos/modules/splash.nix` sets
   it up.
 - **Plymouth**, scripted in `nixos/branding/splash.script`, shows the salmon
   swimming in the middle of the screen, with "LosOS Desktop is starting"
@@ -86,199 +101,189 @@ nothing until the compositor starts, so none of this applies to them.
 ## What is on the disk
 
 ```
-MBR, first 440 bytes                GRUB's boot.img (UEFI ignores it)
-BIOS boot partition, 1 MiB          GRUB's core.img, its modules, menu and theme inside
+MBR boot code                       Limine's BIOS boot code (UEFI ignores it)
+BIOS boot partition, 1 MiB          Limine's BIOS stage (x86_64 only)
 ESP
-  EFI/BOOT/BOOTX64.EFI              GRUB, its modules, menu and theme inside
-  EFI/losos/grubx64.efi             the same, where a boot entry can name it
-  EFI/losos/grubenv                 GRUB's boot counter
+  limine-bios.sys                   the rest of Limine for a BIOS (x86_64 only)
+  limine.conf                       the menu
+  limine/salmon.png                 the menu's wallpaper
+  EFI/BOOT/BOOTX64.EFI              Limine (shim, with Secure Boot's key)
+  EFI/BOOT/limine.conf              the same menu
+  EFI/losos/grubx64.efi             Limine, where a boot entry can name it
+  EFI/losos/limine.conf             the same menu
+  EFI/losos/grubenv                 GRUB's old boot counter; Limine does not read it
+  EFI/losos/installed               what losos-grub-update installed last
   EFI/Linux/losos-desktop_<v>.efi     the UKI, version <v>
   EFI/Linux/losos-desktop_<v>.linux   its kernel (x86_64 only)
   EFI/Linux/losos-desktop_<v>.initrd  its initrd (x86_64 only)
   EFI/Linux/losos-desktop_<v>.grub    its command line, as a line of GRUB script
 ```
 
+Limine's EFI program sits under the name `grub<arch>.efi`, because that is
+the file Microsoft-signed shim starts from beside itself (see [Secure
+Boot](#secure-boot)). The `.grub` files keep their name from the GRUB days
+too, and so does `losos-grub-update`. `nixos/modules/grub.nix` defines all
+of it.
+
 The image, `system.build.disk` in `image.nix`, and the
-[installer ISO](installer.md) both lay out the BIOS boot partition and write
-GRUB into it with `losos-grub-bios-install` from `nixos/modules/bios.nix`.
-The [Windows installer](windows-installer.md) does not, because it only adds
-LosOS beside Windows on a UEFI PC.
+[installer ISO](installer.md) run `losos-limine-menu` on the finished disk.
+It writes the menu, the wallpaper and, on x86_64 when the disk has a BIOS
+boot partition, `limine-bios.sys` and Limine's BIOS boot code, with
+`limine bios-install`. The [Windows installer](windows-installer.md) writes
+a short `EFI/losos/limine.conf` of its own instead, because it only adds
+LosOS beside Windows on a UEFI PC. The BIOS boot partition itself comes from
+`nixos/modules/bios.nix`.
 
-UEFI GRUB chainloads the UKI, so systemd-stub runs as it would under any
+UEFI Limine chainloads the UKI, so systemd-stub runs as it would under any
 loader. It measures the UKI into the TPM, shows its splash and starts the
-kernel with the built-in command line. GRUB's `bli` module sets the EFI
-variables systemd-boot used to set, `LoaderDevicePartUUID` and
-`LoaderInfo`. `systemd-gpt-auto-generator` reads them to find the root disk
-and mount the ESP, as before.
+kernel with the built-in command line. Limine sets the EFI variables
+`LoaderInfo` and `LoaderDevicePartUUID`, as systemd-boot did, and
+`systemd-gpt-auto-generator` reads them to find the root disk and mount the
+ESP.
 
-BIOS GRUB cannot run a UKI, because a UKI is an EFI program. So every x86_64
-release also carries each UKI's kernel, initrd and command line as separate
-files, cut from the finished UKI. sysupdate installs them beside the UKI as
-part of the same version, through the transfers in `uki-files.nix`. An
-aarch64 release carries only the command line, which the recovery shell
-below needs. The command line is
-the UKI's with one change. systemd finds the root partition from
-`LoaderDevicePartUUID`, and a BIOS has no EFI variables. Instead, GRUB passes
-the partition UUID of the ESP it started the kernel from as `losos.esp=`,
-the way `bli` would set that variable. `root=gpt-auto` becomes
-`root=/dev/disk/by-loader/root`. A udev rule in the initrd links that path
-to the partition labelled `root-x86-64` (`root-arm64` on aarch64) on the
-same disk as that ESP, so a second LosOS disk in the machine is never
-mounted by mistake. A GRUB older than `losos.esp=` passes nothing, and the
-command line falls back to `root=PARTLABEL=root-x86-64`. `systemd-gpt-auto-generator` mounts the root
-disk's ESP at `/efi` only under UEFI, so a small generator does the same on
-a BIOS boot.
+BIOS Limine cannot run a UKI, because a UKI is an EFI program. So every
+x86_64 release also carries each UKI's kernel, initrd and command line as
+separate files, cut from the finished UKI. sysupdate installs them beside the
+UKI as part of the same version, through the transfers in `uki-files.nix`.
+An aarch64 release carries only the `.grub` file, which Limine does not read
+there. A BIOS entry's command line is the UKI's with two changes. systemd
+finds the root partition from `LoaderDevicePartUUID`, and a BIOS has no EFI
+variables, so `root=gpt-auto` becomes `root=/dev/disk/by-loader/root
+losos.esp=<partition UUID of the ESP>`. A udev rule in the initrd links that
+path to the partition labelled `root-x86-64` on the same disk as that ESP,
+so a second LosOS disk in the machine is never mounted by mistake. The line
+also ends in `losos.uki=<the UKI's file name>`, which tells
+[boot counting](#boot-counting) which UKI started.
+`systemd-gpt-auto-generator` mounts the root disk's ESP at `/efi` only under
+UEFI, so a small generator in `bios.nix` does the same on a BIOS boot.
 
-## Updating GRUB
+## Updating the boot loader
 
-The GRUB on a disk is the one the image or the installer put there, and
-`/usr` carries the GRUB its version was built with. After an update,
-`losos-grub-update.service` copies the new GRUB over the old one, the way
+The Limine on a disk is the one the image or the installer put there, and
+`/usr` carries the Limine its version was built with. After an update,
+`losos-grub-update.service` copies the new one over the old, the way
 `systemd-boot-update.service` does for systemd-boot. It is defined in
-`grub.nix`. It runs after `losos-grub-bless`, so a version's GRUB reaches
-the disk only after that version has started cleanly. It never goes
-backwards. A rollback to an older version keeps the newer GRUB, which reads
-the same file names and `grubenv`. It writes each file beside the old one and
-renames it into place. `EFI/losos/installed` records which version's GRUB it
-installed last, so a boot with nothing new writes nothing.
+`grub.nix`. It runs after `losos-grub-bless`, so a version's boot loader
+reaches the disk only after that version has started cleanly. It never goes
+backwards: a rollback to an older version keeps the newer boot loader. It
+writes each file beside the old one and renames it into place.
+`EFI/losos/installed` records which version it installed last, so a boot
+with nothing new writes nothing.
 
-It replaces only files that already belong to LosOS. `EFI/losos/grub<arch>.efi`
-is always LosOS's. `EFI/BOOT/BOOT<ARCH>.EFI` is replaced only when it holds
-LosOS's GRUB or systemd-boot, so on a disk the
-[Windows installer](windows-installer.md) set up, it stays Windows'. On an
-x86_64 disk whose MBR holds GRUB's boot code, the service also rewrites the
-MBR and the BIOS boot partition with `losos-grub-bios-install`. Any file it
-adds to a disk the Windows installer set up goes on that installer's list,
-so uninstalling LosOS from Windows removes it as well.
+It always writes `EFI/losos/grub<arch>.efi`. `EFI/BOOT/BOOT<ARCH>.EFI` and
+`EFI/systemd/systemd-boot<arch>.efi` are replaced only when they already
+hold LosOS's Limine, the GRUB an older install still starts, LosOS's
+systemd-boot, or shim with one of those beside it. So on a disk the
+[Windows installer](windows-installer.md) set up, `EFI/BOOT/BOOT<ARCH>.EFI`
+stays Windows'. It puts an empty `grubenv` in place if there is none, then
+rewrites the menu with `losos-limine-menu`. On x86_64, when the disk has a
+BIOS boot partition, it also rewrites `limine-bios.sys` and Limine's BIOS
+boot code. Any file it adds to a disk the Windows installer set up goes on
+that installer's list, so uninstalling LosOS from Windows removes it as
+well.
 
-NixOS's own GRUB module installs GRUB and regenerates its menu on every
-rebuild. It stays off, because this OS is never rebuilt in place and its menu
-is the same for every version.
+NixOS's own boot loader modules stay off (`boot.nix`), because this OS is
+never rebuilt in place.
 
-UEFI used to boot with systemd-boot. It draws a text menu in the firmware's
-font and nothing else, and two loaders counting tries in two places meant one
-more thing to keep in step, so GRUB replaced it. A disk installed before the
-switch starts systemd-boot until its first update after it. Then
-`losos-grub-update` puts GRUB at every path systemd-boot was started from,
-with an empty `grubenv` beside it. Those paths are `EFI/BOOT/BOOT<ARCH>.EFI`
-and `EFI/systemd/systemd-boot<arch>.efi`, which the firmware entry from the
-Windows installer names. GRUB reads the tries left from the same file names
-systemd-boot did, so a trial in progress carries on. Until that update,
-`losos-grub-bless` leaves such a boot to systemd-boot's own tools.
+UEFI used to boot with systemd-boot and then with GRUB. A disk installed
+before the switch keeps starting the loader it has until the first boot of a
+version with Limine reaches `boot-complete.target`. Then
+`losos-grub-update` puts Limine at every path that loader was started from.
+While systemd-boot is what started the machine, `losos-grub-bless` and
+`losos-limine-trial` leave the boot to systemd-boot's own tools.
 
-## GRUB's menu
+## The menu
 
-GRUB's menu, `nixos/modules/grub.cfg`, is built into GRUB's image together
-with the theme and only the modules they use, by
-`nixos/modules/grub-image.nix`. So the only file GRUB reads from a
-filesystem is `grubenv`. The menu is not generated per machine. Each time
-GRUB draws it, it looks for `EFI/Linux/losos-desktop_*.efi` on every
-partition of the disk GRUB started from. On a BIOS it counts only UKIs with a
-kernel beside them. It then offers:
+`losos-limine-menu` (`nixos/modules/limine-menu.sh`) writes the menu. It
+runs on the disk when the image and the installer write it, at every boot
+and shutdown through `losos-limine-menu.service`, and after
+`losos-grub-update`. It looks for `EFI/Linux/losos-desktop_*.efi` on the ESP
+and, where there is one, the XBOOTLDR partition, and writes one entry for
+each UKI:
 
-1. the newest UKI that still has tries left, as the default;
-2. every other one, with "(failed to start)" beside any that used up its
-   tries;
-3. on UEFI, Windows Boot Manager when it is on the same disk, and the
-   firmware's own settings when the firmware can be asked to open them.
+1. the UKIs with tries left, or with no count at all, newest version first;
+   the first entry is the one Limine starts when the countdown ends;
+2. after them, any that used up their tries, with "(failed to start)" in
+   their comment;
+3. on UEFI, Windows Boot Manager when it is on the ESP.
 
-> [!TIP]
-> Kernel arguments typed at GRUB's prompt into `losos_extra`, and exported,
-> are added to whichever entry starts next, on x86_64 under UEFI as on a BIOS.
-> That is the recovery shell ([When something goes
-> wrong](troubleshooting.md#no-one-can-administer-the-machine)). With Secure
-> Boot on, GRUB ignores them ([Secure Boot](secure-boot.md#while-secure-boot-is-on)).
+Each UKI gets a UEFI entry, which chainloads it, and on x86_64, when its
+kernel and `.grub` file are beside it, a BIOS entry, which starts that
+kernel and initrd with the command line described above. `if_fw_type` makes
+Limine show only the entries for the firmware it is running on. The same
+file is written to `limine.conf`, `EFI/BOOT/limine.conf` and
+`EFI/losos/limine.conf`.
 
-The menu is stock GRUB, editor included. `e` can change the command line of
-the entry it opens. The prompt stays, and it is how `losos_extra` reaches
-the recovery shell. With Secure Boot on, GRUB ignores those arguments
-([Secure Boot](secure-boot.md#while-secure-boot-is-on)).
-
-A UKI takes kernel arguments only in place of its whole command line, so on
-UEFI, GRUB puts the UKI's own command line from the `.grub` file in front of
-`losos_extra`. On x86_64 it then starts the kernel and initrd beside the UKI
-with them, as a BIOS boot does. aarch64 has no copies beside its UKI. Its
-kernel is an uncompressed Image of about 70 MiB, and two versions of it
-beside two UKIs would nearly fill the 512 MiB ESP. So GRUB chainloads the
-UKI and passes the line to it, and systemd-stub starts the kernel with that
-line instead of its own. systemd-stub ignores such a line while Secure Boot
-is on.
+The menu's editor is on (`editor_enabled: yes`). `E` opens the highlighted
+entry's lines, `protocol`, `path` and, on a BIOS entry, `cmdline`, and
+F10 or Ctrl+X starts the edited entry for that one boot. A UEFI entry has no
+command line of its own: it starts the UKI with the one built into it.
 
 ## Boot counting
 
 sysupdate installs a UKI with three tries in its name,
-`losos-desktop_<v>+3-0.efi`, as `update.nix` sets up. GRUB cannot rename a
-file, so it keeps the count in `grubenv`:
+`losos-desktop_<v>+3-0.efi`, as `update.nix` sets up. Limine cannot rename a
+file or keep a count, so userspace keeps it in the file name:
 
-- The first boot of a counted UKI starts its trial. GRUB records its name in
-  `losos_entry` and the number of tries its name gives in `losos_left`.
-- Every boot of it lowers `losos_left` by one before GRUB starts it.
-- At zero, GRUB passes over it and starts the next-newest version instead.
+- `losos-limine-trial.service` spends one try as soon as the ESP can be
+  seen. It renames the UKI that started, `+3-0` to `+2-1` and so on. A
+  kernel that dies before this runs is started again with the same count.
+- `losos-grub-bless.service` is the other half. Like
+  `systemd-bless-boot.service`, it is ordered after `boot-complete.target`.
+  It renames the version that started to `losos-desktop_<v>.efi`, which
+  counts as blessed.
+- A UKI that runs out of tries keeps the name `losos-desktop_<v>+0-3.efi`,
+  the name systemd-boot gives an entry that used up its tries. The menu puts
+  it after the others, so the older version is the default again.
 
-![A new UKI arrives with +3-0 in its name, three tries; each start uses one; reaching boot-complete.target blesses it, and running out of tries starts the older version and renames the new one +0-3](images/boot-counting.svg)
+![A new UKI arrives with +3-0 in its name, three tries; each start uses one; reaching boot-complete.target blesses it, and running out of tries leaves it as +0-3, after the older version in the menu](images/boot-counting.svg)
 
-`losos-grub-bless.service` is the userspace half. Like
-`systemd-bless-boot.service`, it is ordered after `boot-complete.target`. It
-records the trial's result in the file name, where sysupdate reads it:
-
-- if the UKI on trial is the one that booted, it is renamed to
-  `losos-desktop_<v>.efi` and counts as blessed;
-- if its tries ran out and an older version booted, it is renamed to
-  `losos-desktop_<v>+0-3.efi`. That is the name systemd-boot gives an entry
-  that used up its tries, and it keeps the entry last in the menu.
-
-Either way `grubenv` is emptied, so a disk moved to another machine
-mid-trial carries on from the file names.
-
-`grubenv` also holds `losos_oneshot`, a version to start once at the next
-boot instead of the newest, as `bootctl set-oneshot` did. Nothing sets it any
-more. The hibernation hook that set it went away with
-[hibernation](hibernation.md), and GRUB still reads a value an older version
-left behind.
+Both find the UKI that started from the EFI variable `LoaderEntrySelected`
+on UEFI, where the menu names each entry after its UKI's file, or from
+`losos.uki=` on a BIOS boot's command line. `losos-grub-bless` also empties `grubenv`, which Limine does not read.
+Nothing reads the one-shot request older versions kept there.
 
 ## The installer ISO
 
-The [installer ISO](installer.md) starts with GRUB too, with the same theme
-and one entry, which finds the medium by its label. On UEFI, GRUB is the
-ISO's removable-media boot path and chainloads the installer's UKI from the
-ISO 9660 filesystem. On an x86_64 BIOS, GRUB's El Torito image starts it from
-a disc, and GRUB's hybrid MBR starts the same image from a USB stick. There
-it starts the installer's kernel and initrd, kept beside its UKI in `boot/`,
-with the UKI's command line. Plymouth then shows "LosOS Desktop installer is
-starting" until the installer takes the screen.
+The [installer ISO](installer.md) starts with Limine too, with the same
+colours and wallpaper. On UEFI, its appended FAT partition holds Limine as
+the removable-media boot path, with the installer's UKI, its kernel and
+initrd, and a menu with two entries: **Install LosOS Desktop**, which
+chainloads the UKI, and **Try LosOS Desktop**, which starts the kernel and
+initrd with the UKI's command line and `losos.try=1`. On an x86_64 BIOS,
+Limine's CD boot image starts it from a disc or a USB stick, and reads a
+menu of its own with the same two entries, both starting the kernel and
+initrd from `boot/` on the ISO 9660 filesystem. Plymouth then shows "LosOS
+Desktop installer is starting" until the installer takes the screen.
+`nixos/installer/iso.nix` builds it.
 
 ## Secure Boot
 
-A release signed with LosOS's key starts with Secure Boot on. Microsoft-signed
-shim goes in front of GRUB on the ESP, GRUB and every UKI are signed, and
-the key is enrolled once in shim's MokManager. [Secure Boot](secure-boot.md)
-has the details, and how to enroll the key. Secure Boot is UEFI's and does
-not apply to a BIOS boot.
+A release signed with LosOS's key starts with Secure Boot on.
+Microsoft-signed shim goes in front of Limine on the ESP, Limine and every
+UKI are signed, and the key is enrolled once in shim's MokManager. [Secure
+Boot](secure-boot.md) has the details, and how to enroll the key. Secure Boot
+is UEFI's and does not apply to a BIOS boot.
 
 > [!IMPORTANT]
 > An image built without the key, such as a fork's or a local build's, has
-> GRUB alone on the ESP, unsigned, and starts only with Secure Boot off.
+> Limine alone on the ESP, unsigned, and starts only with Secure Boot off.
 
 ## Tested
 
-`nix flake check` boots the image under UEFI in `checks.x86_64-linux.boot`.
-GRUB chainloads the UKI, `LoaderInfo` names GRUB, and first boot lays out the
-disk. The test then renames the UKI to the name sysupdate gives a new one,
-reboots, and checks that the trial ended with the file blessed and `grubenv`
-empty. `boot-bios` does the same under QEMU's SeaBIOS, where GRUB starts the
-UKI's kernel and the ESP is mounted without EFI variables to name it. Both
-tests also replace an older GRUB with `losos-grub-update` and boot what it
-wrote. Under UEFI that is an older GRUB and a systemd-boot, and under SeaBIOS
-an emptied BIOS boot partition. `boot-bios` also gives the machine a second
-disk with a root partition labelled as LosOS's, and checks that root still
-comes from the disk GRUB started from. `hibernate` checks that the one-shot
-request is used up on resume. `installer-boot` and `installer-boot-bios`
-start the installer ISO under each firmware.
-
-Both GRUB images were also started under QEMU, with OVMF and with
-SeaBIOS, from a disk holding two versions, one of them on trial. Each drew
-the themed menu, counted the trial down in `grubenv` and honoured a one-shot
-request. On UEFI each left `LoaderInfo` as "GRUB 2.14" and
-`LoaderDevicePartUUID` as the ESP's for the UKI it chainloaded.
-`secure-boot` boots the image with Secure Boot on ([Secure
+`nix flake check` boots the image under UEFI in `checks.x86_64-linux.boot`
+and checks that `LoaderInfo` names Limine. The test then renames the UKI to
+the name sysupdate gives a new one, reboots, and checks that the file was
+blessed. It also checks that `losos-grub-update` replaces an older boot
+loader and that `losos-boot-order` puts LosOS's firmware entry first again.
+`boot-bios` boots the same image under QEMU's SeaBIOS and checks the ESP
+mount without EFI variables, the BIOS boot code an update rewrites, boot
+counting, and that root still comes from the disk the boot started from when
+a second disk carries a root partition labelled as LosOS's.
+`installer-boot` and `installer-boot-bios` start the installer ISO under
+each firmware. `secure-boot` boots the image with Secure Boot on ([Secure
 Boot](secure-boot.md#tested)).
+
+> [!NOTE]
+> These tests were written for GRUB. Their check of `LoaderInfo` names
+> Limine, but some steps still look at GRUB-era files such as `grubenv`.
