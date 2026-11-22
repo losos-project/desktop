@@ -162,20 +162,29 @@ let
               bash ${guestRun} --list > $out/share/losos/machines/${name}.apps
           ''
         ) (lib.attrValues guests)
-        + lib.concatMapStrings (
-          { name, file, apps }:
-          ''
-            qemu-img convert -f qcow2 -O qcow2 -c ${file} \
-              $out/share/losos/machines/${name}.qcow2
-            ${lib.optionalString (apps != null) ''
-              printf '%s\n' ${lib.escapeShellArg apps} > $out/share/losos/machines/${name}.apps
-            ''}
-          ''
-        ) (lib.mapAttrsToList (name: f: {
-          inherit name;
-          file = f.file;
-          apps = f.apps;
-        }) config.losos.machines.foreignTemplates)
+        +
+          lib.concatMapStrings
+            (
+              {
+                name,
+                file,
+                apps,
+              }:
+              ''
+                qemu-img convert -f qcow2 -O qcow2 -c ${file} \
+                  $out/share/losos/machines/${name}.qcow2
+                ${lib.optionalString (apps != null) ''
+                  printf '%s\n' ${lib.escapeShellArg apps} > $out/share/losos/machines/${name}.apps
+                ''}
+              ''
+            )
+            (
+              lib.mapAttrsToList (name: f: {
+                inherit name;
+                file = f.file;
+                apps = f.apps;
+              }) config.losos.machines.foreignTemplates
+            )
       );
 
   # losos-guest-run as a build runs it, for the lists above: the user and

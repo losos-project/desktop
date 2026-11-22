@@ -81,10 +81,28 @@ default is part of `/usr`. A system installed from a weekly release's ISO or
 disk image therefore follows the weekly releases. A cadence whose run failed
 has no release for that period yet, so the next day starts it again.
 
+A weekly, monthly or yearly GitHub release is that channel's promotion of
+one nightly, the same commit, not a newer one. Its tag stays
+`<cadence>-<stamp>` of the nightly's version. The files are already named
+with that version, and cadence.yml and the site index match the stamp. The
+title says what the tag does not: `LosOS weekly of nightly 20261023.142615,
+promoted 2026-10-26 · Conventional Combine`. The notes name the source
+nightly, the commit, the nightly's build time, and when this release was
+promoted. The date in the version and in the tag is the nightly's build.
+`/usr` and the UKI are rebuilt from that commit with this cadence as the
+channel a system installed from the release follows. The packages are the
+nightly's.
+
+A nightly's title stays `LosOS nightly <version>`. Only a nightly is a
+prerelease. A weekly or monthly is a full release and is not marked as
+GitHub's latest release. Only a yearly is.
+
 A run of `ci` started by hand, from Actions, ci, Run workflow, takes a
 cadence and an optional title, such as `LosOS 2027`. It releases
 the commit it ran on for that cadence and moves that cadence's tag in GHCR,
-`images:<cadence>-<arch>`, to it.
+`images:<cadence>-<arch>`, to it. A title passed in is used as given. The
+notes still say when a weekly, monthly or yearly release is a nightly
+promoted.
 
 CI also gives each release made without a title a name. The name is an
 adjective and a verb that start with the same letter, such as "Quiet Queue",

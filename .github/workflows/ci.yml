@@ -1184,10 +1184,29 @@ jobs:
             echo "::error::Expected one version across the architectures, found: ${versions:-none}"
             exit 1
           fi
-          # 20261010.175322 is tagged nightly-20261010T1753 for a nightly,
-          # weekly-20261010T1753 for a weekly, and so on.
+          # 20261010.175322 is tagged nightly-20261010T1753. A weekly of that
+          # commit is weekly-20261010T1753. The stamp stays the nightly's
+          # build: cadence.yml and the site index match on it, and the files
+          # are already named with it. A slower cadence is that nightly
+          # promoted, so its title says so. The date after "promoted" is the
+          # day this job publishes, and the version date stays the nightly's.
           tag=$LOSOS_CHANNEL-${versions:0:8}T${versions:9:4}
-          title=${TITLE:-LosOS $LOSOS_CHANNEL $versions}
+          nightly_tag=nightly-${versions:0:8}T${versions:9:4}
+          built=$(date -u -d "${versions:0:8} ${versions:9:2}:${versions:11:2}:${versions:13:2}" '+%Y-%m-%d %H:%M:%S UTC')
+          promoted=$(date -u '+%Y-%m-%d %H:%M UTC')
+          promoted_day=$(date -u '+%Y-%m-%d')
+          if gh release view "$nightly_tag" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName > /dev/null 2>&1; then
+            has_nightly=true
+          else
+            has_nightly=false
+          fi
+          if [ -n "$TITLE" ]; then
+            title=$TITLE
+          elif [ "$LOSOS_CHANNEL" = nightly ]; then
+            title="LosOS nightly $versions"
+          else
+            title="LosOS $LOSOS_CHANNEL of nightly $versions, promoted $promoted_day"
+          fi
           # Each release also gets a name, an adjective and a verb that start
           # with the same letter ("Quiet Queue"), drawn from the Oxford 3000
           # and 5000 word lists of Oxford Learner's Dictionaries. A verb some
@@ -1196,6 +1215,7 @@ jobs:
           # last word of the part after " · ". Once every verb has been used
           # they repeat. The name is a nicety, so a dictionary that cannot be
           # reached leaves the release without one rather than unreleased.
+          # A title passed in by hand is used as given.
           if [ -z "$TITLE" ]; then
             if words=$(curl --silent --show-error --fail --location --retry 3 --max-time 120 \
               https://www.oxfordlearnersdictionaries.com/wordlists/oxford3000-5000); then
@@ -1232,6 +1252,10 @@ jobs:
             echo "tag=$tag"
             echo "title=$title"
             echo "any=true"
+            echo "built=$built"
+            echo "promoted=$promoted"
+            echo "nightly_tag=$nightly_tag"
+            echo "has_nightly=$has_nightly"
           } >> "$GITHUB_OUTPUT"
 
       # proxy/ serves `images:<channel>-<arch>` at /updates/<channel>/<arch>/,
@@ -1262,6 +1286,10 @@ jobs:
           TAG: ${{ steps.pulled.outputs.tag }}
           TITLE: ${{ steps.pulled.outputs.title }}
           VERSION: ${{ steps.pulled.outputs.version }}
+          BUILT: ${{ steps.pulled.outputs.built }}
+          PROMOTED: ${{ steps.pulled.outputs.promoted }}
+          NIGHTLY_TAG: ${{ steps.pulled.outputs.nightly_tag }}
+          HAS_NIGHTLY: ${{ steps.pulled.outputs.has_nightly }}
           PROXY_URL: ${{ vars.LOSOS_PROXY_URL }}
         run: |
           # A tag is published once. A re-run of this commit and cadence
@@ -1306,8 +1334,37 @@ jobs:
           else
             fetched="fetch them from its newest release, which the documentation site lists"
           fi
-          cat > notes.md <<NOTES
-          Built from $GITHUB_SHA, version \`$VERSION\`, for x86_64 and aarch64.
+          {
+            if [ "$LOSOS_CHANNEL" = nightly ]; then
+              cat <<NIGHTLY
+          **Nightly build** of commit \`$GITHUB_SHA\`.
+
+          Version \`$VERSION\` is that commit's time, $BUILT. Published $PROMOTED. This is a prerelease. A weekly, monthly or yearly release cut from it is this nightly promoted, and its title says so.
+          NIGHTLY
+            else
+              cat <<PROMO
+          **$LOSOS_CHANNEL release of nightly \`$NIGHTLY_TAG\`**, promoted $PROMOTED. Same commit as that nightly.
+          PROMO
+              echo
+              if [ "$HAS_NIGHTLY" = true ]; then
+                echo "- **Source nightly:** [$NIGHTLY_TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$NIGHTLY_TAG)"
+              else
+                echo "- **Source nightly:** \`$NIGHTLY_TAG\` was never published on GitHub."
+              fi
+              cat <<PROMO
+          - **Built:** $BUILT, from commit [\`$GITHUB_SHA\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA). Version \`$VERSION\` is that time. Tag \`$TAG\` uses the same stamp, so the date in the tag is the nightly's build, not this promotion.
+          - **Rebuilt for this channel:** \`/usr\` and the UKI, from that commit, with $LOSOS_CHANNEL as the channel a system installed from this release follows. The packages are the nightly's.
+          PROMO
+              echo
+              if [ "$LOSOS_CHANNEL" = yearly ]; then
+                echo "Marked as GitHub's latest release. A weekly or monthly is a full release and is not marked latest."
+              else
+                echo "A full release, not a prerelease, and not GitHub's latest. Only a yearly release is marked latest."
+              fi
+            fi
+            cat <<NOTES
+
+          The files are for x86_64 and aarch64, version \`$VERSION\`.
 
           - **Install:** write \`*-installer.iso\` to a USB stick and boot it, or run the Windows installer on a PC that keeps Windows. The ISO installs this version from this release over the network; the Windows installer installs the newest $LOSOS_CHANNEL release.
           - **Update images:** the UKI (\`.efi\`) and the two halves of \`/usr\` (\`_usr-*.raw.xz\`) are what systemd-sysupdate installs. Systems installed from this release follow the $LOSOS_CHANNEL releases, until another cadence is picked in Settings, System, and $fetched; these are the same files, pinned to this version.
@@ -1315,6 +1372,7 @@ jobs:
           - **Files of 2 GiB or more** are split into \`.part-00\`, \`.part-01\` and on, because GitHub rejects larger assets. \`cat <file>.part-* > <file>\` joins one.
           - **Checking:** \`SHA256SUMS-<arch>\` lists that architecture's files and \`SHA256SUMS-<arch>.gpg\` signs it with the [update signing key]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/nixos/keys/update-signing.asc). \`gpg --verify SHA256SUMS-<arch>.gpg SHA256SUMS-<arch>\`, then \`sha256sum --check --ignore-missing SHA256SUMS-<arch>\`.
           NOTES
+          } > notes.md
           # gh creates the release as a draft, uploads every asset and only
           # then publishes it, so an immutable release is never published
           # with files still missing.

@@ -72,7 +72,7 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        ExecStartPre = "${lib.getExe pkgs.coreutils}/bin/rm -f /run/losos-installer/livepatch-offer.json";
+        ExecStartPre = "${lib.getExe' pkgs.coreutils "rm"} -f /run/losos-installer/livepatch-offer.json";
         ExecStart = "${lib.getExe livepatch} check";
       };
     };

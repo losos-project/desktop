@@ -55,10 +55,9 @@ let
   # is wayland-0, as in the LosOS guest, because no desktop of the machine's
   # own runs here (docs/hypervisor.md, "The guest template").
   guestRun = pkgs.writeText "losos-guest-run" (
-    builtins.replaceStrings
-      [ "@user@" "@display@" ]
-      [ "user" "wayland-0" ]
-      (builtins.readFile ../guest/losos-guest-run.sh)
+    builtins.replaceStrings [ "@user@" "@display@" ] [ "user" "wayland-0" ] (
+      builtins.readFile ../guest/losos-guest-run.sh
+    )
   );
 
   # What cloud-init runs, once, at the first boot. A shell script, so it is
@@ -145,13 +144,14 @@ let
     cp -r ${sources.mcsapi} $out/components/mcsapi
     cp -r ${vendor} $out/vendor
   '';
-  cd = pkgs.runCommand "losos-danube-cd.iso"
-    {
-      nativeBuildInputs = [ pkgs.buildPackages.xorriso ];
-    }
-    ''
-      xorriso -as mkisofs -quiet -J -R -V cidata -o $out ${cdTree}
-    '';
+  cd =
+    pkgs.runCommand "losos-danube-cd.iso"
+      {
+        nativeBuildInputs = [ pkgs.buildPackages.xorriso ];
+      }
+      ''
+        xorriso -as mkisofs -quiet -J -R -V cidata -o $out ${cdTree}
+      '';
 in
 {
   losos.machines.foreignTemplates.${template} = {
