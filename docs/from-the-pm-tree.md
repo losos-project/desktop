@@ -5,7 +5,7 @@
 | `recipes/10-systemd/linux`, `losos.config` | nixpkgs' kernel, `hardware.nix` | nixpkgs' `common-config.nix` already sets what systemd needs, `CONFIG_HIDRAW` included. zswap is built in and off, and `boot.zswap.enable` turns it on |
 | `recipes/10-systemd/nvidia-open` | `nvidia.nix`: nixpkgs' NVIDIA open module and userspace | chosen per machine at boot from nixos-facter's report; older cards keep nouveau and NVK ([Hardware and NVIDIA](drivers.md)) |
 | `recipes/00-*` through `30-gnome`, `manifest/`, `share/` | nixpkgs | every package the recipes built. Their build-system patches existed only for the CFI toolchain |
-| `recipes/30-gnome/gnome-control-center` patches | `nixos/pkgs/patches/gnome-control-center/` | kept and not applied, see [What is not done](not-done.md) |
+| `recipes/30-gnome/gnome-control-center` patches | removed | gnome-control-center is not in the image, see [What is not done](not-done.md) |
 | `recipes/90-image/losos-image` (mkosi), `plugins/` | `nixos/modules/image.nix` (`image/repart.nix`) | the same `systemd-repart`; no fingerprint table to get past, so no plugins |
 | `mkuki.py`, `files/cmdline` | `boot.uki`, verity-store module | the UKI carries `usrhash=` |
 | `overlay/usr/lib/repart.d/` | `systemd.repart.partitions` in `disk.nix` | runs in the initrd, as before |

@@ -2,9 +2,9 @@
 
 macOS 26 is the last release for Intel Macs. Every macOS after it runs on
 Apple silicon only, so a macOS machine that keeps getting updates has to be
-an arm64 one. This page covers `qemu-vmapple`, the QEMU that runs one:
-QEMU's `vmapple` machine under TCG with an emulated M1 CPU on any PC, or
-under KVM on an arm64 host, with a GPU from Reims on either.
+an arm64 one. The image does not build a patched QEMU for it. Stock QEMU
+comes from cache.nixos.org, and it does not include this `vmapple` work.
+The notes below describe that port, which is no longer compiled here.
 
 > [!WARNING]
 > Apple's licence lets macOS run in a virtual machine only on Apple
@@ -26,10 +26,11 @@ physical M1. Its devices are paravirtual, so QEMU has most of them already,
 and the guest kernel is XNU's `VMAPPLE` build. What a guest needs from
 the CPU is what an M1 shows it, plus a few hypercalls.
 
-## What qemu-vmapple is
+## What qemu-vmapple was
 
-`nixos/pkgs/default.nix` builds it from nixpkgs' QEMU with the patches in
-`nixos/pkgs/patches/qemu-vmapple`, for the aarch64 system emulator only.
+It was nixpkgs' QEMU plus a local patch series, for the aarch64 system
+emulator only. Those patches are not in the tree, and the package is not
+built.
 
 - **0001** is the code of
   [27on86](https://github.com/steelbrain/experiment-macOS-arm64-on-linux-x86),

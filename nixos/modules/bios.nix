@@ -1,21 +1,19 @@
-# Legacy BIOS PCs, started by GRUB from the MBR (docs/boot-loaders.md).
+# Legacy BIOS PCs, started by Limine from the MBR (docs/boot-loaders.md).
 #
-# UEFI firmware starts GRUB from the ESP (grub.nix). This is for x86_64 PCs
-# whose firmware has no UEFI, or has it turned off: the same disk, the same
-# /usr slots, the same menu and theme and the same updates, started by GRUB
+# UEFI firmware starts Limine from the ESP (grub.nix). This is for x86_64
+# PCs whose firmware has no UEFI, or has it turned off: the same disk, the
+# same /usr slots, the same menu and the same updates, started by Limine
 # from the MBR instead. Every disk the image or the installer lays out
 # carries both, so one disk starts on either kind of firmware.
 #
-#   BIOS -> MBR (GRUB's boot.img) -> core.img in the BIOS boot partition,
-#     menu and theme built in -> kernel + initrd + command line of the
-#     newest UKI's version -> the same initrd and system as under UEFI
+#   BIOS -> MBR -> Limine's stage in the BIOS boot partition
+#     -> kernel + initrd + command line of the newest UKI
 #
-# BIOS GRUB cannot run a UKI, which is an EFI program, so it starts each
-# UKI's kernel, initrd and command line, which every release carries as
-# files of their own beside the UKI (uki-files.nix). GRUB still
-# reads versions and tries from the UKIs' names, and counts tries in
-# grubenv, as it does on UEFI; losos-grub-bless (grub.nix) writes the
-# outcome back into those names, where sysupdate reads it.
+# Limine cannot run a UKI, which is an EFI program, so on BIOS it starts
+# each UKI's kernel, initrd and command line (uki-files.nix).
+# losos-limine-menu writes that into limine.conf. image.nix and the
+# installer run that program on the disk, and on x86_64 it also installs
+# Limine's BIOS boot code.
 {
   config,
   lib,
@@ -26,52 +24,6 @@
 let
   cfg = config.losos;
   inherit (cfg) arch;
-  inherit (config.system.build) grub;
-
-  # core.img for the BIOS boot partition, with grub.cfg, the theme and
-  # what they use built in: grub-image.nix's BIOS set (disks, GPT, linux,
-  # regexp, serial, the memdisk), plus FAT to find the files and loadenv
-  # for the counter. The early config sets losos_disk to $root, which
-  # before the menu is the disk the BIOS started GRUB from.
-  core = import ./grub-image.nix {
-    inherit pkgs;
-    inherit (grub) menu art;
-    format = "i386-pc";
-    output = "core.img";
-    early = ''
-      set losos_disk="$root"
-      normal (memdisk)/grub.cfg
-    '';
-    modules = [
-      "probe"
-      "fat"
-      "true"
-      "loadenv"
-      "reboot"
-      "halt"
-      "sleep"
-    ];
-  };
-
-  # boot.img for the MBR, and core.img.
-  bootCode = pkgs.runCommand "losos-grub-bios" { } ''
-    mkdir $out
-    cp ${core}/core.img $out/core.img
-    cp ${pkgs.grub2}/lib/grub/i386-pc/boot.img $out/boot.img
-  '';
-
-  install = pkgs.writeShellApplication {
-    name = "losos-grub-bios-install";
-    runtimeInputs = with pkgs; [
-      coreutils
-      util-linux
-      jq
-    ];
-    text = ''
-      boot_code=${bootCode}
-    ''
-    + builtins.readFile ./grub-bios-install.sh;
-  };
 
   # systemd-gpt-auto-generator mounts the ESP only on an EFI boot: without
   # LoaderDevicePartUUID it cannot tell which ESP the boot came from. A BIOS
@@ -110,10 +62,8 @@ let
   '';
 in
 lib.mkIf (arch.name == "x86_64") {
-  system.build.grubBiosInstall = install;
-
-  # Where core.img goes: 1M, the size grub-install asks for, and far more
-  # than the ~300K core.img is with the theme inside. Before slot A's /usr, which grows into the
+  # Where Limine's BIOS stage goes: 1M, more than the stage needs. Before
+  # slot A's /usr, which grows into the
   # space behind it on first boot (disk.nix). disk.nix has no definition of
   # its own for it, and repart leaves alone a partition no definition
   # matches.

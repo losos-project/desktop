@@ -4,8 +4,8 @@
 # replaces every one of them. Plain data, called by grub.nix, splash.nix and
 # the installer's iso.nix:
 #
-#   grub/       GRUB's theme: theme.txt, the salmon, the fonts it names and
-#               the highlight behind the selected entry
+#   limine/     the salmon Limine centres on the dark ground
+#   grub/       the old GRUB theme pieces, still built from the same picture
 #   splash.bmp  the UKI's .splash, which systemd-stub centres on the screen
 #               while the kernel and initrd load, between GRUB and Plymouth
 #   logo.png    the salmon alone, still, for whatever wants a logo
@@ -117,7 +117,11 @@ pkgs.runCommand "losos-boot-art"
     passthru = { inherit palette swimFrames; };
   }
   ''
-    mkdir -p $out/grub
+    mkdir -p $out/grub $out/limine
+
+    # Limine centres this and fills the rest of the screen with the ground
+    # colour. The menu is Limine's own, in the same ink and accent.
+    magick ${fit "640x420"} -strip PNG32:$out/limine/salmon.png
 
     magick ${fit "300x200"} -strip PNG32:$out/grub/salmon.png
 

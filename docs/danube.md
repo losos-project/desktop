@@ -46,11 +46,9 @@ and gives it back when dropped, offers the calls as methods, and takes
 closures for signals, which GObject frees with the connection. `engine.rs`
 holds only the tab logic on top of them and has no `unsafe` in it.
 
-nixpkgs has only WebKitGTK, so `nixos/pkgs/wpewebkit.nix` builds the WPE port
-from the WPE release of the same WebKit version, with nixpkgs' WebKitGTK
-patches. It builds only the WPEPlatform API, with the headless and Wayland
-platforms. No upstream cache has it, so CI compiles it once per architecture
-and keeps it in the project's cache.
+The browser runs in the Danube machine and links Arch's `wpewebkit`
+package. This repository does not compile WebKit. nixpkgs packages only
+WebKitGTK, and a WPE build would be compiled here on every nixpkgs bump.
 
 ![Danube's main thread runs WebKit under GLib's loop and its window thread runs winit and egui; two bounded channels carry commands one way and events and frames the other; each web process has its own sandbox; tabs and menus go to derisk over the agent socket and picked commands come back](images/danube.svg)
 
@@ -448,10 +446,11 @@ Danube uses two sandboxes, both built with the
   next sandbox is built inside this one using both. The network is the
   host's, since WebKit's network process needs it.
 - **Each web process.** WebKit puts every web process in its own sandbox,
-  built with bwrap upstream. One patch in `nixos/pkgs/patches/wpewebkit`
-  lets the embedder name a launcher that takes bwrap's arguments. Danube
-  names `danube-sandbox`, which reads the arguments WebKit gives and builds
-  the same sandbox with Hakoniwa. It uses WebKit's own filesystem layout and
+  built with bwrap. Arch's package does not take a replacement launcher,
+  so the machine uses that bwrap sandbox inside the machine's own.
+  `danube-sandbox` still knows how to read bwrap's arguments and build
+  the same sandbox with Hakoniwa, for a WebKit that honours
+  `WEBKIT_SANDBOX_LAUNCHER`. It uses WebKit's own filesystem layout and
   its seccomp filter, loaded last, and carries in the file descriptors WebKit
   hands over. Landlock then lets the web process read what that layout shows
   and write only where WebKit made it writable. Paths that do not exist are

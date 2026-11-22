@@ -56,9 +56,8 @@ entered, and a key can be entered in Windows' own Settings.
 A container owned by root would run with the whole system's privilege, so
 root runs no containers:
 
-- WinBoat is patched in `nixos/pkgs/patches/winboat/` to start, stop, list
-  and inspect its container through `pm container`, and to offer only
-  Podman. A setting that still says Docker gets Podman too.
+- WinBoat is nixpkgs' package, with no source patch. The setup puts `pm`
+  on its PATH. Upstream still decides which runtime it calls.
 - [pm](pm.md)'s podman plugin turns each request into Podman's commands, or
   podman-compose's for a compose file, and refuses root's requests.
 - The image's `podman` refuses root outside a user namespace. Root's Podman

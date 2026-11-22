@@ -39,7 +39,7 @@ Only the VM tests need KVM.
 
 On the usual multi-user install every builder runs under
 `nix-daemon.service`, inside `system.slice`, and the heavy derivations —
-WPE WebKit compiling, derisk's and pm's LTO links, `systemd-repart`
+derisk's and pm's LTO links, `systemd-repart`
 assembling the image, the VM tests' guests — ask for more memory than a
 desktop keeps free. systemd-oomd watches only the cgroups a slice opts in
 to it, and a desktop distro's defaults watch `system.slice` (Fedora's kill

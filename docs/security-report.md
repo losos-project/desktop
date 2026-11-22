@@ -70,10 +70,10 @@ with no checks in it does not count as passed. `all()` over an empty iterator
 is true, so without that rule an untested level would report the best possible
 answer.
 
-## The panel change
+## The panel
 
-`nixos/pkgs/patches/gnome-control-center/0002-firmware-security-report-os-level-checks.patch`
-does three things:
+derisk's System page shows the same checks. The old gnome-control-center
+patch is gone. It did three things:
 
 - Adds a third D-Bus proxy, to `io.losos.Security1`, beside the two fwupd
   ones, and files its reply into a separate table through the existing parser.

@@ -3,9 +3,8 @@
 # `<drv>^*` installable per line, found from the flake rather than listed.
 #
 # What is wanted is every package the release needs, built before the image
-# that holds them: the patched GTK and Qt, everything that links them, and
-# this repository's own programs, with whatever a later overlay or module
-# adds. The line between a package and the image is drawn by evaluating the
+# that holds them: this repository's own programs, with whatever a later
+# overlay or module adds. The line between a package and the image is drawn by evaluating the
 # release twice, the second time with a different `losos.version`. The
 # version is baked into os-release, the UKI, the image and the ISO, so a
 # derivation whose path changes is assembly (os-release, /etc, the initrd,

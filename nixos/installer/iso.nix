@@ -1,28 +1,23 @@
 # The installer medium: an ISO 9660 filesystem holding the live system's Nix
 # store as one squashfs and its UKI, and an appended FAT partition holding
-# GRUB as the removable-media boot path.
+# Limine as the removable-media boot path.
 #
 # Written to a stick, the ISO reads as a GPT disk with that FAT partition as
 # its ESP; burnt to a disc, El Torito points the firmware at the same
-# partition. UEFI firmware starts GRUB, which shows the installed system's
-# theme with one entry and chainloads the UKI from the ISO 9660 filesystem.
-# nixpkgs' iso-image.nix is not used because it is built around a GRUB menu
-# generated per kernel and syslinux, and around a Nix that registers the
-# store at boot, none of which is here.
+# partition. UEFI firmware starts Limine, which shows the installed system's
+# salmon and chainloads the UKI from the FAT. nixpkgs' iso-image.nix is not
+# used because it is built around a GRUB menu generated per kernel and
+# syslinux, and around a Nix that registers the store at boot, none of
+# which is here.
 #
-# It used to start the UKI directly, with no boot loader in front. GRUB is
-# there now so the medium starts as the installed system does, under the
-# same salmon, from the menu on to Plymouth (modules/splash.nix).
-#
-# On x86_64 a legacy BIOS PC starts it too, with GRUB, because the OS it
-# installs starts on one (modules/bios.nix): GRUB's hybrid MBR on a stick,
-# its El Torito image on a disc, and either starts the UKI's own kernel and
-# initrd with the UKI's command line, kept beside it in boot/.
+# On x86_64 a legacy BIOS PC starts it too, with Limine's CD boot image,
+# because the OS it installs starts on one (modules/bios.nix). That Limine
+# reads limine.conf from the ISO and starts the UKI's kernel and initrd.
 #
 # With LosOS's Secure Boot key, the FAT partition starts Microsoft-signed
-# shim instead, which starts GRUB signed with that key, and the UKI is signed
-# too (modules/shim.nix). A PC with Secure Boot on that has not enrolled the
-# key yet stops in MokManager, where the certificate beside shim enrolls it.
+# shim instead, which starts Limine signed with that key (the file is still
+# named grub*.efi, which is the name shim looks for), and the UKI is signed
+# too (modules/shim.nix).
 {
   config,
   lib,
@@ -48,64 +43,74 @@ let
     comp = "zstd -Xcompression-level 19";
   };
 
-  # The installer's GRUB menu, the same on both firmwares and drawn with the
-  # installed system's theme (nixos/branding, grub-image.nix), which here
-  # names it "LosOS Desktop installer". Its one entry finds the medium by
-  # its label rather than guessing which drive GRUB was started from, a
-  # CD or a disk. UEFI GRUB chainloads the UKI from the medium, so
-  # systemd-stub starts it as it would from the ESP; BIOS GRUB starts the
-  # UKI's own kernel and initrd with the UKI's command line, kept beside it
-  # in boot/.
   art = import ../branding {
     inherit pkgs;
     name = config.system.nixos.distroName;
   };
-  menu = pkgs.writeText "losos-installer-grub.cfg" ''
-    set timeout=3
-    set timeout_style=menu
-    search --no-floppy --set=root --label ${volumeID}
-    if [ "$grub_platform" = efi ]; then
-      menuentry "Install LosOS Desktop" {
-        chainloader /boot/installer.efi
-      }
-      menuentry "Try LosOS Desktop" {
-        linux /boot/linux ${config.boot.uki.settings.UKI.Cmdline} losos.try=1
-        initrd /boot/initrd
-      }
-    else
-      menuentry "Install LosOS Desktop" {
-        linux /boot/linux ${config.boot.uki.settings.UKI.Cmdline}
-        initrd /boot/initrd
-      }
-      menuentry "Try LosOS Desktop" {
-        linux /boot/linux ${config.boot.uki.settings.UKI.Cmdline} losos.try=1
-        initrd /boot/initrd
-      }
-    fi
+  # UEFI Limine reads this from the FAT, where the UKI is copied so boot():
+  # reaches it. BIOS Limine reads the other file from the ISO.
+  cmdline = config.boot.uki.settings.UKI.Cmdline;
+  efiConf = pkgs.writeText "limine.conf" ''
+    timeout: 3
+    serial: yes
+    wallpaper: boot():/limine/salmon.png
+    wallpaper_style: centered
+    backdrop: 0a0e12
+    term_background: 800a0e12
+    term_foreground: e2e8ee
+    term_background_bright: 48b3c0
+    term_foreground_bright: 0a0e12
+    interface_branding: ${config.system.nixos.distroName}
+    interface_branding_colour: 48b3c0
+    interface_help_colour: 94a2b0
+
+    /Install LosOS Desktop
+        comment: Install LosOS Desktop
+        protocol: efi
+        path: boot():/EFI/Linux/installer.efi
+
+    /Try LosOS Desktop
+        comment: Try LosOS Desktop
+        protocol: linux
+        path: boot():/boot/linux
+        module_path: boot():/boot/initrd
+        cmdline: ${cmdline} losos.try=1
   '';
-  # What the menu uses on either firmware, beside what grub-image.nix gives
-  # every image.
-  modules = [
-    "iso9660"
-    "search"
-    "search_label"
-  ];
+  biosConf = pkgs.writeText "limine-bios.conf" ''
+    timeout: 3
+    serial: yes
+    serial_baudrate: 115200
+    wallpaper: boot():/boot/salmon.png
+    wallpaper_style: centered
+    backdrop: 0a0e12
+    term_background: 800a0e12
+    term_foreground: e2e8ee
+    term_background_bright: 48b3c0
+    term_foreground_bright: 0a0e12
+    interface_branding: ${config.system.nixos.distroName}
+    interface_branding_colour: 48b3c0
 
-  efi = import ../modules/grub-image.nix {
-    inherit pkgs menu art;
-    format = "efi";
-    output = "grub.efi";
-    early = "normal (memdisk)/grub.cfg";
-    inherit modules;
-  };
+    /Install LosOS Desktop
+        comment: Install LosOS Desktop
+        protocol: linux
+        path: boot():/boot/linux
+        module_path: boot():/boot/initrd
+        cmdline: ${cmdline}
 
-  # shim, MokManager and the certificate, when there is a key to sign GRUB
-  # and the UKI with (modules/shim.nix).
+    /Try LosOS Desktop
+        comment: Try LosOS Desktop
+        protocol: linux
+        path: boot():/boot/linux
+        module_path: boot():/boot/initrd
+        cmdline: ${cmdline} losos.try=1
+  '';
+
   sb = import ../modules/shim.nix {
     inherit pkgs;
     inherit (losos.secureBoot) privateKey certificate;
   };
-  grub = if sb.enable then sb.sign "grub${efiArch}.efi" "${efi}/grub.efi" else "${efi}/grub.efi";
+  limineEfi = "${pkgs.limine}/share/limine/BOOT${lib.toUpper efiArch}.EFI";
+  grub = if sb.enable then sb.sign "grub${efiArch}.efi" limineEfi else limineEfi;
   # The UKI GRUB starts, signed as the installed system's are
   # (modules/secure-boot.nix).
   uki =
@@ -129,32 +134,36 @@ let
         ];
       }
       ''
-        size=$(du --block-size=1 --apparent-size --total ${toString (lib.attrValues starters)} | tail -n 1 | cut -f1)
+        size=$(du --block-size=1 --apparent-size --total \
+          ${toString (lib.attrValues starters)} \
+          ${efiConf} ${art}/limine/salmon.png ${uki} \
+          ${config.boot.uki.settings.UKI.Linux} ${config.boot.uki.settings.UKI.Initrd} \
+          | tail -n 1 | cut -f1)
         size=$(( (size * 110 / 100 / 1048576 + 1) * 1048576 ))
         truncate --size=$size $out
         mkfs.vfat --invariant -i 4c4f534f -n LOSOS-EFI $out
-        mmd -i $out ::/EFI ::/EFI/BOOT
+        mmd -i $out ::/EFI ::/EFI/BOOT ::/EFI/Linux ::/limine ::/boot
         ${lib.concatStrings (
           lib.mapAttrsToList (target: source: ''
             mcopy -i $out ${source} ::${target}
           '') starters
         )}
+        mcopy -i $out ${efiConf} ::/limine.conf
+        mcopy -i $out ${efiConf} ::/EFI/BOOT/limine.conf
+        mcopy -i $out ${art}/limine/salmon.png ::/limine/salmon.png
+        mcopy -i $out ${uki} ::/EFI/Linux/installer.efi
+        mcopy -i $out ${config.boot.uki.settings.UKI.Linux} ::/boot/linux
+        mcopy -i $out ${config.boot.uki.settings.UKI.Initrd} ::/boot/initrd
         fsck.vfat -n $out
       '';
 
-  # GRUB for a legacy BIOS, as one El Torito image with its modules, menu
-  # and theme inside, so it reads nothing of its own from the medium. The
-  # same image starts from a disc, and from a stick through boot_hybrid.img
-  # in the MBR, which xorriso points at it (--grub2-boot-info).
+  # Limine's BIOS CD image. xorriso points El Torito at it, and
+  # `limine bios-install` finishes the ISO afterwards. The conf and
+  # limine-bios.sys are grafted onto the ISO, which is where that stage
+  # looks for them.
   bios = lib.optionalAttrs pkgs.stdenv.hostPlatform.isx86_64 {
-    image = import ../modules/grub-image.nix {
-      inherit pkgs menu art;
-      format = "i386-pc-eltorito";
-      output = "eltorito.img";
-      early = "normal (memdisk)/grub.cfg";
-      inherit modules;
-    };
-    mbr = "${pkgs.grub2}/lib/grub/i386-pc/boot_hybrid.img";
+    cd = "${pkgs.limine}/share/limine/limine-bios-cd.bin";
+    sys = "${pkgs.limine}/share/limine/limine-bios.sys";
   };
 in
 {
@@ -219,7 +228,10 @@ in
   system.build.isoImage =
     pkgs.runCommand "losos-installer_${version}_${pkgs.stdenv.hostPlatform.parsed.cpu.name}.iso"
       {
-        nativeBuildInputs = [ pkgs.buildPackages.xorriso ];
+        nativeBuildInputs = [
+          pkgs.buildPackages.xorriso
+          pkgs.buildPackages.limine
+        ];
       }
       ''
         xorriso -as mkisofs \
@@ -234,9 +246,8 @@ in
           -appended_part_as_gpt \
           ${
             lib.optionalString (bios != { }) ''
-              -b boot/eltorito.img \
+              -b boot/limine-bios-cd.bin \
               -no-emul-boot -boot-load-size 4 -boot-info-table \
-              --grub2-boot-info --grub2-mbr ${bios.mbr} \
               -eltorito-alt-boot \
             ''
           } \
@@ -249,9 +260,15 @@ in
           release.squashfs=${losos.embeddedRelease} \
           try.qcow2=${losos.tryQcow2} \
           ${lib.optionalString (bios != { }) ''
-            boot/eltorito.img=${bios.image}/eltorito.img \
+            boot/limine-bios-cd.bin=${bios.cd} \
+            boot/limine-bios.sys=${bios.sys} \
+            boot/limine.conf=${biosConf} \
+            boot/salmon.png=${art}/limine/salmon.png \
             boot/linux=${config.boot.uki.settings.UKI.Linux} \
             boot/initrd=${config.boot.uki.settings.UKI.Initrd}
           ''}
+        ${lib.optionalString (bios != { }) ''
+          limine bios-install $out
+        ''}
       '';
 }

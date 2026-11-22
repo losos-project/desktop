@@ -19,8 +19,34 @@ pub fn loader_path(arch: &Arch) -> String {
     format!("EFI/losos/grub{}.efi", arch.efi)
 }
 
-/// GRUB's boot counter (grub.cfg), beside it.
+/// GRUB's boot counter (grub.cfg), beside it. Limine does not read it.
+/// It stays so an older boot path, and `--uninstall`, still find the file.
 pub const GRUBENV: &str = "EFI/losos/grubenv";
+
+/// Limine's menu beside the loader. The UKI is on the XBOOTLDR partition,
+/// so the path names that partition's GUID rather than the ESP.
+fn limine_conf(uki: &str, boot: &crate::guid::Guid) -> String {
+    format!(
+        "\
+timeout: 3
+serial: yes
+wallpaper_style: centered
+backdrop: 0a0e12
+term_background: 800a0e12
+term_foreground: e2e8ee
+term_background_bright: 48b3c0
+term_foreground_bright: 0a0e12
+interface_branding: LosOS Desktop
+interface_branding_colour: 48b3c0
+interface_help_colour: 94a2b0
+
+/{uki}
+    comment: LosOS Desktop
+    protocol: efi
+    path: guid({boot}):/EFI/Linux/{uki}
+"
+    )
+}
 
 /// The ESP's record of the files this program put there, so `--uninstall`
 /// removes those and nothing it found already there.
@@ -141,12 +167,18 @@ pub fn run(
         &[(uki.as_str(), files.uki.as_path())],
     )?;
 
-    report.step("Adding GRUB to the EFI system partition");
+    report.step("Adding Limine to the EFI system partition");
     let loader = loader_path(arch);
+    let conf = limine_conf(&release.uki_name(id), &plan.boot.uuid);
     let mut created = target.put_esp(&[
         EspFile {
             path: loader.clone(),
             bytes: boot.loader,
+            replace: true,
+        },
+        EspFile {
+            path: "EFI/losos/limine.conf".into(),
+            bytes: conf.as_bytes(),
             replace: true,
         },
         // Empty, so no trial an earlier install left goes on.

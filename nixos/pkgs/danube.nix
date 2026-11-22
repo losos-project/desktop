@@ -1,6 +1,8 @@
-# Danube, the web browser (docs/danube.md): WPE WebKit (wpewebkit.nix)
-# drawn inside an mcsapi window, and danube-sandbox, the Hakoniwa launcher
-# that sandboxes the browser and each of WebKit's web processes.
+# Danube, the web browser (docs/danube.md): WPE WebKit drawn inside an
+# mcsapi window, and danube-sandbox, the Hakoniwa launcher that sandboxes
+# the browser and each of WebKit's web processes. The overlay does not
+# call this file. The image's browser is the Danube machine, against
+# Arch's wpewebkit, so a Nix build here would compile WebKit.
 #
 # Built from src/danube against the mcsapi input, whose components and theme
 # crates Cargo.toml reaches by path, so the window draws with the same

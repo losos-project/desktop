@@ -243,7 +243,7 @@
               build.releaseArtifacts;
           uki = build.uki;
           toplevel = build.toplevel;
-          # Packages of their own (derisk, pm, danube, ...) are reached
+          # Packages of their own (derisk, pm, ...) are reached
           # through legacyPackages below, which `nix build .#<name>` falls
           # back to.
           default = build.disk;
@@ -296,21 +296,11 @@
           "losos-machine-labels"
           "losos-login-bridge"
           "losos-tokens"
-          "danube"
         ] (name: self.legacyPackages.${system}.${name})
         // {
           home-manager-pm = import ./nixos/tests/home-manager-pm.nix {
             inherit self home-manager pkgs;
           };
-          # qemu-vmapple's M1 CPU and Apple's pointer authentication, under
-          # TCG with no Apple software (docs/macos-arm64.md).
-          apple-m1 = import ./nixos/tests/apple-m1.nix {
-            inherit pkgs;
-            inherit (self.legacyPackages.${system}) qemu-vmapple;
-          };
-          # Reims' GPU backend for those guests. Nothing in the image uses
-          # it, so without this nothing would build it.
-          reims-vgpu-backend = self.legacyPackages.${system}.reims-vgpu-backend;
         }
         // lib.optionalAttrs (system == "aarch64-linux") {
           # Every GSI module and assertion, libhybris's build, and the

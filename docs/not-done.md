@@ -8,10 +8,10 @@
   a machine yet, or to the computer itself
   ([signing in with the eID](tokens.md#signing-in-with-the-eid)), and
   Settings has no row for eID sign-in: `losos-eid-signin` sets it up.
-- **arm64 macOS.** `qemu-vmapple` runs `vmapple` under TCG with an M1 CPU
-  on a PC, or under KVM on an arm64 host, with a GPU from Reims. Nobody has
-  booted macOS on it yet, no guest has drawn through Reims, and nothing in
-  derisk starts it. [arm64 macOS machines](macos-arm64.md) lists the rest.
+- **arm64 macOS.** The image does not build `qemu-vmapple` or Reims. Stock
+  QEMU has no `vmapple` machine. Nobody has booted macOS on the old port,
+  and nothing in derisk starts it. [arm64 macOS machines](macos-arm64.md)
+  lists what that port was.
 - **Peripherals in their machines.** [Peripherals](peripherals.md) moves
   USB devices and Bluetooth radios into machines of their own. Some of it
   is not finished:
@@ -237,11 +237,8 @@
   that reports an action that never finished, and only for Bluetooth
   pairing, a backup and asking for a factory reset. Nothing is reported when
   derisk itself crashes.
-- **The two gnome-control-center patches** in `nixos/pkgs/patches/`. Nothing
-  upstream has them, so they stay. They are written against
-  gnome-control-center 51.0, and nixpkgs carries 50.4, which moved the System
-  panel to Blueprint. Neither patch applies, and gnome-control-center is no
-  longer in the image for them to go into. What they added is on derisk
+- **gnome-control-center.** The image does not carry it, and the two
+  patches that used to sit beside it are gone. What they added is on derisk
   Settings' System page instead: the security report, and the factory reset.
   Only a UEFI machine offers the factory reset, because systemd's request to
   reset needs UEFI. Neither has been tried on hardware.

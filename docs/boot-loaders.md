@@ -1,16 +1,20 @@
 # Boot loader and boot screen
 
-LosOS boots with GRUB on every PC. On UEFI it starts from the ESP. On an
+LosOS boots with Limine on every PC. On UEFI it starts from the ESP. On an
 x86_64 PC that starts by legacy BIOS, or by UEFI's Compatibility Support
 Module with UEFI turned off, it starts from the MBR. One disk carries both,
 so the same image, the same install and the same updates start on either
-kind of firmware. Both draw the same menu with the salmon LosOS boots behind,
-and both hand over to the same Plymouth splash. arm64 has no BIOS, so only
-the UEFI half applies there.
+kind of firmware. Both draw the salmon on the same dark ground, with the
+chosen line in the accent colour, and both hand over to the same Plymouth
+splash. arm64 has no BIOS, so only the UEFI half applies there.
+
+Limine has no theme language. The salmon is a wallpaper, centred, and the
+ground, ink and accent are the terminal colours. The countdown is Limine's
+own three seconds. The menu text is not placed where GRUB's theme placed it.
 
 ```
-UEFI   firmware -> ESP: GRUB -> chainloads the newest UKI -> systemd-stub
-BIOS   firmware -> MBR: GRUB's boot.img -> BIOS boot partition: GRUB's core
+UEFI   firmware -> ESP: Limine -> chainloads the newest UKI -> systemd-stub
+BIOS   firmware -> MBR -> BIOS boot partition: Limine
               -> the newest UKI's kernel, initrd and command line
 then   the systemd initrd, under Plymouth -> the login screen
 ```
@@ -185,10 +189,10 @@ kernel beside them. It then offers:
 > wrong](troubleshooting.md#no-one-can-administer-the-machine)). With Secure
 > Boot on, GRUB ignores them ([Secure Boot](secure-boot.md#while-secure-boot-is-on)).
 
-The menu's editor, which `e` opens in stock GRUB, is patched out
-(`nixos/pkgs/patches/grub`). An edited entry starts whatever command line it
-is made to name, and every boot is meant to start the one the release was
-built with ([kernel hardening](kernel-hardening.md)). The prompt stays.
+The menu is stock GRUB, editor included. `e` can change the command line of
+the entry it opens. The prompt stays, and it is how `losos_extra` reaches
+the recovery shell. With Secure Boot on, GRUB ignores those arguments
+([Secure Boot](secure-boot.md#while-secure-boot-is-on)).
 
 A UKI takes kernel arguments only in place of its whole command line, so on
 UEFI, GRUB puts the UKI's own command line from the `.grub` file in front of

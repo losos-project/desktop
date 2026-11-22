@@ -30,7 +30,6 @@ let
     "derisk-index"
     "losos-backup"
     "losos-backup-now"
-    "danube-captive-watch"
     "app-windows-downloads"
   ];
   background.serviceConfig.Slice = "losos-background.slice";

@@ -82,7 +82,7 @@ Secure Boot"` shows the kernel loading LosOS's certificate from the MOK list.
 | File | What it is |
 | --- | --- |
 | `EFI/BOOT/BOOTX64.EFI` (`BOOTAA64.EFI` on arm64) | shim, at the path firmware starts with no boot entry |
-| `EFI/BOOT/grubx64.efi` | GRUB, signed with LosOS's key, which shim starts |
+| `EFI/BOOT/grubx64.efi` | Limine, signed with LosOS's key, which shim starts. The name stays `grub`, because that is the file shim loads |
 | `EFI/BOOT/mmx64.efi` | MokManager, which shim starts when GRUB fails its check |
 | `EFI/losos/shimx64.efi`, `grubx64.efi`, `mmx64.efi` | the same three, for a firmware entry of LosOS's own |
 | `ENROLL_THIS_KEY_IN_MOKMANAGER.cer` | LosOS's certificate, in the DER form MokManager reads |

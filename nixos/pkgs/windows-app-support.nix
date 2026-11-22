@@ -7,10 +7,9 @@
 #
 # Three things here are this OS's, not WinBoat's:
 #
-# - WinBoat runs its container through pm (`pm container`, whose podman
-#   plugin runs it with rootless Podman and refuses root), never Podman or
-#   Docker itself, and offers Podman only
-#   (patches/winboat/0001-run-containers-through-pm.patch).
+# - The setup puts `pm` on this app's PATH. WinBoat itself is nixpkgs'
+#   package, with no source patch, so it still starts containers the way
+#   upstream does.
 # - `windows-app-support-setup` does what WinBoat's setup wizard does once
 #   it has its answers, with answers of its own: the person's name as the
 #   Windows account, a random password nobody types, half the PC's memory
@@ -100,8 +99,6 @@ let
   '';
 
   app = winboat.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [ ./patches/winboat/0001-run-containers-through-pm.patch ];
-
     postPatch = old.postPatch + ''
       grep -qF '"${image}"' src/renderer/data/podman.ts
 

@@ -23,11 +23,6 @@ Everything the flake builds from, besides this repository:
 - **crates.io**, for the dependencies of pm, losos-security,
   losos-installer and losos-hardware, each pinned by `Cargo.lock` and checked
   by hash.
-- **Purism's adaptive GTK patches**, copied into
-  `nixos/pkgs/patches/gtk3` and `gtk4` from PureOS's packaging on
-  source.puri.sm, `Librem5/debs/gtk4` and `sebastian.krzyszkowiak/gtk`,
-  branch `pureos/latest`. They are reviewed source in this repository, not
-  fetched at build time.
 - **Device firmware**, from nixpkgs' `linux-firmware`, pinned by hash like any
   source. It is prebuilt by the hardware vendors, and nothing can compile it.
   `hardware.nix` ships it because amdgpu and nouveau cannot start current

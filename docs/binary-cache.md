@@ -16,13 +16,10 @@ fetches. It serves four things from this project's GHCR namespace:
   `oras` can pull an individual path directly from GHCR by its store hash,
   and serve the resulting signed narinfo/NAR locally. LosOS's installer uses
   this path, so cache substitution works without deploying `proxy/` to Vercel.
-- **Build caches.** `/build-cache/<name>/<arch>/<part>` redirects to one
-  part of a compiler cache that CI keeps in GHCR. The one cache, `losos`, is
-  for the overlay's patched GTK and Qt and lives at `losos-ccache:<arch>`.
-  It is a zstd tarball split into 4 GB parts, starting at
-  `ccache.tar.zst.part-00`. `tools/build-cache-fetch` fetches and unpacks a
-  cache through the proxy first, and from GHCR with oras when the proxy has
-  nothing.
+- **Build caches.** `/build-cache/<name>/<arch>/<part>` still redirects to
+  a `losos-ccache:<arch>` artifact if one was pushed earlier. CI no longer
+  fills it. Nothing in the overlay compiles through ccache. GTK and Qt
+  come from cache.nixos.org.
 - **Updates.** `/updates/<channel>/<arch>/<file>` serves a file of
   `images:<channel>-<arch>`, which CI's publish job moves to each release
   that passed verification. With `LOSOS_PROXY_URL` set, CI sets

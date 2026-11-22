@@ -65,7 +65,7 @@ in
           loader = machine.succeed(
               "tail -c +5 /sys/firmware/efi/efivars/LoaderInfo-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f | tr -d '\\0'"
           )
-          assert loader.startswith("GRUB"), loader
+          assert loader.startswith("Limine"), loader
           machine.succeed("grep -q 'usrhash=' /proc/cmdline")
           assert "ACTIVE" in machine.succeed("dmsetup info --target verity usr")
 

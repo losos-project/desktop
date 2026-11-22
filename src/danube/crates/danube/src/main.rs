@@ -197,8 +197,8 @@ fn run(args: Args) -> Result<ExitCode, Error> {
         if !settings.jit {
             std::env::set_var("JSC_useJIT", "false");
         }
-        // Web processes go into danube-sandbox's Hakoniwa containers in
-        // place of bwrap's (nixos/pkgs/patches/wpewebkit).
+        // Set for a WebKit that honours it. Arch's wpewebkit does not, and
+        // web processes stay in bwrap.
         if std::env::var_os("WEBKIT_SANDBOX_LAUNCHER").is_none() {
             if let Some(launcher) = exe
                 .parent()

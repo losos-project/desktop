@@ -8,8 +8,8 @@
 //! only knows how to ask bwrap for that, so the `danube-sandbox` program
 //! takes the arguments WebKit gives bwrap ([`Plan::from_bwrap_args`]) and
 //! builds the same sandbox with Hakoniwa, and Landlock over it.
-//! WebKit runs it in bwrap's place because Danube sets
-//! `WEBKIT_SANDBOX_LAUNCHER` (nixos/pkgs/patches/wpewebkit).
+//! WebKit runs it in bwrap's place when the build honours
+//! `WEBKIT_SANDBOX_LAUNCHER`. Arch's wpewebkit does not.
 //!
 //! Both end in [`Plan::run`], which also carries the open file descriptors
 //! a sandboxed program needs (WebKit's IPC socket among them) through

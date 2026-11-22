@@ -1,10 +1,8 @@
 # Danube in its own machine (docs/hypervisor.md, "The Danube machine").
 #
 # The browser runs in the machine `danube`, labelled green, where WPE WebKit
-# is the distribution's prebuilt one rather than this repository's build
-# (nixos/pkgs/wpewebkit.nix): Arch Linux, whose extra repository carries the
-# same 2.54.2 release the overlay builds. The template is Arch's cloud
-# image, pinned to a dated release; at the machine's first boot cloud-init
+# is Arch's prebuilt package. The template is Arch's cloud image, pinned
+# to a dated release; at the machine's first boot cloud-init
 # provisions it from the CD this module attaches, doing what the Linux tools
 # CD's setup.sh does by hand (docs/hypervisor.md, "Other distributions")
 # and, because Arch does not package Danube, building the browser once from
