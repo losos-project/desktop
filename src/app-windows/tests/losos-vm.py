@@ -305,49 +305,41 @@ def boot(args, machine):
     return qemu
 
 
-def grub(args, machine, run):
-    """Stops GRUB's countdown and boots the image's entry by hand, with a
-    root shell on the second serial port that the rest is driven from."""
-    if not run.step("GRUB menu", machine.wait_serial("executed automatically", 600)):
+def limine(args, machine, run):
+    """Stops Limine's countdown and boots the image's entry with a root
+    shell on the second serial port that the rest is driven from.
+
+    The VM is SeaBIOS, so the entry is Limine's linux protocol. Its
+    command line is the UKI's, and this appends the serial console and
+    the debug shell. The editor opens on the comment line; four lines
+    down is cmdline (comment, protocol, path, module_path).
+    """
+    if not run.step("Limine menu", machine.wait_serial("Booting automatically", 600)):
         return False
+    # The key that stops the countdown is consumed, and is not a menu key.
     machine.key("up", every=0.5)
-    machine.key("c", every=1)
-    v = f"losos-desktop_{args.version}"
-    prompts = 1
-    for line in [
-        "set root=(hd0,gpt1)",
-        "probe --set=losos_esp --part-uuid (hd0,gpt1)",
-        f"source /EFI/Linux/{v}.grub",
-        f"linux /EFI/Linux/{v}.linux $losos_cmdline console=ttyS0 systemd.debug_shell=ttyS1",
-        f"initrd /EFI/Linux/{v}.initrd",
-        "boot",
-    ]:
-        # Keys typed while GRUB is still loading the previous line's file go
-        # missing (an Intel runner lost the u of "Linux" in the initrd's
-        # path, and the kernel panicked without it), so each line waits for
-        # GRUB's next prompt, and is checked against GRUB's echo on the
-        # serial port before Enter and typed again when it does not match.
-        # GRUB wraps a long line at 80 columns, hence the line breaks taken
-        # out of the echo.
-        end = time.time() + 300
-        while machine.serial().count("grub>") < prompts and time.time() < end:
-            time.sleep(0.2)
-        for attempt in range(4):
-            if attempt:
-                log(f"GRUB echoed {echo!r} for {line!r}, typing it again")
-                machine.key("ctrl+a", "ctrl+k", every=0.5)
-            since = len(machine.serial())
-            machine.type(line, every=0.1)
-            end = time.time() + 5
-            while True:
-                echo = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\r\n]", "", machine.serial()[since:])
-                if echo.endswith(line) or time.time() > end:
-                    break
-                time.sleep(0.2)
-            if echo.endswith(line):
+    machine.key("e", every=1)
+    if not run.step("Limine editor", machine.wait_serial("Discard and Exit", 120)):
+        return False
+    machine.key("down", "down", "down", "down", "end", every=0.4)
+    extra = " console=ttyS0 systemd.debug_shell=ttyS1"
+    for attempt in range(3):
+        since = len(machine.serial())
+        machine.type(extra, every=0.08)
+        end = time.time() + 8
+        echo = ""
+        while time.time() < end:
+            echo = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\r\n]", "", machine.serial()[since:])
+            if "systemd.debug_shell=ttyS1" in echo:
                 break
-        prompts = machine.serial().count("grub>") + 1
-        machine.key("ret", every=1)
+            time.sleep(0.2)
+        if "systemd.debug_shell=ttyS1" in echo:
+            break
+        log(f"Limine echoed {echo[-80:]!r} for the debug shell, typing it again")
+    else:
+        return run.step("Limine editor accepted the debug shell", False, echo[-200:])
+    machine.key("f10", every=1)
+    log(f"booting {args.version} from Limine")
     return True
 
 
@@ -542,7 +534,7 @@ def main():
     qemu = boot(args, machine)
     ok = False
     try:
-        if grub(args, machine, run) and sign_in(machine, run):
+        if limine(args, machine, run) and sign_in(machine, run):
             if args.only_boot:
                 ok = True
             elif start_client(machine, run):

@@ -12,16 +12,14 @@ use crate::fat;
 use crate::layout::Plan;
 use crate::release::{Arch, Release};
 
-/// Where GRUB goes on the ESP, beside Windows' own boot manager rather than
-/// over the removable-media path, which is Windows' fallback. grub.nix puts
-/// the same file at the same path on an ESP of LosOS's own.
+/// Where Limine goes on the ESP, beside Windows' own boot manager rather
+/// than over the removable-media path, which is Windows' fallback.
+/// limine.nix puts the same file at the same path on an ESP of LosOS's own.
+/// The name is `grub<arch>.efi` because that is the file Fedora's shim loads
+/// from beside itself (nixos/modules/shim.nix); the bytes are Limine.
 pub fn loader_path(arch: &Arch) -> String {
     format!("EFI/losos/grub{}.efi", arch.efi)
 }
-
-/// GRUB's boot counter (grub.cfg), beside it. Limine does not read it.
-/// It stays so an older boot path, and `--uninstall`, still find the file.
-pub const GRUBENV: &str = "EFI/losos/grubenv";
 
 /// Limine's menu beside the loader. The UKI is on the XBOOTLDR partition,
 /// so the path names that partition's GUID rather than the ESP.
@@ -40,7 +38,7 @@ interface_branding: LosOS Desktop
 interface_branding_colour: 48b3c0
 interface_help_colour: 94a2b0
 
-/{uki}
+/LosOS Desktop
     comment: LosOS Desktop
     protocol: efi
     path: guid({boot}):/EFI/Linux/{uki}
@@ -81,10 +79,8 @@ pub struct Files {
 }
 
 pub struct Boot<'a> {
-    /// GRUB, with its menu and theme inside.
+    /// Limine's EFI program. Its menu is [`limine_conf`], written beside it.
     pub loader: &'a [u8],
-    /// An empty grubenv.
-    pub grubenv: &'a [u8],
 }
 
 /// Steps as the person sees them, and a progress percentage on one line.
@@ -179,12 +175,6 @@ pub fn run(
         EspFile {
             path: "EFI/losos/limine.conf".into(),
             bytes: conf.as_bytes(),
-            replace: true,
-        },
-        // Empty, so no trial an earlier install left goes on.
-        EspFile {
-            path: GRUBENV.into(),
-            bytes: boot.grubenv,
             replace: true,
         },
     ])?;

@@ -1,7 +1,7 @@
-# Secure Boot on a PC (docs/secure-boot.md): with LosOS's key, GRUB and every
-# UKI are signed, and shim, signed by Microsoft, starts GRUB once a person
-# has enrolled LosOS's certificate in MokManager. The ESP's files are
-# shim.nix's, put there by grub.nix; this signs the UKI, checks the key and
+# Secure Boot on a PC (docs/secure-boot.md): with LosOS's key, Limine and
+# every UKI are signed, and shim, signed by Microsoft, starts Limine once a
+# person has enrolled LosOS's certificate in MokManager. The ESP's files are
+# shim.nix's, put there by limine.nix; this signs the UKI, checks the key and
 # certificate belong together, and lets Settings ask shim to enroll the
 # certificate, so a person meets MokManager expecting it, with a code to
 # type, instead of a "Security Violation".

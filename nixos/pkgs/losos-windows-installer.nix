@@ -5,7 +5,7 @@
 #   runs, and `--image` installs into a disk image laid out like a Windows
 #   disk, which is how the install is checked without Windows;
 # - from windows-installer.nix, through pkgsCross.mingwW64, with the OS's own
-#   channel, release key, layout and GRUB compiled in: the .exe a
+#   channel, release key, layout and Limine compiled in: the .exe a
 #   release carries.
 #
 # The Windows build links with mingw's GNU ld, not mold: mold writes only
@@ -23,7 +23,6 @@
   arch ? null,
   usrSize ? null,
   loader ? null,
-  grubenv ? null,
 }:
 
 let
@@ -62,5 +61,4 @@ rustPlatform.buildRustPackage (
   // set "LOSOS_ARCH" arch
   // set "LOSOS_USR_SIZE" usrSize
   // set "LOSOS_LOADER" loader
-  // set "LOSOS_GRUBENV" grubenv
 )

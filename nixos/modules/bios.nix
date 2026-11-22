@@ -1,6 +1,6 @@
 # Legacy BIOS PCs, started by Limine from the MBR (docs/boot-loaders.md).
 #
-# UEFI firmware starts Limine from the ESP (grub.nix). This is for x86_64
+# UEFI firmware starts Limine from the ESP (limine.nix). This is for x86_64
 # PCs whose firmware has no UEFI, or has it turned off: the same disk, the
 # same /usr slots, the same menu and the same updates, started by Limine
 # from the MBR instead. Every disk the image or the installer lays out

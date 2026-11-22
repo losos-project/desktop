@@ -91,7 +91,7 @@ in
     ];
 
     partitions = {
-      # GRUB and grubenv go in from grub.nix, and the UKI from nixpkgs'
+      # Limine goes in from limine.nix, and the UKI from nixpkgs'
       # verity-store module.
       ${partitionIds.esp} = {
         repartConfig = {
@@ -139,7 +139,7 @@ in
   # how the initrd finds /usr from usrhash= on the command line, and
   # sysupdate gives a partition the UUID its source's name carries (@u).
   # The image with the image's own version's kernel, initrd and command
-  # line on the ESP beside its UKI (uki-files.nix), and on x86_64 GRUB
+  # line on the ESP beside its UKI (uki-files.nix), and on x86_64 Limine
   # in the MBR and the BIOS boot partition (bios.nix). Added afterwards
   # rather than given to repart, because the command line carries the
   # usrhash= repart only reports once /usr is built, and the ESP is made
@@ -165,8 +165,8 @@ in
         esp=$(jq -er '.[] | select(.type=="esp") | .offset' $out/repart-output.json)
         MTOOLS_SKIP_CHECK=1 mcopy -i "$out/${raw}@@$esp" \
           ${config.system.build.ukiFiles}/* ::/EFI/Linux/
-        ${lib.optionalString (config.system.build ? grubBiosInstall) ''
-          ${lib.getExe config.system.build.grubBiosInstall} $out/${raw}
+        ${lib.optionalString (config.system.build ? limineInstall) ''
+          ${lib.getExe config.system.build.limineInstall} $out/${raw}
         ''}
       '';
 
@@ -214,8 +214,8 @@ in
         echo "/usr is $(numfmt --to=iec "$usr") of its ${cfg.usrSize} slot"
 
         cp ${config.system.build.uki}/${ukiFile} ${prefix}_${arch.name}.efi
-        # What GRUB starts this version from on a BIOS PC or for the
-        # recovery shell (uki-files.nix), named as sysupdate fetches them.
+        # The kernel, initrd and command line Limine starts this version from
+        # on a BIOS PC (uki-files.nix), named as sysupdate fetches them.
         cp ${config.system.build.ukiReleaseFiles}/* .
         extract ${arch.usr}
         extract ${arch.usrVerity}

@@ -1,21 +1,19 @@
 # Files cut from each UKI, which sysupdate installs beside it in
-# $BOOT/EFI/Linux (docs/boot-loaders.md), for the boots where GRUB does not
-# simply chainload the UKI:
+# $BOOT/EFI/Linux (docs/boot-loaders.md), for the boots where Limine does
+# not simply chainload the UKI:
 #
-#   .grub    its command line, as a line of GRUB script, on every PC
+#   .cmdline its command line, one line, on every PC
 #   .linux   its kernel, x86_64 only
 #   .initrd  its initrd, x86_64 only
 #
-# An x86_64 BIOS cannot run a UKI, which is an EFI program, so there GRUB
-# starts the kernel and initrd with that command line (bios.nix). On UEFI,
-# a boot with losos_extra set, the recovery shell's (docs/troubleshooting.md),
-# needs the command line too: a UKI takes kernel arguments only in place of
-# its whole command line. x86_64 starts the kernel beside the UKI for it, as
-# its BIOS boot does. aarch64 has no BIOS, and its kernel is an uncompressed
-# Image of some 70 MiB, which two versions of beside two UKIs would nearly
-# fill the 512M ESP with, so its GRUB chainloads the UKI with the command
-# line and losos_extra as the UKI's arguments instead. systemd-stub takes
-# them while Secure Boot is off, and ignores them while it is on.
+# An x86_64 BIOS cannot run a UKI, which is an EFI program, so there Limine
+# starts the kernel and initrd with that command line (bios.nix,
+# limine-menu.sh). On UEFI, Limine chainloads the UKI and systemd-stub
+# starts the kernel with the command line built into it. aarch64 has no
+# BIOS, and its kernel is an uncompressed Image of some 70 MiB, which two
+# versions of beside two UKIs would nearly fill the 512M ESP with, so it
+# ships the command line and not the kernel. The command line is still
+# there for a menu that boots the kernel beside the UKI.
 {
   config,
   lib,
@@ -30,22 +28,22 @@ let
   inherit (config.system.boot.loader) ukiFile;
 
   suffixes = [
-    "grub"
+    "cmdline"
   ]
   ++ lib.optionals (arch.name == "x86_64") [
     "linux"
     "initrd"
   ];
 
-  # The root partition on the disk whose ESP GRUB started the kernel from,
-  # which the initrd's udev rule below links here.
+  # The root partition on the disk whose ESP Limine started the kernel
+  # from, which the initrd's udev rule below links here.
   loaderRoot = "/dev/disk/by-loader/root";
 
   partx = "${pkgs.util-linux}/bin/partx";
 
   # Succeeds when the disk $1 has a partition whose UUID is $2: the udev
-  # rule's test that a root partition sits on the same disk as the ESP GRUB
-  # named. It reads the disk's partition table itself rather than asking
+  # rule's test that a root partition sits on the same disk as the ESP
+  # Limine named. It reads the disk's partition table itself rather than asking
   # udev, which may not have seen the ESP yet.
   onLoaderDisk = pkgs.writeScript "losos-on-loader-disk" ''
     #!/bin/sh
@@ -73,13 +71,11 @@ let
   #
   # root=gpt-auto is replaced: systemd finds the root partition by type on
   # the disk the boot loader names in LoaderDevicePartUUID, an EFI variable,
-  # and a BIOS has none to set. In its place GRUB names the ESP it started
-  # the kernel from, as losos_esp, and the initrd's rule below finds root on
-  # that ESP's disk. A GRUB from before losos_esp sets nothing, and the line
-  # falls back to the root partition's label, which repart gives it from its
-  # type (disk.nix gives it none of its own): right with one LosOS disk in
-  # the machine, a coin toss with two. A UEFI boot with the line goes the
-  # same way, so every boot that uses it finds root alike.
+  # and a BIOS has none to set. In its place the command line names root by
+  # the link the initrd's rule below makes, and losos-limine-menu appends
+  # losos.esp= for the ESP Limine started the kernel from. The rule finds
+  # root on that ESP's disk, so another LosOS disk in the same machine is
+  # never mounted in its place.
   files =
     pkgs.runCommand "${id}_${version}-uki-files"
       {
@@ -95,22 +91,11 @@ let
           *" usrhash="*" root=gpt-auto "* | *" root=gpt-auto "*" usrhash="*) ;;
           *) echo "unexpected UKI command line: $cmdline" >&2; exit 1 ;;
         esac
-        # It goes into a double-quoted GRUB string, where these would mean
-        # something.
-        case "$cmdline" in
-          *[\"\$\\\']*) echo "UKI command line needs quoting: $cmdline" >&2; exit 1 ;;
-        esac
-        cmdline=''${cmdline/root=gpt-auto/root=\$losos_root}
+        # tr above made it one line, which is what limine.conf's cmdline: takes.
+        cmdline=''${cmdline/root=gpt-auto/root=${loaderRoot}}
 
         mkdir $out
-        {
-          echo 'if [ -n "$losos_esp" ]; then'
-          echo '  set losos_root="${loaderRoot} losos.esp=$losos_esp"'
-          echo 'else'
-          echo '  set losos_root="PARTLABEL=${arch.root}"'
-          echo 'fi'
-          printf 'set losos_cmdline="%s"\n' "$cmdline"
-        } > $out/${id}_${version}.grub
+        printf '%s\n' "$cmdline" > $out/${id}_${version}.cmdline
         ${lib.optionalString (arch.name == "x86_64") ''
           cp ${config.boot.uki.settings.UKI.Linux} $out/${id}_${version}.linux
           cp ${config.boot.uki.settings.UKI.Initrd} $out/${id}_${version}.initrd
@@ -135,8 +120,8 @@ let
   '';
 
   # Each of them as a sysupdate transfer, installed beside the UKI in
-  # $BOOT/EFI/Linux, where grub.cfg reads only *.efi names and finds these
-  # by the UKI's.
+  # $BOOT/EFI/Linux, beside the UKI. losos-limine-menu finds them by the
+  # UKI's name.
   # They belong to the same version set as the UKI and the /usr slot
   # (update.nix), so a version is installed with all of them or not at all.
   transfer = suffix: {
@@ -163,19 +148,19 @@ in
   };
 
   systemd.sysupdate.transfers = {
-    "42-uki-grub" = transfer "grub";
+    "42-uki-cmdline" = transfer "cmdline";
   }
   // lib.optionalAttrs (arch.name == "x86_64") {
     "40-uki-linux" = transfer "linux";
     "41-uki-initrd" = transfer "initrd";
   };
 
-  # What LoaderDevicePartUUID gives gpt-auto under a UKI GRUB chainloads
+  # What LoaderDevicePartUUID gives gpt-auto under a UKI Limine chainloads
   # with nothing added: root on the disk the boot came from, so another
   # LosOS disk in the same machine is never mounted in its place. losos.esp=
-  # is on the command line only when GRUB put the .grub file's line there.
-  # The rule is in the running system too, so the link the command line
-  # names is still there after the switch to it.
+  # is on the command line only when Limine put the .cmdline file's line
+  # there, which a BIOS boot does. The rule is in the running system too,
+  # so the link the command line names is still there after the switch to it.
   boot.initrd.services.udev.rules = loaderRootRule;
   services.udev.extraRules = loaderRootRule;
   boot.initrd.systemd = {

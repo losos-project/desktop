@@ -56,8 +56,8 @@ and install" button. Then:
    could not do that while the kernel still knew an old partition with the
    same number.
 2. `systemd-repart --empty=force` lays out the ESP, with the files
-   `grub.nix` puts on the image's ESP copied in (Limine, a first menu with
-   no entries, its wallpaper and an empty `grubenv`), a BIOS boot partition
+   `limine.nix` puts on the image's ESP copied in (Limine, a first menu with
+   no entries, and its wallpaper), a BIOS boot partition
    for Limine on x86_64, and both
    `/usr` slots at full size, labelled `_empty`. sysupdate refuses a disk
    with only one slot. These are `disk.nix`'s own definitions, so the disk is

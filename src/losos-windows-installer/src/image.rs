@@ -183,7 +183,7 @@ impl Target for Image {
 
     fn add_boot_entry(&mut self, description: &str, loader: &str) -> Result<()> {
         // An image file has no firmware to tell. QEMU's boots the
-        // removable-media path, which the QEMU check puts GRUB at.
+        // removable-media path, which the QEMU check puts Limine at.
         tracing::info!("no firmware to add \"{description}\" ({loader}) to: this is an image");
         Ok(())
     }

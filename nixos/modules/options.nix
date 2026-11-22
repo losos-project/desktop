@@ -214,7 +214,7 @@ in
         default = if builtins.pathExists ../keys/secure-boot.crt then ../keys/secure-boot.crt else null;
         defaultText = lib.literalMD "`nixos/keys/secure-boot.crt`, when it is there";
         description = ''
-          The X.509 certificate, in PEM, of the key that signs GRUB and the
+          The X.509 certificate, in PEM, of the key that signs Limine and the
           UKIs for Secure Boot (secure-boot.nix). It goes on the ESP for
           MokManager to enroll, and the firmware starts nothing it did not
           sign once that is done.
@@ -232,7 +232,7 @@ in
           needs `sandbox = relaxed` and the file readable by its build
           users (the nixbld group). The flake sets it from
           LOSOS_SECURE_BOOT_KEY, which CI points at the repository secret
-          SECURE_BOOT_KEY (docs/secure-boot.md). Without it GRUB and the
+          SECURE_BOOT_KEY (docs/secure-boot.md). Without it Limine and the
           UKIs are not signed and no shim is installed.
         '';
       };
@@ -279,7 +279,7 @@ in
     .${hostPlatform.parsed.cpu.name}
       or (throw "losos: unsupported architecture ${hostPlatform.parsed.cpu.name}")
     // {
-      # GRUB's file names on the ESP and the stub are named after the EFI
+      # Limine's file names on the ESP and the stub are named after the EFI
       # machine type, which nixpkgs already knows: x64, aa64.
       efi = hostPlatform.efiArch;
     };
