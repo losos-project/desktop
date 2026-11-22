@@ -8,7 +8,7 @@ nothing that key did not sign.
 
 ```
 UEFI  firmware (Microsoft's keys) -> ESP: shim, signed by Microsoft
-        -> GRUB, signed with LosOS's key, checked against the MOK list
+        -> Limine, signed with LosOS's key, checked against the MOK list
         -> the UKI, signed with LosOS's key, checked by shim the same way
         -> systemd-stub -> the kernel and initrd inside the UKI
 ```
@@ -44,7 +44,7 @@ keyboard agreed, so any user on the machine may read it.
 
 The first time a PC with Secure Boot on starts LosOS without the key
 enrolled, from an installed disk or from the [installer
-ISO](installer.md), shim cannot check GRUB yet and says so:
+ISO](installer.md), shim cannot check Limine yet and says so:
 
 1. "Verification failed: (0x1A) Security Violation" shows. Press Enter.
 2. "Shim UEFI key management" shows for ten seconds. Press any key before it
@@ -60,7 +60,7 @@ ISO](installer.md), shim cannot check GRUB yet and says so:
 
 5. Choose **Continue**, then **Yes** to enroll the key, then **Reboot**.
 
-GRUB's menu shows next, and LosOS starts. The key stays in the firmware's
+Limine's menu shows next, and LosOS starts. The key stays in the firmware's
 memory, so the installed system starts too if the key was enrolled from the
 installer, and every later update starts without asking again.
 
@@ -83,20 +83,20 @@ Secure Boot"` shows the kernel loading LosOS's certificate from the MOK list.
 | --- | --- |
 | `EFI/BOOT/BOOTX64.EFI` (`BOOTAA64.EFI` on arm64) | shim, at the path firmware starts with no boot entry |
 | `EFI/BOOT/grubx64.efi` | Limine, signed with LosOS's key, which shim starts. The name stays `grub`, because that is the file shim loads |
-| `EFI/BOOT/mmx64.efi` | MokManager, which shim starts when GRUB fails its check |
+| `EFI/BOOT/mmx64.efi` | MokManager, which shim starts when Limine fails its check |
 | `EFI/losos/shimx64.efi`, `grubx64.efi`, `mmx64.efi` | the same three, for a firmware entry of LosOS's own |
 | `ENROLL_THIS_KEY_IN_MOKMANAGER.cer` | LosOS's certificate, in the DER form MokManager reads |
 
 `losos-grub-update` writes them at the first boot of each version, as it
-writes GRUB. It also puts shim in front of a GRUB or systemd-boot an older
-install left at the removable-media path. A disk installed before signed
+writes Limine. It also puts shim in front of the Limine, GRUB or systemd-boot
+an older install left at the removable-media path. A disk installed before signed
 releases gets shim and the certificate with its first signed update, and
 keeps starting with Secure Boot off until someone turns it on and enrolls
 the key.
 
 Without a key, as in a build from a fork or on a machine that has none, the
-ESP holds GRUB alone at `EFI/BOOT/BOOTX64.EFI`, unsigned. Such an image
-starts only with Secure Boot off. With it on, the firmware refuses GRUB and
+ESP holds Limine alone at `EFI/BOOT/BOOTX64.EFI`, unsigned. Such an image
+starts only with Secure Boot off. With it on, the firmware refuses Limine and
 finds nothing else to start:
 
 ![OVMF's boot screen: "failed to load Boot0002 ... Access Denied -- rejected probably by Secure Boot", then "No bootable option or device was found"](images/secure-boot-refused.png)
@@ -120,10 +120,15 @@ byte would break Microsoft's signature.
   GRUB and kernels. That machine already starts any distribution's shim, so
   this adds nothing it did not already trust.
 
-shim refuses a GRUB whose SBAT generation is older than its revocation list.
-`nixos/modules/grub-image.nix` gives GRUB the `grub,5` generation, which
-GRUB 2.14 qualifies for, and a `grub.losos` line LosOS would raise if it ever
-had to revoke its own builds.
+shim refuses a boot loader whose SBAT generation is older than its
+revocation list, and looks for that generation in the loader's `.sbat`
+section. LosOS signs Limine's EFI program from nixpkgs as it is, and that
+program has no `.sbat` section; LosOS adds none.
+
+> [!WARNING]
+> shim 16 refuses, with Secure Boot on, a loader without SBAT data. Until
+> `checks.x86_64-linux.secure-boot` passes with Limine, do not count on a
+> signed release starting with Secure Boot on.
 
 shim is BSD-licensed, and redistributing it in binary form needs this
 notice:
@@ -187,7 +192,7 @@ those releases would ask people to enroll a key nothing was signed with.
 
 The signing steps (`sign` in `nixos/modules/shim.nix`) are the only builds
 that read the key. Each one reads it with no sandbox around it, checks that
-it belongs to the certificate, and signs one file, GRUB or a UKI. So a
+it belongs to the certificate, and signs one file, Limine or a UKI. So a
 builder that signs needs `sandbox = relaxed` in `nix.conf` and the key
 readable by the `nixbld` group, and the flake needs `--impure` to see the
 variable:
@@ -206,33 +211,32 @@ instead would show it to every build, fetchers with network access included.
 
 ## While Secure Boot is on
 
-- GRUB is locked down. It starts the UKI as signed and ignores
-  `losos_extra`, so [the recovery
-  shell](troubleshooting.md#no-one-can-administer-the-machine) needs Secure
-  Boot turned off in the firmware first. The kernel beside the UKI is not
-  signed, and its command line could not be checked if it were.
-- systemd-stub uses only the command line built into the UKI. It already
-  did, since GRUB never passes a UKI any arguments.
+- systemd-stub uses only the command line built into the UKI, and ignores
+  any it is given.
 - The kernel's lockdown and module signing are as
-  [kernel hardening](kernel-hardening.md) describes, on every boot GRUB
-  starts: each one carries the command line built into the UKI, or the one
-  cut from it beside it. Secure Boot adds GRUB's own lockdown, which refuses
-  a kernel hand-rolled at GRUB's prompt, and that the next kernel is checked
-  too.
+  [kernel hardening](kernel-hardening.md) describes, on every boot: each one
+  carries the command line built into the UKI, or on a BIOS the one cut from
+  it beside it.
+- Limine's menu editor stays on (`editor_enabled: yes` in the menu
+  [`losos-limine-menu`](boot-loaders.md#the-menu) writes). Whether Limine
+  refuses an unsigned kernel started from an edited entry while Secure Boot
+  is on has not been checked for LosOS yet.
 
 ## Tested
 
 `checks.x86_64-linux.secure-boot` boots the image with OVMF's Microsoft
 keys, Secure Boot on and a test key in the MOK list. It checks that the
 firmware reports Secure Boot on, that the kernel loaded the test
-certificate from the MOK list, that GRUB chainloaded the UKI, and that the
-security report passes its Secure Boot check. The other boot tests use the
-same signed layout with Secure Boot off, so `boot` also checks that an
-update puts shim, GRUB and MokManager in place of an older GRUB or
-systemd-boot.
+certificate from the MOK list, that `LoaderInfo` names Limine, that `/usr`
+is under dm-verity, and that the security report passes its Secure Boot
+check. The other boot tests use the same signed layout with Secure Boot off,
+so `boot` also checks that an update puts shim, Limine and MokManager in
+place of an older boot loader.
 
 MokManager's enrollment was walked through by hand under QEMU with the same
-firmware and no key enrolled. shim refused GRUB, MokManager enrolled
-`ENROLL_THIS_KEY_IN_MOKMANAGER.cer` from the ESP, and after the reboot GRUB
-started its menu and the kernel reported Secure Boot on. The screenshots
-above are from that run.
+firmware and no key enrolled, while LosOS still booted with GRUB. shim
+refused GRUB, MokManager enrolled `ENROLL_THIS_KEY_IN_MOKMANAGER.cer` from
+the ESP, and after the reboot GRUB started its menu and the kernel reported
+Secure Boot on. The screenshots above are from that run, and the shim and
+MokManager screens they show have not changed. The walk-through has not been
+repeated with Limine.

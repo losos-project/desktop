@@ -46,22 +46,25 @@ without it. Then it:
    They are named, typed, flagged read-only and given the UUIDs the
    release's file names carry, exactly as sysupdate would write them,
    because that is how the initrd finds `/usr` from `usrhash=`.
-8. Copies GRUB to `\EFI\losos\` on Windows' EFI system partition, with an
-   empty `grubenv` beside it, and adds a firmware boot entry for it at the
+8. Copies Limine to `\EFI\losos\` on Windows' EFI system partition, as
+   `grub<arch>.efi`, with a `limine.conf` that starts LosOS's UKI from the
+   XBOOTLDR partition and an empty `grubenv` beside it, and adds a firmware
+   boot entry for it at the
    front of the boot order. The entry is a copy of Windows Boot Manager's
    own with the file swapped, so it points at the same disk in the same way.
    Some Windows updates and some firmware put Windows Boot Manager first
    again. Every LosOS start that reaches `boot-complete.target` moves the
    LosOS entry back to the front, through `losos-boot-order` in `grub.nix`,
-   and GRUB's menu still offers Windows.
+   and Limine's menu offers Windows from LosOS's first boot on.
 9. Offers to restart.
 
 If any step after the shrink fails, it removes what it added and gives C:
 its space back.
 
-At the next start, GRUB offers LosOS from the XBOOTLDR partition, and Windows
-Boot Manager, which it [finds on the ESP](boot-loaders.md#grubs-menu) by
-itself. LosOS's first boot then does what it does after `dd`. `disk.nix`
+At the next start, Limine offers LosOS from the XBOOTLDR partition. LosOS's
+first boot rewrites the menu with `losos-limine-menu`, which also adds Windows
+Boot Manager when it [finds it on the ESP](boot-loaders.md#the-menu). That
+boot then does what it does after `dd`. `disk.nix`
 creates slot B, root, `/home` and swap in the rest of the space, and
 first-boot setup asks for an account. Windows' partitions are never touched
 again.
@@ -74,7 +77,7 @@ back into the space.
 ## The layout
 
 ```
-ESP                  Windows' own, ~100M: Windows Boot Manager, GRUB
+ESP                  Windows' own, ~100M: Windows Boot Manager, Limine
 MSR                  Windows' own
 C:                   shrunk
 LosOS boot           XBOOTLDR, 512M: the UKIs              installer
@@ -86,11 +89,11 @@ root, home, swap                                           first boot
 Recovery             Windows' own, left where it was
 ```
 
-![The disk before, after the installer and after the first boot: C: shrinks; the installer adds LosOS boot, verity A and usr A and puts GRUB on Windows' ESP; the first boot fills the rest with slot B, root, home and swap; Recovery stays where it was](images/windows-installer.svg)
+![The disk before, after the installer and after the first boot: C: shrinks; the installer adds LosOS boot, verity A and usr A and puts Limine on Windows' ESP; the first boot fills the rest with slot B, root, home and swap; Recovery stays where it was](images/windows-installer.svg)
 
 Windows makes its ESP 100 MB, with its own partitions right behind it, so
 the ESP cannot grow and has no room for two UKIs of about 45 MB each. So the
-UKIs go on an XBOOTLDR partition, which GRUB reads beside the ESP.
+UKIs go on an XBOOTLDR partition, which Limine reads beside the ESP.
 `update.nix` writes them to `$BOOT`, which is that partition where there is
 one and the ESP otherwise. `disk.nix` accepts whatever ESP the disk has and
 no longer asks for 512 MB of it. With that minimum, repart could not grow
@@ -102,8 +105,8 @@ found its root.
 
 ## Secure Boot, BitLocker, fast startup
 
-- **Secure Boot** must be off. The installer registers GRUB itself with the
-  firmware, and a signed GRUB still needs shim in front of it to start with
+- **Secure Boot** must be off. The installer registers Limine itself with the
+  firmware, and a signed Limine still needs shim in front of it to start with
   Secure Boot on ([Secure Boot](secure-boot.md)). Putting shim there from
   Windows is [not done](not-done.md). The installer says so and stops before
   changing anything.
@@ -111,7 +114,7 @@ found its root.
   a boot manager in front of Windows' changes that chain. So the installer
   suspends protection on C: with `DisableKeyProtectors` until Windows has
   started twice. That lets BitLocker reseal itself to the new chain the first
-  time Windows comes up through GRUB. The installer still tells the user to
+  time Windows comes up through Limine. The installer still tells the user to
   keep the recovery key at hand. It refuses a drive that is encrypting or
   decrypting, because such a drive cannot be shrunk safely.
 - **Fast startup** hibernates Windows' kernel instead of shutting it down,
@@ -134,8 +137,8 @@ the boot loader's menu with LosOS and Windows Boot Manager, ran first boot,
 and left C: and recovery byte-for-byte as they were.
 
 > [!NOTE]
-> That check was made when the loader was still systemd-boot; with GRUB it
-> has not been run again.
+> That check was made when the loader was still systemd-boot; with GRUB and
+> then Limine it has not been run again.
 
 Only a Windows machine can test what `windows.rs` does: shrinking C:,
 writing the partition table through `IOCTL_DISK_SET_DRIVE_LAYOUT_EX`,

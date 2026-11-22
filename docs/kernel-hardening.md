@@ -50,9 +50,9 @@ boots. Nothing can lower it afterwards: a write to
 itself takes `integrity` or `confidentiality` and nothing else, so there is
 no word a boot loader could add to undo it. `sig_enforce` is an enable-only
 switch: once on, nothing turns it off. And the command line is built into
-the UKI, which GRUB starts without arguments ([Secure
-Boot](secure-boot.md)), so nothing between power and boot can put another
-one in its place. Confidentiality mode would also stop root from reading
+the UKI, which Limine's menu entries start without arguments ([Boot
+loader](boot-loaders.md#the-menu)), so the menu as written puts no other one
+in its place. Its editor can, as Not done below says. Confidentiality mode would also stop root from reading
 kernel memory through perf, kprobes, tracefs and BPF. That takes profilers
 and tracing away from anyone developing on the machine, and the gain only
 matters once root is the attacker and the boot chain is signed.
@@ -114,14 +114,15 @@ Linux privilege escalation bugs have gone through it.
 - **Secure Boot off.** Lockdown protects the kernel that is running, not the
   next one. With Secure Boot off, or on an image built without LosOS's key,
   root can still write a kernel of its choosing to the ESP and reboot into
-  it. The same machines have GRUB's prompt, and a kernel started there
-  without its command line runs without the lockdown and the signature
-  enforcement, which are asked for on the command line: press `c`, and
-  `linux` starts the kernel beside a UKI with no arguments of the release's
-  in it. A BIOS machine has no Secure Boot to turn on, so there the prompt
-  is always this open. With [Secure Boot](secure-boot.md) on and LosOS's key
-  enrolled, GRUB locks itself down, the prompt needs it off in the firmware
-  first, and the firmware and shim refuse a kernel that key did not sign.
+  it. The same machines have Limine's menu editor, and a kernel started
+  from an edited entry without its command line runs without the lockdown
+  and the signature enforcement, which are asked for on the command line:
+  press `E`, and an entry can be made to start the kernel beside a UKI with
+  a command line of anyone's choosing. A BIOS machine has no Secure Boot to
+  turn on, so there the editor is always this open. With [Secure
+  Boot](secure-boot.md) on and LosOS's key enrolled, the firmware and shim
+  refuse a boot loader or UKI that key did not sign; whether Limine also
+  refuses an unsigned kernel from an edited entry has not been checked yet.
 - **The pre-boot DMA window.** `efi=disable_early_pci_dma` would clear bus
   mastering on PCI bridges before the kernel's IOMMU takes over. It is left
   off because the kernel's own help for it warns that it breaks some
