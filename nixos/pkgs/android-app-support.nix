@@ -43,12 +43,13 @@ let
   # sys-img/google_apis_playstore/sys-img2-3.xml) listed them. The sizes
   # are the archives', for the setup's progress and its disk check; the
   # hashes are taken from the archives themselves, whose SHA-1s match the
-  # ones Google lists.
+  # ones Google lists. Both are hex: the setup feeds them to `sha256sum -c`,
+  # which reads no other form.
   emulator = {
     build = "16740729";
     version = "37.2.13";
     url = "https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip";
-    sha256 = "sha256-y8fDz7gyILig+cUT/atVdxLnTTOewZ3f+kPyM1Cum90=";
+    sha256 = "cbc7c3cfb83220b8a0f9c513fdab557712e74d339ec19ddffa43f23350ae9bdd";
     size = 349658551;
   };
   # Android 17 (API level 37.2) with Google Play, in its 16 KB page size
