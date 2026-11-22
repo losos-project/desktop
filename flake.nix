@@ -120,7 +120,7 @@
       reportClientId = builtins.getEnv "LOSOS_REPORT_CLIENT_ID";
 
       # Where the private half of nixos/keys/secure-boot.crt is on this
-      # builder, which signs GRUB and the UKIs for Secure Boot
+      # builder, which signs Limine and the UKIs for Secure Boot
       # (docs/secure-boot.md). CI writes the repository secret
       # SECURE_BOOT_KEY there, readable by the build users, and only the
       # signing steps read it. Unset, the images are unsigned and start with
@@ -316,9 +316,9 @@
           boot = pkgs.testers.runNixOSTest (import ./nixos/tests/boot.nix { inherit self; });
           # Driver choice from facter's report (hardware.nix, nvidia.nix).
           hardware = pkgs.testers.runNixOSTest ./nixos/tests/hardware.nix;
-          # The same image on a legacy BIOS, started by GRUB (bios.nix).
+          # The same image on a legacy BIOS, started by Limine (bios.nix).
           boot-bios = pkgs.testers.runNixOSTest (import ./nixos/tests/boot-bios.nix { inherit self; });
-          # The same image with Secure Boot on: shim, the signed GRUB and
+          # The same image with Secure Boot on: shim, the signed Limine and
           # the signed UKI, and the Security page's check passing
           # (secure-boot.nix).
           secure-boot = pkgs.testers.runNixOSTest (import ./nixos/tests/secure-boot.nix { inherit self; });
@@ -453,7 +453,7 @@
                 qemu-img create -f qcow2 -F qcow2 -b ${config.system.build.qcow2} "$disk" 40G
               fi
               # The firmware's variable store is per machine and writable:
-              # GRUB records which loader started and from which
+              # Limine records which loader started and from which
               # partition there.
               if [ ! -e "$vars" ]; then
                 install -m 0644 ${pkgs.OVMF.variables} "$vars"
