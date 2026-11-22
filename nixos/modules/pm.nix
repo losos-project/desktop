@@ -80,6 +80,47 @@
     };
   };
 
+  # The Machines app will not make a machine until this account's copy of
+  # the libvirt plugin is signed by a key the account trusts. derisk offers
+  # a button for that, and a fresh account never finds it: the button sits
+  # under a card and New machine stays quiet. Doing the same copy and
+  # `pm sign` at login makes the key on this computer, for this account,
+  # rather than shipping a signature in the image. The other plugins stay
+  # unsigned until the person signs them.
+  systemd.user.services.losos-pm-machines = {
+    description = "Sign pm's libvirt plugin so this account can make machines";
+    wantedBy = [ "graphical-session-pre.target" ];
+    before = [ "graphical-session.target" ];
+    unitConfig.ConditionUser = "!@system";
+    path = [
+      pkgs.pm
+      pkgs.coreutils
+    ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      shipped=/run/current-system/sw/share/pm/plugins/libvirt.wasm
+      if [ ! -f "$shipped" ]; then
+        exit 0
+      fi
+      config=''${XDG_CONFIG_HOME:-$HOME/.config}
+      plugins="$config/pm/plugins"
+      mkdir -p "$plugins"
+      installed="$plugins/libvirt.wasm"
+      signature="$installed.sig"
+      if [ ! -f "$installed" ] || ! cmp -s "$shipped" "$installed"; then
+        install -m 0644 "$shipped" "$installed"
+      fi
+      # pm sign makes a key and trusts it the first time. A signature older
+      # than the plugin is what the Machines app calls unsigned.
+      if [ ! -f "$signature" ] || [ "$installed" -nt "$signature" ]; then
+        pm sign "$installed"
+      fi
+    '';
+  };
+
   security.polkit.extraConfig = lib.mkMerge [
     ''
       // pm manages units without asking anyone: pmd --system has already

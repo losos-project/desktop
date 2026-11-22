@@ -1025,3 +1025,22 @@ fn a_declined_sign_in_says_so() {
         report::send(&target, &report, &report.body, &scratch.0, &cancel, |_| {}).unwrap_err();
     assert!(error.contains("declined"), "{error}");
 }
+
+#[test]
+fn a_refused_download_is_explained_in_plain_words() {
+    let after = install::explain_failure("systemd-sysupdate failed (exit status: 1)", false);
+    assert!(!after.contains("systemd-sysupdate"), "{after}");
+    assert!(after.contains("partitioned"), "{after}");
+
+    let before = install::explain_failure("curl failed (exit status: 22)", true);
+    assert!(
+        before.contains("nothing on the disk was changed"),
+        "{before}"
+    );
+    assert!(!before.contains("curl failed"), "{before}");
+
+    // A disk that is busy is not a download failure, and the reason stays.
+    let busy =
+        "vda has a partition in use, so it cannot be erased: blockdev failed (exit status: 1)";
+    assert_eq!(install::explain_failure(busy, true), busy);
+}
