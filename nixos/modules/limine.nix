@@ -412,9 +412,9 @@ in
   # registered, so this image needs no efibootmgr and no install step; and
   # a copy at the path of its own that the Windows installer registers with
   # the firmware, where Windows' fallback owns the first one.
-  image.repart.partitions.${partitionIds.esp}.contents = lib.mapAttrs (
-    _: source: { inherit source; }
-  ) starters;
+  image.repart.partitions.${partitionIds.esp}.contents = lib.mapAttrs (_: source: {
+    inherit source;
+  }) starters;
 
   # As systemd-bless-boot.service is wired: after boot-complete.target,
   # which systemd-boot-check-no-failures gates (boot.nix), pulled in early

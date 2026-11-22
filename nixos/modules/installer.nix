@@ -194,10 +194,7 @@ let
       # Run on the disk once it is installed, so a legacy BIOS PC starts it
       # too; null where there is no BIOS (aarch64).
       biosBoot =
-        if config.system.build ? limineInstall then
-          lib.getExe config.system.build.limineInstall
-        else
-          null;
+        if config.system.build ? limineInstall then lib.getExe config.system.build.limineInstall else null;
     };
   };
 
