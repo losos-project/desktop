@@ -50,5 +50,5 @@ text { font-family: Inter, "Segoe UI", system-ui, -apple-system, "Helvetica Neue
 <text x="413.0" y="286" class="s" text-anchor="middle">sysupdate writes the slot not in use</text>
 <path d="M585,204 L585,212 L806,212 L806,204" fill="none" stroke="#fb7185" stroke-width="1.6"/>
 <text x="695.5" y="231" text-anchor="middle" style="fill:#fb7185">FactoryReset=yes: emptied by a reset</text>
-<text x="25" y="318" class="s">Dashed: x86_64 only. GRUB also puts its boot code in the MBR, for a PC without UEFI.</text>
+<text x="25" y="318" class="s">Dashed: x86_64 only. Limine also puts its boot code in the MBR, for a PC without UEFI.</text>
 </svg>

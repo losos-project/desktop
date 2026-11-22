@@ -211,7 +211,7 @@
   then booted. The half that talks to Windows has only been compiled. That
   half shrinks C:, issues the partition table IOCTLs, mounts the ESP, and
   handles firmware variables and BitLocker. Beyond that:
-  - **Secure Boot must be off.** The installer registers GRUB itself with
+  - **Secure Boot must be off.** The installer registers Limine itself with
     the firmware, not shim, and has not been taught to put shim, MokManager
     and the certificate beside it ([Secure Boot](secure-boot.md)).
   - **SmartScreen.** The `.exe` has no Authenticode signature, so Windows
@@ -314,12 +314,14 @@
   driver on a private bus, which offers no Performance profile. The Halium
   GSI has no Bluetooth, because the phone's controller sits behind its vendor
   HAL and nothing here bridges that to BlueZ.
-- **A recovery shell on an aarch64 PC.** The boot menu's root shell for a
+- **A recovery shell under UEFI.** The boot menu's root shell for a
   machine nobody can administer, described in [When something goes
-  wrong](troubleshooting.md#no-one-can-administer-the-machine), starts the
-  kernel kept beside the UKI for a BIOS boot. Only x86_64 images carry that
-  kernel. An aarch64 PC's GRUB can only chainload its UKI, and a UKI takes
-  kernel arguments only as a replacement for its whole command line.
+  wrong](troubleshooting.md#no-one-can-administer-the-machine), is an edit
+  of a BIOS entry's command line in Limine's menu. A UEFI entry chainloads
+  the UKI and has no command line to edit, and a UKI takes kernel arguments
+  only as a replacement for its whole command line. So neither an x86_64 PC
+  under UEFI nor an aarch64 PC has a worked-out way to the shell since the
+  switch from GRUB to Limine.
 - **A PIN at startup is the installer's only.** [The
   installer](installer.md#asking-for-a-pin-at-startup) encrypts root with a
   TPM and a PIN when asked, but a PC set up from a written image, first-boot
@@ -347,8 +349,8 @@
 - **Booted under QEMU only.** Every CI run boots the x86_64 image in QEMU
   with `nix flake check`, under UEFI and under SeaBIOS, as "Tested" in
   [Boot loader](boot-loaders.md) describes. First boot lays out the disk with
-  systemd-repart. Root is found, by gpt-auto on UEFI and on the disk GRUB
-  names on a BIOS. `/usr` is dm-verity, and a new UKI is counted down and
+  systemd-repart. Root is found, by gpt-auto on UEFI and on the disk the
+  boot loader names on a BIOS. `/usr` is dm-verity, and a new UKI is counted down and
   blessed. A laptop with a TPM hibernates and resumes. The installer ISO
   starts under both firmwares. An install from a nightly's files was run in
   QEMU through to the installed disk's first boot, so sysupdate has written

@@ -4,7 +4,7 @@ Which systemd component does which job:
 
 | Job | Component |
 |---|---|
-| Boot | `systemd-stub` (UKI), `boot-check-no-failures`, and Plymouth for the splash; GRUB is the boot loader, on UEFI and on a legacy BIOS PC |
+| Boot | `systemd-stub` (UKI), `boot-check-no-failures`, and Plymouth for the splash; Limine is the boot loader, on UEFI and on a legacy BIOS PC |
 | Installation | a live ISO runs `derisk installer` as its session, with NetworkManager for Wi-Fi; its backend runs `systemd-repart` for the ESP and slot A, and `systemd-sysupdate` to fill them from the channel |
 | First boot | `systemd-repart` in the initrd creates slot B, root, `/home` and swap; `derisk setup` asks for a language, keyboard, time zone, network and the first user, saved through localed, timedated and homed |
 | Read-only `/usr` | the Nix store on a dm-verity partition, with its root hash on the UKI's command line; `systemd-sysext` and `systemd-confext` add layers on top |

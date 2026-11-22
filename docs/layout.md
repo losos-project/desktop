@@ -10,8 +10,8 @@ partition holds only state, which is `/etc`'s writable layer, `/var` and the
 journal.
 
 ```
-BIOS boot    GRUB's core, for a legacy BIOS (x86_64)  image
-ESP          GRUB, the UKIs                          image
+BIOS boot    Limine's BIOS stage (x86_64)            image
+ESP          Limine, its menu, the UKIs              image
 usr-verity A dm-verity hash tree for slot A          image
 usr A        the Nix store, erofs with Zstandard     image, grown on first boot
 usr-verity B                                         first boot, label _empty
@@ -32,7 +32,7 @@ swap         RAM-sized, a new key each boot          first boot (losos-swap)
 > the slots shipped with passed in early November 2026 (8.2G compressed),
 > which is why they now hold 16G, with 256M verity partitions to match.
 
-On x86_64, GRUB's boot code is also in the MBR, so a PC without UEFI starts
+On x86_64, Limine's boot code is also in the MBR, so a PC without UEFI starts
 the same disk through the same [boot loader](boot-loaders.md).
 
 Swap's key is random and nobody keeps it, so it is new every boot and nothing
