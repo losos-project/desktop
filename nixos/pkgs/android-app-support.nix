@@ -48,7 +48,8 @@ let
     build = "16740729";
     version = "37.2.13";
     url = "https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip";
-    sha256 = "sha256-y8fDz7gyILig+cUT/atVdxLnTTOewZ3f+kPyM1Cum90=";
+    # Hex, not Nix SRI: android-app-support.sh checks the file with sha256sum.
+    sha256 = "cbc7c3cfb83220b8a0f9c513fdab557712e74d339ec19ddffa43f23350ae9bdd";
     size = 349658551;
   };
   # Android 17 (API level 37.2) with Google Play, in its 16 KB page size

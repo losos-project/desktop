@@ -23,16 +23,14 @@ let
       "qemu-system-aarch64"
     else
       throw "losos-installer-try-live: no QEMU target for ${hostPlatform.system}";
+  # firmware and variables are already the pflash files for this
+  # platform: OVMF_CODE.fd / OVMF_VARS.fd on x86_64, AAVMF_CODE.fd /
+  # AAVMF_VARS.fd on aarch64. nixpkgs no longer has a separate AAVMF package.
   ovmf =
-    if isx86_64 then
+    if isx86_64 || isAarch64 then
       {
-        code = "${pkgs.OVMF.firmware}/FV/OVMF_CODE.fd";
+        code = pkgs.OVMF.firmware;
         vars = pkgs.OVMF.variables;
-      }
-    else if isAarch64 then
-      {
-        code = "${pkgs.OVMF.firmware}/FV/AAVMF_CODE.fd";
-        vars = pkgs.AAVMF.variables;
       }
     else
       null;
