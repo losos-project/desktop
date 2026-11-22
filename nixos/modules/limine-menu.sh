@@ -29,7 +29,11 @@ add_uki() {
   else
     return 0
   fi
-  printf '%s\t%s\t%s\t%s\t%s\n' "$version" "$left" "$base" "$uuid" "$on_esp" >> "$work/ukilist"
+  # bash read collapses empty IFS-whitespace fields, and a tab is
+  # whitespace. An uncounted UKI has no "+tries", so this field would be
+  # empty and the partition UUID would slide into the file name. Limine
+  # then chainloads guid(1):/EFI/Linux/<esp-uuid> and panics.
+  printf '%s\t%s\t%s\t%s\t%s\n' "$version" "${left:--}" "$base" "$uuid" "$on_esp" >> "$work/ukilist"
 }
 
 scan_tree() {
@@ -154,6 +158,9 @@ fi
   while IFS=$'\t' read -r spent version left file uuid on_esp; do
     [ -n "$file" ] || continue
     [ -n "$spent" ] || continue
+    if [ "$left" = "-" ]; then
+      left=
+    fi
     count=$((count + 1))
     title=$name
     if [ "$left" = 0 ]; then

@@ -266,7 +266,7 @@ in
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      ExecStart = "${lib.getExe pkgs.systemd}/bin/systemctl start --no-block losos-installer-try-live.service";
+      ExecStart = "${lib.getExe' pkgs.systemd "systemctl"} start --no-block losos-installer-try-live.service";
     };
   };
 
