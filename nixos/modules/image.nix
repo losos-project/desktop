@@ -241,7 +241,7 @@ in
       ''
         mkdir -p $out
         cd $out
-        cp -a --link ${config.system.build.updateImages}/. . || cp -a ${config.system.build.updateImages}/. .
+        cp -a --no-preserve=ownership --link ${config.system.build.updateImages}/. . || cp -a --no-preserve=ownership ${config.system.build.updateImages}/. .
 
         xz --threads=$NIX_BUILD_CORES -c ${image}/${raw} > ${prefix}_${arch.name}.raw.xz
         cp ${config.system.build.installerIso} ${prefix}_${arch.name}-installer.iso

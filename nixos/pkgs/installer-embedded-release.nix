@@ -28,7 +28,7 @@ pkgs.runCommand "${prefix}-installer-embedded-release"
   ''
     payload=$(mktemp -d)
     cd "$payload"
-    cp -a --link ${payloads}/. . || cp -a ${payloads}/. .
+    cp -a --no-preserve=ownership --link ${payloads}/. . || cp -a --no-preserve=ownership ${payloads}/. .
 
     sha256sum -- * > SHA256SUMS
 
