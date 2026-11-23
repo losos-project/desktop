@@ -50,9 +50,9 @@
     derisk.url = "git+https://github.com/losos-project/derisk";
     mcsapi.url = "git+https://github.com/losos-project/mcsapi";
     pm.url = "git+https://github.com/losos-project/pm";
-    derisk.flake = false;
-    mcsapi.flake = false;
-    pm.flake = false;
+    derisk.flake = true;
+    mcsapi.flake = true;
+    pm.flake = true;
 
     # Only for the check that builds the Home Manager module (nixos/home/pm.nix)
     # into a real Home Manager generation. A user's own Home Manager is what
