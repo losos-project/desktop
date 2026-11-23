@@ -45,15 +45,14 @@ on:
 permissions:
   contents: read
 
-# A newer push to a pull request cancels the run already going. Runs that
-# publish queue instead, so none is killed half-way through an upload. The
-# cadence is part of the group because cadence.yml can start a weekly, a
-# monthly and a yearly run on the same tag at once, and a group holds one
-# waiting run: a third would cancel the second. A pull request's runs are
-# grouped by its branch, the same runs as by its merge ref.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ inputs.cadence }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Concurrency is per job, not on the workflow. One workflow group queued
+# every main run behind the previous one, so a superseded build held the
+# next commit for hours. A newer push or pull request cancels the build
+# jobs it replaces. The group is per job (and per architecture), so one
+# run's jobs still run together. A cadence promotion is a different group
+# and is not cancelled. push and publish never cancel: an upload already
+# going is left to finish, and a weekly, a monthly and a yearly promotion
+# can upload at once.
 
 # The cadence the images are built for, `losos.channel` (flake.nix reads
 # it): what a system installed from them updates from until someone picks
@@ -71,6 +70,9 @@ jobs:
   # not in the history, runs everything. A job left out is skipped, which
   # `ci` accepts only when this job said so.
   changes:
+    concurrency: &build-concurrency
+      group: ci-build-${{ github.job }}-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -127,6 +129,9 @@ jobs:
   # is kept, running out of time passes with a warning, a failed derivation
   # turns it red. A retry of either job starts from what the cache holds.
   prebuild:
+    concurrency: &build-arch-concurrency
+      group: ci-build-${{ github.job }}-${{ matrix.arch }}-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes]
     if: needs.changes.outputs.image == 'true'
     strategy: &arches
@@ -427,6 +432,7 @@ jobs:
   # with it ignores the run being cancelled, so a pull request's newer push
   # waited hours for the older run's flake check and VM tests to finish.
   flake:
+    concurrency: *build-arch-concurrency
     needs: [changes, prebuild]
     if: ${{ !cancelled() && needs.changes.outputs.image == 'true' && needs.prebuild.result != 'cancelled' }}
     strategy: *arches
@@ -673,6 +679,11 @@ jobs:
   # A push to main that left the image alone (tools/ci-changes) skips `flake`,
   # and so this and `publish`: there is no new image to release.
   push:
+    concurrency: &publish-concurrency
+      # Never cancel. A newer commit may cancel the build; an upload that
+      # has already started still publishes that commit.
+      group: ci-publish-${{ github.ref }}-${{ inputs.cadence }}
+      cancel-in-progress: false
     needs: [flake]
     if: always() && github.event_name != 'pull_request' && needs.flake.result != 'cancelled' && needs.flake.result != 'skipped'
     runs-on: ubuntu-24.04
@@ -820,6 +831,7 @@ jobs:
   # nothing, and neither waits for nor holds back the build or the release;
   # `ci` still requires it. `nix fmt` locally rewrites what this rejects.
   format:
+    concurrency: *build-concurrency
     needs: [changes]
     if: needs.changes.outputs.format == 'true'
     runs-on: ubuntu-24.04
@@ -874,6 +886,7 @@ jobs:
   # The GHCR proxy: its decisions in Rust, then the handler against a fake
   # registry. Nothing is deployed from here.
   proxy:
+    concurrency: *build-concurrency
     needs: [changes]
     if: needs.changes.outputs.proxy == 'true'
     runs-on: ubuntu-24.04
@@ -902,6 +915,7 @@ jobs:
   # downloads Android from Google as a person's setup does, so it builds
   # nothing big and needs neither the image nor the project's cache.
   android:
+    concurrency: *build-concurrency
     needs: [changes]
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
@@ -962,6 +976,7 @@ jobs:
   # which the runner's own KVM passes on to it. The image builds from the
   # project's cache like `flake`'s, compiling only what this change touched.
   android-desktop:
+    concurrency: *build-concurrency
     needs: [changes]
     if: needs.changes.outputs.android-desktop == 'true'
     runs-on: ubuntu-24.04
@@ -1013,6 +1028,7 @@ jobs:
   # the copy derisk's error dialogs open. Anything else builds it in
   # `flake`, with the release.
   docs:
+    concurrency: *build-concurrency
     needs: [changes]
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-24.04
@@ -1050,6 +1066,7 @@ jobs:
   # The one check branch protection looks for, so a cancelled job, or one
   # skipped that `changes` said should run, never reads as green.
   ci:
+    concurrency: *build-concurrency
     needs: [changes, prebuild, flake, format, proxy, android, android-desktop, docs]
     if: always()
     runs-on: ubuntu-24.04
@@ -1116,6 +1133,7 @@ jobs:
   # releases while those installed from a nightly keep following the
   # nightlies.
   publish:
+    concurrency: *publish-concurrency
     needs: [push]
     if: always() && needs.push.result == 'success'
     runs-on: ubuntu-24.04
