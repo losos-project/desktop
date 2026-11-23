@@ -19,7 +19,7 @@ if command -v rustup >/dev/null 2>&1; then
     rustup target add wasm32-unknown-unknown
 fi
 
-cargo build --locked --release --target wasm32-unknown-unknown
+CARGO_BUILD_JOBS=1 cargo build --locked --release --target wasm32-unknown-unknown
 cp target/wasm32-unknown-unknown/release/losos_proxy.wasm api/losos_proxy.wasm
 
 # Vercel rejects an empty output directory even when every route is a function.

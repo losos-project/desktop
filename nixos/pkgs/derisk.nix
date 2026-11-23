@@ -97,7 +97,7 @@ let
     CARGO_PROFILE_RELEASE_LTO = "off";
     CARGO_PROFILE_WASM_PLUGIN_LTO = "off";
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16";
-    CARGO_BUILD_JOBS = "2";
+    CARGO_BUILD_JOBS = "1";
   };
 
   # rten-gemm (rten 0.26.0) does not compile against nixpkgs rustc 1.98 on

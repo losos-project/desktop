@@ -35,6 +35,8 @@ defaults:
 jobs:
   linux:
     runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: FFmpeg and xkbcommon to build against
@@ -81,6 +83,8 @@ jobs:
         runner: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: FFmpeg for the client
@@ -108,6 +112,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     env:
+      CARGO_BUILD_JOBS: "1"
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

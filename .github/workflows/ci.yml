@@ -891,6 +891,8 @@ jobs:
     if: needs.changes.outputs.proxy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "1"
     defaults:
       run:
         working-directory: proxy
