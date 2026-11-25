@@ -243,7 +243,7 @@ in
         cd $out
         # -a would copy the update-images directory's 0555 mode onto $out;
         # after a cross-filesystem --link failure the fallback could not write.
-        cp -a --no-preserve=ownership,mode --link ${config.system.build.updateImages}/. . \
+        cp -a --no-preserve=ownership,mode --link ${config.system.build.updateImages}/. . 2>/dev/null \
           || cp -a --no-preserve=ownership,mode ${config.system.build.updateImages}/. .
 
         xz --threads=$NIX_BUILD_CORES -c ${image}/${raw} > ${prefix}_${arch.name}.raw.xz
