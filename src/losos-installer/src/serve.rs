@@ -116,8 +116,9 @@ pub fn github(config: &Config) -> Option<install::GitHub> {
     })
 }
 
-/// Where an embedded release is mounted on the ISO when the medium carries one.
-const EMBEDDED_RELEASE: &str = "/iso/release";
+/// Where an embedded release is mounted when the medium carries one. The
+/// squashfs lives on the ISO, but its mount point cannot: /iso is read-only.
+const EMBEDDED_RELEASE: &str = "/run/losos/embedded-release";
 
 /// The release to install from: an attached release disk, or the copy on the
 /// ISO when there is one.

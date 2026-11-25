@@ -94,7 +94,7 @@ then follows its configured channel.
 When the installer ISO is built from this repository, it grafts the same flake's
 sysupdate files as `release.squashfs` (`installer-embedded-release.nix`) and the
 desktop disk image as `try.qcow2` for an ephemeral try session. A install reads
-the release at `/iso/release` instead of the network, and derisk skips the
+the release at `/run/losos/embedded-release` instead of the network, and derisk skips the
 Network page. CI sets `UPDATE_SIGNING_KEY_FILE` so the embedded manifest matches
 what published releases use; a local build without it checks file hashes only.
 Choose **Try LosOS Desktop** on the welcome page, or the matching Limine entry

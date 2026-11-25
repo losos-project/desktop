@@ -24,8 +24,10 @@ let
 
   # Where a release disk is mounted, when one is attached.
   releaseDisk = "/run/losos/release";
-  # Where the embedded release is mounted when the ISO carries one.
-  embeddedRelease = "/iso/release";
+  # Where the embedded release is mounted when the ISO carries one. /iso is
+  # the medium's read-only ISO 9660 filesystem, so systemd cannot create a
+  # mount point there; /run is a tmpfs.
+  embeddedRelease = "/run/losos/embedded-release";
 
   tryLive = pkgs.callPackage ../pkgs/losos-installer-try-live.nix { };
 

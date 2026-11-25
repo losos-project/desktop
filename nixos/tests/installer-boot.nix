@@ -85,6 +85,10 @@ in
     machine.${if bios then "fail" else "succeed"}("test -d /sys/firmware/efi")
     machine.succeed("findmnt --kernel /iso")
     machine.succeed("findmnt --kernel /nix/store")
+    # The squashfs is read from the medium, but mounted on tmpfs: /iso is
+    # read-only, so a mount point there makes iso-release.mount fail and takes
+    # derisk-installer.service down with it.
+    machine.succeed("findmnt --kernel /run/losos/embedded-release")
     machine.wait_for_unit("derisk-installer.service")
     machine.succeed(
         "systemctl show derisk-installer.service --property=TTYPath --value "
