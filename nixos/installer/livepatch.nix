@@ -29,14 +29,9 @@ let
     inherit configJson;
   };
 
-  x11Fallback = pkgs.callPackage ../pkgs/losos-installer-x11.nix { };
-
   session = pkgs.writeShellApplication {
     name = "losos-installer-session";
-    runtimeInputs = [
-      pkgs.derisk
-      pkgs.coreutils
-    ];
+    runtimeInputs = [ pkgs.derisk ];
     text = ''
       set -euo pipefail
       default_derisk=${lib.getExe pkgs.derisk}
@@ -47,36 +42,6 @@ let
       fi
       derisk=''${DERISK:-$default_derisk}
       backend=''${BACKEND:-$default_backend}
-
-      # The video devices virt-manager offers by default cannot draw the
-      # compositor's GBM buffers: QXL has no GBM scanout, and virtio-vga
-      # without 3D acceleration has no virgl renderer. Both still make a
-      # working X display, so run the same installer through winit there.
-      # The driver can be forced with LOSOS_INSTALLER_X11_DRIVER for other
-      # virtual video devices.
-      virtual_gpu_driver() {
-        local vendor device card
-        for card in /sys/class/drm/card*/device; do
-          [ -r "$card/vendor" ] || continue
-          read -r vendor < "$card/vendor" || continue
-          device=$(cat "$card/device" 2>/dev/null || true)
-          case "$vendor:$device" in
-            0x1b36:0x0001) echo qxl; return 0 ;; # QXL
-            0x1af4:0x1042|0x1af4:0x1050) echo fbdev; return 0 ;; # virtio GPU
-          esac
-        done
-        return 1
-      }
-
-      driver=''${LOSOS_INSTALLER_X11_DRIVER:-}
-      if [ -z "$driver" ]; then
-        driver=$(virtual_gpu_driver || true)
-      fi
-      if [ -n "$driver" ]; then
-        export LOSOS_INSTALLER_X11_DRIVER="$driver"
-        exec ${lib.getExe x11Fallback} "$derisk" "$driver" "$backend" "$@"
-      fi
-
       exec "$derisk" installer -- "$backend" "$@"
     '';
   };
