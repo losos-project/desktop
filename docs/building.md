@@ -12,7 +12,7 @@ deployment instead, and pings it.
 ```sh
 nix build --impure              # the disk image: dd it to a disk and boot
 nix build .#installer --impure  # the installer ISO; grafts the local release
-                               # payload and try.qcow2. Pass UPDATE_SIGNING_KEY_FILE
+                               # payload and try.squashfs. Pass UPDATE_SIGNING_KEY_FILE
                                # on the runner (as CI does) to sign the manifest.
 nix build .#release --impure    # the files CI publishes
 nix run .#vm --impure           # boot the image in QEMU with UEFI firmware

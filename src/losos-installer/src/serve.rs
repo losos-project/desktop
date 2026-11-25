@@ -135,7 +135,7 @@ pub fn release(config: &Config) -> Option<&Path> {
 
 /// Whether the medium carries an ephemeral try image.
 pub fn live_available() -> bool {
-    Path::new("/iso/try.qcow2").is_file()
+    Path::new("/iso/try.squashfs").is_file()
 }
 
 pub fn hello(config: &Config) -> Value {
@@ -473,7 +473,7 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
             }
             Request::TryLive if !live_available() => {
                 let _ = events.send(failed(
-                    "Try LosOS is not on this medium (try.qcow2 is missing).",
+                    "Try LosOS is not on this medium (try.squashfs is missing).",
                 ));
             }
             Request::TryLive => {

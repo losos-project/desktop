@@ -277,10 +277,9 @@ in
       payloads = config.system.build.updateImages;
     };
 
-  # The desktop qcow2 the same flake built, for an ephemeral try session from
-  # the installer (installer/default.nix, losos-installer-try-live.nix).
-  system.build.installerTryQcow2 = config.system.build.qcow2;
-
+  # A qcow2 of the same disk for `nix run .#vm`. The installer ISO grafts the
+  # raw disk instead (modules/try.nix): a device-mapper snapshot of it gives a
+  # Try session a writable layer without a nested hypervisor.
   system.build.qcow2 =
     pkgs.runCommand "${id}_${version}.qcow2" { nativeBuildInputs = [ pkgs.buildPackages.qemu-utils ]; }
       ''
