@@ -241,7 +241,10 @@ in
       ''
         mkdir -p $out
         cd $out
-        cp -a --no-preserve=ownership --link ${config.system.build.updateImages}/. . || cp -a --no-preserve=ownership ${config.system.build.updateImages}/. .
+        # -a would copy the update-images directory's 0555 mode onto $out;
+        # after a cross-filesystem --link failure the fallback could not write.
+        cp -a --no-preserve=ownership,mode --link ${config.system.build.updateImages}/. . \
+          || cp -a --no-preserve=ownership,mode ${config.system.build.updateImages}/. .
 
         xz --threads=$NIX_BUILD_CORES -c ${image}/${raw} > ${prefix}_${arch.name}.raw.xz
         cp ${config.system.build.installerIso} ${prefix}_${arch.name}-installer.iso
