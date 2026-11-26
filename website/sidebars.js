@@ -45,7 +45,6 @@ module.exports = {
       label: 'Desktop and apps',
       collapsed: false,
       items: [
-        'gtk-qt-phone',
         'icon-theme',
         'danube',
         'adblock',
@@ -70,7 +69,7 @@ module.exports = {
       type: 'category',
       label: 'Building blocks',
       collapsed: false,
-      items: ['trust', 'packages', 'binary-cache', 'pm'],
+      items: ['trust', 'binary-cache', 'pm'],
     },
     {
       type: 'category',

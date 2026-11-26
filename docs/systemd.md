@@ -1,6 +1,6 @@
 # Everything systemd, and the exceptions
 
-Which systemd component does which job:
+Which systemd component does each job, and where LosOS uses something else.
 
 | Job | Component |
 |---|---|
@@ -20,32 +20,28 @@ Which systemd component does which job:
 
 ![A machine's life: the installer lays out the disk with systemd-repart and fills slot A with systemd-sysupdate; first boot creates slot B, root, home and swap; derisk setup creates the first account with homectl; homed opens each person's home at login; sysupdate writes the idle slot and boot counting keeps or gives up the new version; a factory reset empties root and home](images/systemd.svg)
 
-A non-systemd component remains only where systemd has no equivalent, or
-where NixOS requires one:
+A non-systemd component stays only where systemd has no equivalent or NixOS
+requires one:
 
-- **nsncd.** The `homed` module asserts `services.nscd.enable`. NixOS routes
-  NSS through a forwarder so that a libc can find `nss-systemd` in the store,
-  and glibc's NSS uses it for that. It is stateless and keeps no record of
-  its own about who exists.
-- **NetworkManager.** networkd has no Wi-Fi of its own, so it needed
-  wpa_supplicant's control socket beside it. And every app that asks whether
-  it is online, such as GLib, the portal and Flatpaks, asks NetworkManager.
-  It runs with NixOS's defaults and hands DNS to resolved.
-- **nftables.** systemd has no packet filter. The pm tree shipped none at
-  all. This image keeps NixOS's firewall and opens mDNS and LLMNR for
-  resolved.
-- **A PAM stack.** The pm tree shipped none, and its `docs/limits.md` said
-  nothing in the image could authenticate anyone. NixOS generates one, with
-  `pam_systemd_home` in all four management groups. That is what makes a
-  login open the home area, instead of succeeding and finding it locked.
+- nsncd. NixOS's `homed` module asserts `services.nscd.enable`, so that glibc
+  can find `nss-systemd` in the store through a forwarder. nsncd is stateless
+  and keeps no record of who exists.
+- NetworkManager. networkd has no Wi-Fi of its own and would need
+  wpa_supplicant next to it. Apps that ask whether they are online, such as
+  GLib, the portal and Flatpaks, ask NetworkManager. It runs with NixOS's
+  defaults and hands DNS to resolved.
+- nftables. systemd has no packet filter. The image keeps NixOS's firewall and
+  opens mDNS and LLMNR for resolved.
+- A PAM stack. NixOS generates one, with `pam_systemd_home` in all four
+  management groups, so a login unlocks the home instead of finding it locked.
+  The old pm tree had no PAM, so nothing in that image could authenticate
+  anyone.
 
-In these places the image uses the systemd equivalent where NixOS would
-otherwise pick something else:
+In these places the image picks the systemd tool where NixOS would pick
+something else:
 
-- pm's system service, which drives systemd as its own user, instead of
-  sudo, su or run0;
-- resolved's mDNS instead of avahi;
-- `systemd-sysusers` instead of the perl user script;
-- the `/etc` overlay instead of activation scripts writing files;
-- first-boot setup making the first user with homectl, where NixOS would
-  have no way to create one at all.
+- pm's system service, driving systemd as its own user, instead of sudo, su or run0.
+- resolved's mDNS instead of avahi.
+- `systemd-sysusers` instead of the Perl user script.
+- The `/etc` overlay instead of activation scripts writing files.
+- First-boot setup creating the first user with homectl. NixOS has no way to do that at all.

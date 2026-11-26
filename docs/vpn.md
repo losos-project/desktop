@@ -15,8 +15,8 @@ losos-vpn                         # vpn=, endpoint= and machine= lines
 losos-vpn off
 ```
 
-The host keeps the choice in `/var/lib/losos-vpn`, root's alone, so it
-stays as it was left across restarts and updates. The host's half is
+The host keeps the choice in `/var/lib/losos-vpn`, readable only by root, so
+it survives restarts and updates. The host's half is
 `nixos/modules/vpn.nix`, the machine `nixos/guest/vpn.nix`, and the program
 on both `src/losos-vpn`.
 
@@ -30,31 +30,30 @@ on both `src/losos-vpn`.
 sys-vpn sits between the [network machine](network-machine.md) and the
 internet:
 
-- **sys-net hands it everything.** While a VPN is set, the network machine
-  routes the host's and the other machines' connections to sys-vpn's
-  inside address, `10.154.0.10`, instead of out through its cards. Its own
-  networks stay reachable directly. The ad blocker's forwarder asks the
-  provider's DNS servers, from the file's `DNS` line, through the tunnel;
-  a file without one gets Quad9's, still through the tunnel.
-- **sys-vpn sends it into the tunnel.** Its inside reaches the tunnel and
-  nothing else. Its uplink, with sys-net as its router, carries only the
-  tunnel's own packets and one DNS lookup, the provider's endpoint.
-- **It fails closed.** While sys-vpn's link is not there, sys-net's table
-  for it leads nowhere. While the tunnel is down, sys-vpn's does too. If
-  the last handshake is more than three minutes old, sys-vpn looks the
-  endpoint up again and makes a new tunnel.
-- **It is disposable.** sys-vpn has no disk. Every start is a new machine
-  from the image, with the tunnel file the host hands it read-only, and
-  setting a provider starts a new one. Like the Tor gateway, it is
-  Kicksecure-hardened NixOS ([Schizo mode](schizo-mode.md), "Service machines"),
-  and it is hidden from the Machines app.
+1. While a VPN is set, sys-net routes the host's and machines' connections to
+   sys-vpn's inside address, `10.154.0.10`, instead of out through its cards.
+   Its own networks stay reachable directly. The ad blocker's forwarder asks
+   the provider's DNS servers, from the file's `DNS` line, through the tunnel,
+   or Quad9's if the file has none.
+2. sys-vpn's inside reaches the tunnel and nothing else. Its uplink, with
+   sys-net as router, carries only the tunnel's packets and one DNS lookup for
+   the provider's endpoint.
 
-**With an edge.** If a [LosOS edge](network-machine.md) is set as well,
-sys-vpn's uplink leaves through the edge's tunnel, so the VPN rides inside
-the edge's.
+It fails closed. While sys-vpn's link is missing, sys-net's table for it leads
+nowhere, and while the tunnel is down, sys-vpn's does too. If the last
+handshake is more than three minutes old, sys-vpn looks the endpoint up again
+and builds a new tunnel.
 
-**In schizo mode** it is the Tor gateway's uplink that sys-net hands to
-sys-vpn, so the network sees a VPN and the VPN sees only Tor.
+sys-vpn is disposable. It has no disk: every start is a fresh machine from the
+image with the tunnel file the host hands it read-only, and setting a provider
+starts a new one. Like the Tor gateway, it is Kicksecure-hardened NixOS
+([Service machines](schizo-mode.md#service-machines)), hidden from the Machines
+app.
+
+If a [LosOS edge](network-machine.md#through-an-edge) is set too, sys-vpn's
+uplink leaves through the edge's tunnel, so the VPN rides inside the edge's. In
+schizo mode, sys-net hands sys-vpn the Tor gateway's uplink, so the network
+sees a VPN and the VPN sees only Tor.
 
 ## The WireGuard file
 
@@ -62,9 +61,9 @@ Every provider below gives out WireGuard files in the form `wg-quick`
 reads. `losos-vpn set` checks the file on the host before it keeps it, and
 sys-vpn checks it again before the tunnel goes up. It takes:
 
-- one `[Interface]` with a `PrivateKey` and at least one IPv4 `Address`;
-- one `[Peer]` with a `PublicKey`, an `Endpoint` and `AllowedIPs` that
-  include `0.0.0.0/0`, so everything goes through it.
+- One `[Interface]` with a `PrivateKey` and at least one IPv4 `Address`.
+- One `[Peer]` with a `PublicKey`, an `Endpoint` and `AllowedIPs` that include
+  `0.0.0.0/0`, so everything goes through it.
 
 It refuses `PreUp`, `PostUp`, `PreDown`, `PostDown`, `SaveConfig`,
 `Table` and `FwMark`. The first four are commands `wg-quick` runs as root,
@@ -92,7 +91,7 @@ was checked: Sweden's, Switzerland's and Gibraltar's need an account or a
 fee. The IVPN owner comes from a forum post citing the company, and AirVPN
 names no team at all, only Paolo Brini as its contact.
 
-**Left out: Kape Technologies.** ExpressVPN, Private Internet Access,
+Kape Technologies is left out. ExpressVPN, Private Internet Access,
 CyberGhost and ZenMate belong to Kape. Kape was Crossrider, an ad-injection
 platform that Malwarebytes flagged as adware. It renamed itself in 2018 and
 bought those four between 2017 and 2021 ([The Register](https://www.theregister.com/2021/09/14/expressvpn_bought_kape/)).
