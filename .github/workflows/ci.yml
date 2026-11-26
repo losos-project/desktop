@@ -173,7 +173,12 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache /usr/share/swift \
-            /usr/local/share/boost /usr/local/share/powershell
+            /usr/local/share/boost /usr/local/share/powershell \
+            /usr/local/share/chromium /usr/local/share/vcpkg \
+            /usr/share/miniconda /opt/microsoft /usr/local/julia* \
+            /opt/az /usr/local/share/phantomjs
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          sudo apt-get clean >/dev/null 2>&1 || true
           df -h /
 
       # The official installer is pinned, rather than using a third party's
@@ -206,6 +211,16 @@ jobs:
             # sandbox (nixos/modules/shim.nix, __noChroot); every other
             # build is sandboxed as before.
             echo "sandbox = relaxed"
+            # The release keeps every guest template's raw disk until the
+            # qcow2 that replaces it is the only thing still referenced.
+            # Without a collection those disks, the host image and the
+            # installer's copies fill the runner: the 2026-11-26 flake
+            # jobs died with "No space left on device" an hour into
+            # "Build the release", after the runner's own log could no
+            # longer be written. Collect once free space is under 20G,
+            # and stop once 60G is free.
+            echo "min-free = 21474836480"
+            echo "max-free = 64424509440"
             if [ -n "$NIX_CACHE_URL" ] && [ -n "$NIX_CACHE_PUBLIC_KEY" ]; then
               echo "substituters = https://cache.nixos.org/ $NIX_CACHE_URL"
               echo "trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= $NIX_CACHE_PUBLIC_KEY"
