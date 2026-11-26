@@ -1,10 +1,12 @@
 # System-wide ad blocking
 
 `losos-adblock` blocks ads and trackers for every app on the OS, from the same
-EasyList-style filter lists. Its code is in `src/losos-adblock` and its module
-in `nixos/modules/adblock.nix`. It works in two halves.
+EasyList-style filter lists. The code is in `src/losos-adblock` and the module
+in `nixos/modules/adblock.nix`. It has two halves.
 
-**DNS, for every app.** resolved sends every name to losos-adblock's
+### DNS, for every app
+
+resolved sends every name to losos-adblock's
 forwarder on `169.254.153.53:53`. NetworkManager gives resolved a dummy
 link, `adblock0`, whose one DNS server is the forwarder. That link handles
 every domain and comes ahead of each network's own servers, so those servers
@@ -17,13 +19,15 @@ byte to the servers the network gave instead. It asks NetworkManager for
 those with `nmcli`, and asks again whenever none of them answers.
 
 This half covers Flatpaks, the Android layer and anything else that resolves
-names, but it can only block whole domains. A local network's names still
-resolve through its server. A bare name such as `printer` no longer gets the
-network's search domain appended, though. resolved's own DNS over TLS is off,
+names, but it blocks only whole domains. A local network's names still resolve
+through its server, but a bare name such as `printer` no longer gets the
+network's search domain appended. resolved's own DNS over TLS is off,
 because resolved talks to the forwarder, which encrypts on the way out
 instead.
 
-**Content blockers, in the browser.** Some rules need a URL or a page, such
+### Content blockers, in the browser
+
+Some rules need a URL or a page, such
 as a path like `/banner/ad_` or an element to hide like
 `example.org##.sponsored`. Brave's `adblock` crate compiles those into WebKit
 content blocker rule sets, and [Danube](danube.md) loads them into every
@@ -34,22 +38,21 @@ compile them twice.
 
 ## Encrypted DNS
 
-Plain DNS shows every name the machine looks up to whoever carries its
-traffic, such as the Wi-Fi's owner or the ISP, and lets them answer in the
-server's place. So the forwarder asks its upstream servers over an encrypted
-connection, which those carriers see only as a connection to a resolver.
-It speaks both protocols:
+Plain DNS shows every name you look up to whoever carries your traffic, such
+as the Wi-Fi's owner or your ISP, and lets them answer in the server's place.
+So the forwarder asks its upstream servers over an encrypted connection, which
+those carriers see only as a connection to a resolver. It speaks both
+protocols:
 
-- **DNS over HTTPS** (RFC 8484), one POST per query on port 443. To the
-  network it looks like any web page.
-- **DNS over TLS** (RFC 7858), DNS's own framing inside TLS on port 853.
-  Being on a port of its own, it is easy for a network to block or single
-  out.
+- DNS over HTTPS (RFC 8484): one POST per query on port 443, which looks like
+  any web traffic to the network.
+- DNS over TLS (RFC 7858): DNS framing inside TLS on port 853. Its dedicated
+  port makes it easy for a network to block or single out.
 
 `losos.adblock.encryptedDns.servers` lists the servers, tried in order. By
-default these are Quad9 and Mullvad over HTTPS, then the same two over
-TLS. Both operators are non-profit or keep no logs, and neither filters
-anything, since the blocking is the machine's own. A server is written as
+default these are Quad9 and Mullvad over HTTPS, then the same two over TLS.
+Both operators are non-profit or keep no logs, and neither filters anything,
+because the blocking happens on the machine. A server is written as
 its URL, `https://host/path` or `tls://host`, followed by the addresses to
 reach it at:
 
@@ -58,9 +61,8 @@ https://dns.quad9.net/dns-query 9.9.9.9 149.112.112.112 2620:fe::fe 2620:fe::9
 tls://dns.mullvad.net 194.242.2.2 2a07:e340::2
 ```
 
-The forwarder never looks those addresses up. That lookup would be one
-plain query, and its answer would decide which server is trusted. The
-certificate is still checked against the host in the URL, from the
+The forwarder never looks those addresses up, because that one plain query
+would decide which server is trusted. The certificate is still checked against the host in the URL, from the
 system's CA store. A server that failed is tried after the others for a
 minute, so a network that blocks port 853 costs one timeout, not one per
 query. Connections stay open between queries.
@@ -101,22 +103,21 @@ lets DNS through.
 
 While `/run/losos-adblock/upstreams-forced` exists, encrypted DNS stands
 aside, and the forwarder asks only the servers `/run/losos-adblock/upstreams`
-names. Schizo mode sets both to send every name to its Tor gateway, whose DNS port puts each
-destination's lookups on a circuit of their own and resolves `.onion`
-names, neither of which one resolver behind one encrypted connection
-would do. Both files live in `/run`, so a machine that stops with them in
-place comes back without them, and the person's own mode is never touched.
+names. Schizo mode sets both to send every name to its Tor gateway, whose DNS
+port puts each destination's lookups on its own circuit and resolves `.onion`
+names, which a single encrypted resolver can't do. Both files live in `/run`,
+so they are gone after a restart, and your own mode is never touched.
 
-Settings › Network offers the three modes under **Encrypted DNS**, with a
-line saying where names go, and greys the choice out while schizo mode or
-an edge forces the servers. `losos-adblock encrypted-dns on|strict|off|status`
-changes or shows the mode from a terminal. `losos.adblock.encryptedDns.mode` sets the OS's default, and
-`/var/lib/losos-adblock/encrypted-dns` records the person's choice: the
-mode on its first line, and optionally servers of their own after it, one
-per line, which replace the OS's. An administrator changes the mode
-without a root shell by starting `losos-adblock-encrypted-dns@on.service`,
-`@strict` or `@off`, and polkit asks for their password. The running
-forwarder notices within a second.
+The **Network** page in Settings offers the three modes under **Encrypted
+DNS**, with a line saying where names go, and greys the choice out while schizo
+mode or an edge forces the servers. From a terminal,
+`losos-adblock encrypted-dns on|strict|off|status` changes or shows the mode.
+`losos.adblock.encryptedDns.mode` sets the OS default, and
+`/var/lib/losos-adblock/encrypted-dns` records your choice: the mode on the
+first line, then optionally your own servers, one per line, which replace the
+OS's. An administrator can change the mode without a root shell by starting
+`losos-adblock-encrypted-dns@on.service`, `@strict` or `@off`, with polkit
+asking for the password. The running forwarder notices within a second.
 
 ## Lists
 
