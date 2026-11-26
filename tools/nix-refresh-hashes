@@ -20,13 +20,32 @@
 # only its own fetches. Every pinned hash a lockfile moves is fetched on both
 # architectures alike, so the x86_64 release covers them; what only aarch64
 # fetches (the GSI's sources) is pinned to archives no lockfile moves.
-# Prints each rewritten file. A fetch that fails for another reason is a
-# warning, not a failure, so one unreachable upstream does not stop the rest.
+# Prints each rewritten file. A fetch that fails for another reason is tried
+# for every changed pin, then the script exits non-zero so a lockfile update
+# cannot land with an unchecked hash.
 set -euo pipefail
 
 usage() {
   sed -n 's/^#   //p' "$0" >&2
   exit 2
+}
+
+# Store path of a derivation JSON key. Determinate Nix 2.35 keys omit the
+# /nix/store/ prefix; older nix derivation show keeps it.
+drv_path() {
+  case "$1" in
+    /nix/store/*) printf '%s\n' "$1" ;;
+    *) printf '/nix/store/%s\n' "$1" ;;
+  esac
+}
+
+# SRI form of a fixed-output hash. Matching against the .nix pins needs
+# sha256-…=; some nix versions still emit hex in derivation show.
+sri_hash() {
+  case "$1" in
+    sha256-*=) printf '%s\n' "$1" ;;
+    *) nix hash convert --hash-algo sha256 --to sri "$1" ;;
+  esac
 }
 
 # "<derivation> <hash>" for every fixed-output derivation in this
@@ -44,7 +63,10 @@ list() {
   nix derivation show -r "$release" "$x2mcsapi" |
     jq -r '.derivations | to_entries[]
       | select(.value.outputs.out.hash? != null)
-      | "/nix/store/\(.key) \(.value.outputs.out.hash)"' |
+      | "\(.key)\t\(.value.outputs.out.hash)"' |
+    while IFS=$'\t' read -r key hash; do
+      printf '%s %s\n' "$(drv_path "$key")" "$(sri_hash "$hash")"
+    done |
     awk 'NR == FNR { pinned[$1]; next } $2 in pinned' "$work/pinned" - | sort -u
 }
 
@@ -60,6 +82,7 @@ before=$1
 list > "$work/after"
 : > "$work/rewritten"
 changed=0
+unchecked=0
 while read -r drv hash; do
   grep -qxF "$drv $hash" "$before" && continue
   # Several derivations can share one pinned hash; the first fixes it.
@@ -73,8 +96,16 @@ while read -r drv hash; do
   fi
   got=$(sed -n 's/^ *got: *\(sha256-[A-Za-z0-9+/]*=\)$/\1/p' "$work/log" | tail -1)
   if [ -z "$got" ]; then
+    # Older nix prints nix32 hashes; turn those into SRI when present.
+    got=$(sed -n 's/^ *got: *\([0-9a-z]\{52\}\)$/\1/p' "$work/log" | tail -1)
+    if [ -n "$got" ]; then
+      got=$(sri_hash "$got")
+    fi
+  fi
+  if [ -z "$got" ]; then
     tail -n 20 "$work/log" >&2
-    echo "::warning::Could not fetch $drv again, so its hash $hash is unchecked."
+    echo "::error::Could not fetch $drv again, so its hash $hash is unchecked."
+    unchecked=$((unchecked + 1))
     continue
   fi
   git ls-files -z '*.nix' | xargs -0 grep -lF "$hash" |
@@ -86,3 +117,7 @@ while read -r drv hash; do
   changed=$((changed + 1))
 done < "$work/after"
 echo "$changed pinned hash(es) rewritten."
+if [ "$unchecked" -gt 0 ]; then
+  echo "$unchecked changed pinned hash(es) left unchecked." >&2
+  exit 1
+fi

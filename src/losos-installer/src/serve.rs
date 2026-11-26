@@ -116,8 +116,9 @@ pub fn github(config: &Config) -> Option<install::GitHub> {
     })
 }
 
-/// Where an embedded release is mounted on the ISO when the medium carries one.
-const EMBEDDED_RELEASE: &str = "/iso/release";
+/// Where an embedded release is mounted when the medium carries one. The
+/// squashfs lives on the ISO, but its mount point cannot: /iso is read-only.
+const EMBEDDED_RELEASE: &str = "/run/losos/embedded-release";
 
 /// The release to install from: an attached release disk, or the copy on the
 /// ISO when there is one.
@@ -134,7 +135,7 @@ pub fn release(config: &Config) -> Option<&Path> {
 
 /// Whether the medium carries an ephemeral try image.
 pub fn live_available() -> bool {
-    Path::new("/iso/try.qcow2").is_file()
+    Path::new("/iso/try.squashfs").is_file()
 }
 
 pub fn hello(config: &Config) -> Value {
@@ -472,7 +473,7 @@ pub fn run(config: &Config, input: impl BufRead, output: impl Write + Send + 'st
             }
             Request::TryLive if !live_available() => {
                 let _ = events.send(failed(
-                    "Try LosOS is not on this medium (try.qcow2 is missing).",
+                    "Try LosOS is not on this medium (try.squashfs is missing).",
                 ));
             }
             Request::TryLive => {

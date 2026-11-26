@@ -241,7 +241,10 @@ in
       ''
         mkdir -p $out
         cd $out
-        cp -a --link ${config.system.build.updateImages}/. . || cp -a ${config.system.build.updateImages}/. .
+        # -a would copy the update-images directory's 0555 mode onto $out;
+        # after a cross-filesystem --link failure the fallback could not write.
+        cp -a --no-preserve=ownership,mode --link ${config.system.build.updateImages}/. . 2>/dev/null \
+          || cp -a --no-preserve=ownership,mode ${config.system.build.updateImages}/. .
 
         xz --threads=$NIX_BUILD_CORES -c ${image}/${raw} > ${prefix}_${arch.name}.raw.xz
         cp ${config.system.build.installerIso} ${prefix}_${arch.name}-installer.iso
@@ -274,10 +277,9 @@ in
       payloads = config.system.build.updateImages;
     };
 
-  # The desktop qcow2 the same flake built, for an ephemeral try session from
-  # the installer (installer/default.nix, losos-installer-try-live.nix).
-  system.build.installerTryQcow2 = config.system.build.qcow2;
-
+  # A qcow2 of the same disk for `nix run .#vm`. The installer ISO grafts the
+  # raw disk instead (modules/try.nix): a device-mapper snapshot of it gives a
+  # Try session a writable layer without a nested hypervisor.
   system.build.qcow2 =
     pkgs.runCommand "${id}_${version}.qcow2" { nativeBuildInputs = [ pkgs.buildPackages.qemu-utils ]; }
       ''

@@ -28,7 +28,11 @@ pkgs.runCommand "${prefix}-installer-embedded-release"
   ''
     payload=$(mktemp -d)
     cd "$payload"
-    cp -a --link ${payloads}/. . || cp -a ${payloads}/. .
+    # -a would also copy the payload directory's 0555 mode onto this one. If
+    # --link fails across filesystems, the fallback would then have no writable
+    # directory to copy into.
+    cp -a --no-preserve=ownership,mode --link ${payloads}/. . 2>/dev/null \
+      || cp -a --no-preserve=ownership,mode ${payloads}/. .
 
     sha256sum -- * > SHA256SUMS
 

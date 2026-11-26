@@ -44,13 +44,15 @@ tools/nix-refresh-hashes --list > "$work/before"
 # "<owner>/<repo>" of a component input, from the URL flake.lock records for
 # it.
 repository() {
-  jq -r --arg n "$1" '.nodes[.root.inputs[$n]].original.url' flake.lock |
+  # flake.lock's top-level `root` is the string "root"; the inputs map
+  # lives under nodes.root.inputs.
+  jq -r --arg n "$1" '.nodes[.nodes.root.inputs[$n]].original.url' flake.lock |
     sed -E 's|^https://github.com/||; s|\.git$||'
 }
 
 # The revision flake.lock pins a component input at.
 pinned_rev() {
-  jq -r --arg n "$1" '.nodes[.root.inputs[$n]].locked.rev' flake.lock
+  jq -r --arg n "$1" '.nodes[.nodes.root.inputs[$n]].locked.rev' flake.lock
 }
 
 # Moves the flake input NAME to REV, which LABEL describes, when REV is

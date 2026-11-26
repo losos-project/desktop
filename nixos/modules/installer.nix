@@ -28,6 +28,52 @@ let
   cfg = config.losos;
   inherit (config.image.repart.verityStore) partitionIds;
 
+  # The ISO's initrd finds the medium by this label, both for the embedded
+  # release and for the raw desktop disk a Try boot snapshots.
+  volumeID = "losos-${cfg.version}-${pkgs.stdenv.hostPlatform.parsed.cpu.name}";
+
+  # The desktop UKI's own command line carries the usrhash of the /usr in the
+  # raw disk. Read it from the finished UKI rather than the configuration, as
+  # uki-files.nix does, so a Try boot starts the same version it ships.
+  tryUki = "${config.system.build.uki}/${config.system.boot.loader.ukiFile}";
+  tryCmdline =
+    pkgs.runCommand "losos-try-cmdline"
+      {
+        nativeBuildInputs = with pkgs.buildPackages; [
+          jq
+          systemdUkify
+        ];
+      }
+      ''
+        cmdline=$(ukify --json=short inspect ${tryUki} \
+          | jq -er '.".cmdline".text' | tr -d '\0\n')
+        case " $cmdline " in
+          *" usrhash="*" root=gpt-auto "* | *" root=gpt-auto "*" usrhash="*) ;;
+          *) echo "unexpected UKI command line: $cmdline" >&2; exit 1 ;;
+        esac
+        # The snapshot disk is not the medium the firmware booted from, so
+        # gpt-auto cannot name its root. Point root at the link uki-files.nix's
+        # udev rule makes beside the snapshot's ESP, as a BIOS boot does.
+        cmdline=''${cmdline/root=gpt-auto/root=/dev/disk/by-loader/root losos.esp=/dev/mapper/losos-try1}
+        printf '%s losos.try=1 losos.iso=${volumeID}\n' "$cmdline" > $out
+      '';
+
+  tryRaw = "${config.system.build.disk}/${config.image.baseName}.raw";
+
+  # ISO 9660 level 3 cannot hold a file this large, and a qcow2 would need a
+  # userspace NBD daemon to survive switch-root. A squashfs keeps the raw disk
+  # compressed and seekable: the initrd loop-mounts the file inside it.
+  tryImage =
+    pkgs.runCommand "losos-try-image"
+      {
+        nativeBuildInputs = [ pkgs.buildPackages.squashfsTools ];
+      }
+      ''
+        mksquashfs ${tryRaw} $out -noappend -all-root -no-hardlinks \
+          -b 1048576 -comp zstd -Xcompression-level 3 \
+          -processors $NIX_BUILD_CORES -no-progress
+      '';
+
   # Where the installer mounts the new ESP while sysupdate writes the UKI.
   esp = "/run/losos-installer/esp";
 
@@ -165,7 +211,9 @@ let
     specialArgs.losos = {
       inherit (cfg) version channel;
       embeddedRelease = config.system.build.installerEmbeddedRelease;
-      tryQcow2 = config.system.build.installerTryQcow2;
+      inherit tryCmdline tryImage;
+      tryLinux = config.boot.uki.settings.UKI.Linux;
+      tryInitrd = config.boot.uki.settings.UKI.Initrd;
       releaseRepository = cfg.release.repository;
       inherit (cfg.update) baseUrl pubring;
       # Where the backend reads which assets make up the channel's files,

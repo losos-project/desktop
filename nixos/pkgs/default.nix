@@ -15,14 +15,50 @@ let
   # through here. Nothing else in nixpkgs is touched, so it all still
   # substitutes from cache.nixos.org.
   moldStdenv = final.stdenvAdapters.useMoldLinker final.stdenv;
+  rustPlatformMold =
+    let
+      rp = final.makeRustPlatform {
+        inherit (final) rustc cargo;
+        stdenv = moldStdenv;
+      };
+      # Force every Cargo build to one job. pm's checkPhase and other Rust
+      # builds can saturate all cores and OOM the host; this keeps them
+      # serialized. Individual packages may still set their own cargo flags,
+      # but CARGO_BUILD_JOBS=1 wins for cargo's -j default.
+      forceCargoJobs1 =
+        args:
+        let
+          env =
+            (args.cargoEnv or { })
+            // (args.env or { })
+            // {
+              CARGO_BUILD_JOBS = "1";
+              RUST_TEST_THREADS = "1";
+              NIX_BUILD_CORES = "1";
+            };
+        in
+        builtins.removeAttrs args [ "cargoEnv" ]
+        // {
+          inherit env;
+          dontUseCargoParallelTests = true;
+        };
+    in
+    rp
+    // {
+      buildRustPackage =
+        args:
+        rp.buildRustPackage (
+          if builtins.isFunction args then
+            finalAttrs: forceCargoJobs1 (args finalAttrs)
+          else
+            forceCargoJobs1 args
+        );
+    };
   callWithMold = final.lib.callPackageWith (
     final
     // {
       stdenv = moldStdenv;
-      rustPlatform = final.makeRustPlatform {
-        inherit (final) rustc cargo;
-        stdenv = moldStdenv;
-      };
+      rustPlatform = rustPlatformMold;
     }
   );
 in
