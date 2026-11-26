@@ -70,8 +70,13 @@ jobs:
   # not in the history, runs everything. A job left out is skipped, which
   # `ci` accepts only when this job said so.
   changes:
-    concurrency: &build-concurrency
-      group: ci-build-${{ github.job }}-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+    # github.job is empty while the group is chosen, so a shared
+    # ${{ github.job }} put every build job in ci-build--<ref> and the
+    # later one cancelled the earlier ones before a step ran. Each job
+    # names itself. A newer push still cancels that job's older run;
+    # a release started by hand is never cancelled.
+    concurrency:
+      group: ci-build-changes-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
       cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -129,8 +134,8 @@ jobs:
   # is kept, running out of time passes with a warning, a failed derivation
   # turns it red. A retry of either job starts from what the cache holds.
   prebuild:
-    concurrency: &build-arch-concurrency
-      group: ci-build-${{ github.job }}-${{ matrix.arch }}-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+    concurrency:
+      group: ci-build-prebuild-${{ matrix.arch }}-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
       cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes]
     if: needs.changes.outputs.image == 'true'
@@ -447,7 +452,9 @@ jobs:
   # with it ignores the run being cancelled, so a pull request's newer push
   # waited hours for the older run's flake check and VM tests to finish.
   flake:
-    concurrency: *build-arch-concurrency
+    concurrency:
+      group: ci-build-flake-${{ matrix.arch }}-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes, prebuild]
     if: ${{ !cancelled() && needs.changes.outputs.image == 'true' && needs.prebuild.result != 'cancelled' }}
     strategy: *arches
@@ -846,7 +853,9 @@ jobs:
   # nothing, and neither waits for nor holds back the build or the release;
   # `ci` still requires it. `nix fmt` locally rewrites what this rejects.
   format:
-    concurrency: *build-concurrency
+    concurrency:
+      group: ci-build-format-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes]
     if: needs.changes.outputs.format == 'true'
     runs-on: ubuntu-24.04
@@ -901,7 +910,9 @@ jobs:
   # The GHCR proxy: its decisions in Rust, then the handler against a fake
   # registry. Nothing is deployed from here.
   proxy:
-    concurrency: *build-concurrency
+    concurrency:
+      group: ci-build-proxy-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes]
     if: needs.changes.outputs.proxy == 'true'
     runs-on: ubuntu-24.04
@@ -932,7 +943,9 @@ jobs:
   # downloads Android from Google as a person's setup does, so it builds
   # nothing big and needs neither the image nor the project's cache.
   android:
-    concurrency: *build-concurrency
+    concurrency:
+      group: ci-build-android-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes]
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
@@ -993,7 +1006,9 @@ jobs:
   # which the runner's own KVM passes on to it. The image builds from the
   # project's cache like `flake`'s, compiling only what this change touched.
   android-desktop:
-    concurrency: *build-concurrency
+    concurrency:
+      group: ci-build-android-desktop-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes]
     if: needs.changes.outputs.android-desktop == 'true'
     runs-on: ubuntu-24.04
@@ -1045,7 +1060,9 @@ jobs:
   # the copy derisk's error dialogs open. Anything else builds it in
   # `flake`, with the release.
   docs:
-    concurrency: *build-concurrency
+    concurrency:
+      group: ci-build-docs-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes]
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-24.04
@@ -1083,7 +1100,9 @@ jobs:
   # The one check branch protection looks for, so a cancelled job, or one
   # skipped that `changes` said should run, never reads as green.
   ci:
-    concurrency: *build-concurrency
+    concurrency:
+      group: ci-build-ci-${{ github.head_ref || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.cadence || 'head' }}
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     needs: [changes, prebuild, flake, format, proxy, android, android-desktop, docs]
     if: always()
     runs-on: ubuntu-24.04
