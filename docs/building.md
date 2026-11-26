@@ -52,6 +52,26 @@ nix eval --raw .#nixosConfigurations.losos-desktop-gsi-aarch64.config.system.bui
 components into `plugins/dist/share/pm/plugins`, for a pm installed outside the
 image ([pm on LosOS](pm.md)).
 
+## glibc and stock packages
+
+`flake.nix` selects nixpkgs' standard `x86_64-linux` and `aarch64-linux`
+platforms, and the NixOS configuration uses nixpkgs' stock glibc packages. The
+only overlay adds this repository's own packages. GTK, Qt and the rest of
+nixpkgs keep nixpkgs' defaults, so they substitute from cache.nixos.org. glibc's
+NSS lets account lookups see systemd-homed users through `nss-systemd` and the
+nscd forwarder.
+
+Everything the overlay builds links with [mold](https://github.com/rui314/mold)
+instead of `ld.bfd`: derisk, pm and its plugins, `losos-installer`,
+`losos-security`, `losos-swap`, `losos-adblock`, the LosOS client `losos`,
+`x2mcsapi` and libhybris. The overlay builds them through one helper,
+`callWithMold`, which gives a package nixpkgs' stdenv and a `rustPlatform`
+built on it, both through `stdenvAdapters.useMoldLinker`, so the C compiler and
+the `cc` that rustc links with both pass `-fuse-ld=mold`. A new package gets
+mold by being called through the helper, with no list to maintain. Packages
+taken unchanged from nixpkgs keep its linker, because a different stdenv would
+stop them substituting from cache.nixos.org.
+
 ## Building on a host running systemd-oomd
 
 The heavy derivations, such as the derisk and pm LTO links, image assembly and

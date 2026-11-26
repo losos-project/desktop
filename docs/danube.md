@@ -57,7 +57,7 @@ names the front tab. Over the page it draws only:
 - The link under the pointer.
 
 A phone window, one whose short side is under 600 logical pixels
-([GTK and Qt on a phone](gtk-qt-phone.md)), sends a mobile User-Agent with
+([GTK and Qt apps on a phone](halium.md#gtk-and-qt-apps-on-a-phone)), sends a mobile User-Agent with
 "Android" and "Mobile", so sites serve their phone version from the next load.
 
 ### The palette as address bar
