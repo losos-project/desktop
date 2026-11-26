@@ -227,8 +227,15 @@ let
       StateDirectoryMode = "0700";
     };
     # Defined again at every start from this image's definition, so an
-    # update's machine is the one that starts. KVM when the host has it;
-    # QEMU's emulation of its own CPU otherwise. Devices only known at boot,
+    # update's machine is the one that starts. KVM when this host is the
+    # machine the firmware booted. A host that is itself a guest has
+    # /dev/kvm from nested virtualisation, and host-passthrough on that
+    # wedges the guest: CI's android-desktop run left sys-net "running",
+    # its monitor unable to report CPU time, and the desktop unable to
+    # ping 10.139.0.1, so no name resolved. QEMU's emulation of its own
+    # CPU is what a host without KVM uses, and what a nested host uses
+    # too. The desktop's /dev/kvm is untouched, so a Pixel emulator on
+    # the same host still gets KVM. Devices only known at boot,
     # such as a network card handed to the machine, are whatever other
     # units left in its run directory's devices/ before this one started;
     # not a RuntimeDirectory=, which would be emptied when this stops while
@@ -239,7 +246,7 @@ let
       ${lib.optionalString (machine.stateSize != null) ''
         [ -e ${stateDir name}/state.qcow2 ] || qemu-img create -q -f qcow2 ${stateDir name}/state.qcow2 ${machine.stateSize}
       ''}
-      if [ -e /dev/kvm ]; then
+      if [ -e /dev/kvm ] && ! ${config.systemd.package}/bin/systemd-detect-virt -q; then
         type=kvm cpu="<cpu mode='host-passthrough'/>"
       else
         type=qemu cpu="<cpu mode='maximum'/>"
