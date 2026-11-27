@@ -368,6 +368,12 @@ rustPlatform.buildRustPackage {
   pname = "derisk";
   inherit version src cargoHash;
   env = cargoEnv;
+  # New-user fixes against the pinned derisk: the Store names how many
+  # Flathub apps it read, a machine is not "Started" until its apps are
+  # listed, New machine says why it is off, and palette ties prefer a
+  # machine's app. cargoHash is unchanged: the patch does not touch
+  # Cargo.lock.
+  patches = [ ../patches/derisk-new-user.patch ];
   postPatch = rten-gemm-postPatch;
 
   # derisk and its portal backend, xdg-desktop-portal-derisk. `host` is the

@@ -1,0 +1,248 @@
+diff --git a/crates/derisk-machines/src/app.rs b/crates/derisk-machines/src/app.rs
+index e5e33a5..8a1b998 100644
+--- a/crates/derisk-machines/src/app.rs
++++ b/crates/derisk-machines/src/app.rs
+@@ -45,6 +45,11 @@ pub struct MachinesApp {
+     /// asked; forgotten when the machine stops.
+     #[cfg(not(target_arch = "wasm32"))]
+     apps: std::collections::HashMap<String, (Instant, Option<AppList>)>,
++    /// A machine whose start has returned and whose app list has not.
++    /// "Started" waits for that list, so the bar does not say the machine
++    /// is ready while it is still booting.
++    #[cfg(not(target_arch = "wasm32"))]
++    pending_start: Option<String>,
+     /// The machines' apps' icons, by app ID, once looked up.
+     #[cfg(not(target_arch = "wasm32"))]
+     icons: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+@@ -115,6 +120,8 @@ impl MachinesApp {
+             #[cfg(not(target_arch = "wasm32"))]
+             apps: std::collections::HashMap::new(),
+             #[cfg(not(target_arch = "wasm32"))]
++            pending_start: None,
++            #[cfg(not(target_arch = "wasm32"))]
+             icons: std::collections::HashMap::new(),
+         };
+         app.look();
+@@ -162,11 +169,34 @@ impl MachinesApp {
+                     self.log.push(line);
+                 }
+                 Event::Done(done) => {
+-                    self.busy = None;
+-                    self.status = Some(done);
+                     self.look();
++                    match done {
++                        Ok(text) => match text.strip_prefix("Started ") {
++                            Some(name) if !name.is_empty() && !name.contains(' ') => {
++                                let name = name.to_owned();
++                                self.pending_start = Some(name.clone());
++                                self.busy = Some(format!("Waiting for {name}'s apps"));
++                                self.status = None;
++                            }
++                            _ => {
++                                self.pending_start = None;
++                                self.busy = None;
++                                self.status = Some(Ok(text));
++                            }
++                        },
++                        Err(error) => {
++                            self.pending_start = None;
++                            self.busy = None;
++                            self.status = Some(Err(error));
++                        }
++                    }
+                 }
+                 Event::Apps { machine, apps } => {
++                    if self.pending_start.as_deref() == Some(machine.as_str()) {
++                        self.pending_start = None;
++                        self.busy = None;
++                        self.status = Some(started_after_apps(&machine, &apps));
++                    }
+                     if let Some(entry) = self.apps.get_mut(&machine) {
+                         entry.1 = Some(apps);
+                     }
+@@ -288,6 +318,19 @@ impl MachinesApp {
+     /// pm's lines, with New machine at its right.
+     fn action_bar(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+         let can_create = self.can_create() && self.form.is_none();
++        // Shown in the bar, not only as hover text: a disabled New machine
++        // otherwise looks like a button that does nothing.
++        let blocked = if can_create {
++            None
++        } else if self.templates.is_empty() {
++            Some("This system has no templates to make a machine from")
++        } else if self.busy.is_some() {
++            Some("Wait for what is under way")
++        } else {
++            Some(
++                "Set pm up for machines first. That copies the plugin and signs it with a key made for you.",
++            )
++        };
+         let mut new = false;
+         let mut dismiss = false;
+         derisk_frame::action_bar(ui, tokens, "machines-actions", |ui| {
+@@ -329,6 +372,10 @@ impl MachinesApp {
+                             );
+                         }
+                         None => {
++                            if let Some(why) = blocked {
++                                ui.label(derisk_frame::note(tokens, why));
++                                return;
++                            }
+                             let count = match self.machines.len() {
+                                 0 => "No machines yet".to_owned(),
+                                 1 => "1 machine".to_owned(),
+@@ -910,6 +957,19 @@ fn app_tile(
+     })
+ }
+ 
++/// What the bar says once a machine that just started has listed its apps.
++pub(crate) fn started_after_apps(
++    name: &str,
++    apps: &Result<Vec<crate::GuestApp>, String>,
++) -> Result<String, String> {
++    match apps {
++        Ok(_) => Ok(format!("Started {name}")),
++        Err(error) => {
++            Err(format!("{name} is running, but its apps could not be listed: {error}"))
++        }
++    }
++}
++
+ /// A label's colour as egui draws it.
+ pub fn colour(label: Label) -> egui::Color32 {
+     let [r, g, b] = label.rgb();
+@@ -1001,6 +1061,17 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn started_waits_until_the_app_list_arrives() {
++        assert_eq!(
++            started_after_apps("flatpak", &Ok(Vec::new())).unwrap(),
++            "Started flatpak"
++        );
++        let error = started_after_apps("flatpak", &Err("guest agent is down".into())).unwrap_err();
++        assert!(error.contains("could not be listed"), "{error}");
++        assert!(error.contains("guest agent is down"), "{error}");
++    }
++
+     #[test]
+     fn a_new_machine_gets_a_free_name_and_label() {
+         let mut app = MachinesApp::new();
+diff --git a/crates/derisk-store/src/app.rs b/crates/derisk-store/src/app.rs
+index 936e9ef..1e8ce02 100644
+--- a/crates/derisk-store/src/app.rs
++++ b/crates/derisk-store/src/app.rs
+@@ -631,6 +631,14 @@ impl StoreApp {
+         let Some(catalog) = self.loading(ui, tokens) else {
+             return;
+         };
++        // Above the scrolling list, so a short window still shows that the
++        // fetch produced a catalogue rather than an empty page.
++        let count = catalog.apps().len();
++        ui.label(if count == 0 {
++            "Flathub's catalogue has no apps.".to_owned()
++        } else {
++            format!("{count} apps on Flathub")
++        });
+         let mut open: Option<Page> = None;
+         derisk_frame::scroll(ui, "explore", |ui| {
+             if !self.updates.is_empty() {
+diff --git a/crates/derisk/src/palette.rs b/crates/derisk/src/palette.rs
+index 29e9f65..4ebb21d 100644
+--- a/crates/derisk/src/palette.rs
++++ b/crates/derisk/src/palette.rs
+@@ -889,8 +889,23 @@ pub fn search(entries: &[Entry], query: &str, history: &History) -> Vec<usize> {
+         })
+         .filter_map(|(i, e)| score(e, query).map(|s| (s + history.boost(e), i)))
+         .collect();
+-    // Higher score first; ties keep catalog order (apps, windows, commands, ...).
+-    hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
++    // Higher score first. A tie prefers a machine's app over a host app
++    // listed earlier: both titles can start with the same word ("Terminal"
++    // and "Terminal in flatpak"), and catalog order would hide the machine.
++    // Anything still tied keeps catalog order.
++    hits.sort_by(|a, b| {
++        b.0.cmp(&a.0).then_with(|| {
++            let machine = |i: usize| {
++                entries[i].keywords.split_whitespace().any(|k| k == "machine")
++                    || entries[i].title.contains(" in ")
++            };
++            match (machine(a.1), machine(b.1)) {
++                (true, false) => std::cmp::Ordering::Less,
++                (false, true) => std::cmp::Ordering::Greater,
++                _ => a.1.cmp(&b.1),
++            }
++        })
++    });
+     hits.into_iter().map(|(_, i)| i).collect()
+ }
+ 
+diff --git a/crates/derisk/tests/palette.rs b/crates/derisk/tests/palette.rs
+index eaa72c1..db42241 100644
+--- a/crates/derisk/tests/palette.rs
++++ b/crates/derisk/tests/palette.rs
+@@ -59,6 +59,50 @@ fn super_space_toggles_the_palette() {
+     assert!(!shell.palette_visible());
+ }
+ 
++#[test]
++fn machine_apps_outrank_an_equal_host_hit_and_updates_outrank_the_store() {
++    let host = palette::Entry::new(palette::Category::App, "t", "Terminal", Vec::new())
++        .detail("Use the command line");
++    let machine = palette::Entry::new(
++        palette::Category::App,
++        "c",
++        "Terminal in flatpak",
++        Vec::new(),
++    )
++    .detail("Opens in the flatpak machine")
++    .keywords("machine vm");
++    let power = palette::Entry::new(
++        palette::Category::Command,
++        "p",
++        "Power Mode: Power saver",
++        Vec::new(),
++    )
++    .detail("Switch the whole computer to it");
++    let store = palette::Entry::new(palette::Category::App, "s", "Store", Vec::new())
++        .detail("Find, install and update apps from Flathub")
++        .keywords("updates");
++    let system = palette::Entry::new(
++        palette::Category::AppAction,
++        "u",
++        "System and Updates",
++        Vec::new(),
++    )
++    .detail("Settings")
++    .keywords("update updates release");
++
++    let entries = vec![store.clone(), host.clone(), power.clone(), machine.clone(), system.clone()];
++    let titles = |q: &str| titles(&entries, &palette::search(&entries, q, &History::default()));
++
++    let term = titles("term");
++    assert_eq!(term[0], "Terminal in flatpak", "{term:?}");
++    assert!(term.iter().any(|t| t == "Terminal"));
++    assert!(!titles("mach").iter().any(|t| t.starts_with("Power Mode")));
++
++    let updates = titles("updates");
++    assert_eq!(updates[0], "System and Updates", "{updates:?}");
++    assert!(updates.iter().any(|t| t == "Store"));
++}
++
+ #[test]
+ fn fuzzy_prefers_prefixes_and_word_starts() {
+     assert!(palette::fuzzy("Text Editor", "xyz").is_none());
+diff --git a/plugins/palette/power/src/lib.rs b/plugins/palette/power/src/lib.rs
+index fcf195a..8e3f1c4 100644
+--- a/plugins/palette/power/src/lib.rs
++++ b/plugins/palette/power/src/lib.rs
+@@ -82,7 +82,7 @@ pub fn entries(view: &View) -> Vec<Entry> {
+                 .detail(if id == active {
+                     "Current power mode"
+                 } else {
+-                    "Switch the whole machine to it"
++                    "Switch the whole computer to it"
+                 })
+                 .keywords(format!("power profile mode battery energy {id}")),
+             )

@@ -59,8 +59,12 @@ pm.
 and pm's own `libvirt`, `podman`, `sysext`, `sysupdate` and `systemd`. The
 image carries them in `/run/current-system/sw/share/pm/plugins`. pm loads
 plugins only from a user's own `~/.config/pm/plugins`, and only when they are
-signed by a key that user trusts. So the image offers the plugins but trusts
-them for no one:
+signed by a key that user trusts. The image does not sign them: a signature
+shipped in it would be a key every LosOS computer trusted. At the first
+graphical login, `losos-pm-machines.service` copies the libvirt plugin into
+that account and signs it with a key `pm sign` makes for them, which is what
+the Machines app asks for before it will make a machine. The other plugins
+stay unsigned until the person signs them:
 
 ```
 install -Dm644 -t ~/.config/pm/plugins /run/current-system/sw/share/pm/plugins/*.wasm

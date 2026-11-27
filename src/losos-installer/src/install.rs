@@ -168,10 +168,120 @@ pub fn run(plan: &Plan, events: &Sender<Event>) {
     let _ = events.send(Event::Finished(result));
 }
 
+/// What the failure page should say. Tool names and HTTP statuses stay in
+/// the log underneath; the sentence on the page is the one a person acts on.
+///
+/// `disk_untouched` is true only when the failure happened before the
+/// partition table was wiped.
+pub fn explain_failure(raw: &str, disk_untouched: bool) -> String {
+    if raw.starts_with("The update server") || raw.starts_with("The system was not written") {
+        return raw.to_owned();
+    }
+    let network = raw.contains("oras failed")
+        || raw.contains("curl failed")
+        || raw.contains("aria2")
+        || raw.contains("systemd-sysupdate")
+        || raw.contains("402")
+        || raw.contains("registry has no image");
+    if !network {
+        return raw.to_owned();
+    }
+    if disk_untouched {
+        "The update server could not be reached or refused the download, so nothing on the disk was changed. Check the network and try again.".into()
+    } else {
+        "The system was not written. The disk was partitioned, and the download then failed. Check the network and try again.".into()
+    }
+}
+
+/// The versioned GHCR artifact for this ISO, and the channel's moving tag.
+fn ghcr_refs(release: &GitHub) -> (String, String) {
+    (
+        format!(
+            "ghcr.io/{}/images:{}-{}-{}",
+            release.repo, release.channel, release.version, release.arch
+        ),
+        format!(
+            "ghcr.io/{}/images:{}-{}",
+            release.repo, release.channel, release.arch
+        ),
+    )
+}
+
+/// Confirms a release can be read before the disk is erased.
+///
+/// A missing registry image falls through to the channel index. When every
+/// source refuses, the install stops here and the partition table is left
+/// as it was.
+fn confirm_source(plan: &Plan, events: &Sender<Event>) -> Result<(), String> {
+    if plan.local.as_ref().is_some_and(|dir| has_release(dir)) {
+        return Ok(());
+    }
+    let mut registry_missed = false;
+    if let Some(release) = &plan.release {
+        let (image, current) = ghcr_refs(release);
+        let found = match github::release_tag(&release.channel, &release.version) {
+            Some(_) => {
+                oci_manifest(&image, events).is_ok() || oci_manifest(&current, events).is_ok()
+            }
+            None => oci_manifest(&current, events).is_ok(),
+        };
+        if found {
+            return Ok(());
+        }
+        registry_missed = true;
+        let _ = events.send(Event::Line(
+            "No release image could be read from the registry. Checking the update index.".into(),
+        ));
+    }
+    if let Some(index) = &plan.index {
+        return probe_https(index, events);
+    }
+    if let Some(source) = &plan.source {
+        let base = source.trim_end_matches('/');
+        return probe_https(&format!("{base}/SHA256SUMS"), events);
+    }
+    if registry_missed {
+        return Err(explain_failure(
+            "the registry has no image for this installer",
+            true,
+        ));
+    }
+    Ok(())
+}
+
+/// Fetches `url` and fails without printing its body. Used to learn that an
+/// update server will answer before anything on the disk is changed.
+fn probe_https(url: &str, events: &Sender<Event>) -> Result<(), String> {
+    command(
+        "curl",
+        &[
+            "--silent",
+            "--show-error",
+            "--fail",
+            "--location",
+            "--proto",
+            "=https",
+            "--retry",
+            "3",
+            "--output",
+            "/dev/null",
+            url,
+        ],
+        true,
+        events,
+    )
+    .map(|_| ())
+    .map_err(|e| explain_failure(&e, true))
+}
+
 fn install(plan: &Plan, events: &Sender<Event>) -> Result<(), String> {
     let step = |s| {
         let _ = events.send(Event::Step(s));
     };
+
+    // Before the wipe. A refused update server must not leave a new
+    // partition table and an empty boot partition behind.
+    confirm_source(plan, events)?;
 
     step(Step::Partition);
     let disk = plan.disk.to_string_lossy().into_owned();
@@ -214,10 +324,13 @@ fn install(plan: &Plan, events: &Sender<Event>) -> Result<(), String> {
     let unmounted = command("umount", &[&mount_point], false, events).map(|_| ());
     match (downloaded, unmounted) {
         (Ok(()), Ok(())) => {}
-        (Err(download), Ok(())) => return Err(download),
+        (Err(download), Ok(())) => return Err(explain_failure(&download, false)),
         (Ok(()), Err(unmount)) => return Err(unmount),
         (Err(download), Err(unmount)) => {
-            return Err(format!("{download}; cleanup also failed: {unmount}"));
+            return Err(format!(
+                "{}; cleanup also failed: {unmount}",
+                explain_failure(&download, false)
+            ));
         }
     }
     // After the download, whose scratch partition is in the space root,
@@ -366,14 +479,7 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
             sysupdate(plan, events)?;
         }
         (Some(url), _, Some(release)) => {
-            let image = format!(
-                "ghcr.io/{}/images:{}-{}-{}",
-                release.repo, release.channel, release.version, release.arch
-            );
-            let current = format!(
-                "ghcr.io/{}/images:{}-{}",
-                release.repo, release.channel, release.arch
-            );
+            let (image, current) = ghcr_refs(release);
             let exact =
                 github::release_tag(&release.channel, &release.version).map(|_| image.as_str());
             let (reference, manifest, version) = match exact {
@@ -392,7 +498,7 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
                             Ok(manifest) => (current.clone(), manifest, None),
                             Err(e2) => {
                                 let _ = events.send(Event::Line(format!(
-                                    "CI is failing for losos-project/desktop ({e2}); falling back to building the release locally"
+                                    "No registry image for this installer ({e2}); trying the update index"
                                 )));
                                 return channel(plan, disk, url, events);
                             }
@@ -408,7 +514,7 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
                         Ok(manifest) => (current.clone(), manifest, None),
                         Err(e) => {
                             let _ = events.send(Event::Line(format!(
-                                "CI is failing for losos-project/desktop ({e}); falling back to building the release locally"
+                                "No registry image for this installer ({e}); trying the update index"
                             )));
                             return channel(plan, disk, url, events);
                         }

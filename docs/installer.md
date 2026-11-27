@@ -45,7 +45,11 @@ address, or online, and is skipped when the machine is already online. Then
 the backend lists the disks. It leaves out the disk the ISO booted from and
 refuses any disk it did not list. Before anything is touched, the installer
 names the chosen disk, its size and the source once more, behind an "Erase
-and install" button. Then:
+and install" button. Before anything on the disk is changed, it checks
+that a release can be read: the registry image for this installer, or the
+channel index when that image is not published. A server that cannot be
+reached or that refuses the download stops the install here, and the
+failure page says so without naming the tools. Then:
 
 1. The installer releases anything still using the chosen disk (swap,
    mounts, active volume groups and open LUKS devices on it), wipes the
