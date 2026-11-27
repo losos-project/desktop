@@ -34,7 +34,7 @@ let
     name = "pm-plugins";
     inherit src;
     sourceRoot = "${src.name}/plugins";
-    hash = "sha256-XSqlt2sie/SyONHcqZ1dK8prtxOXqjXt24K7zxBuB5s=";
+    hash = "sha256-83fiYd0zuTqvH1joFYJ2IhNG02CV0jW0eQ5NHuq4cgk=";
   };
 in
 rustPlatform.buildRustPackage {
@@ -43,7 +43,7 @@ rustPlatform.buildRustPackage {
 
   inherit src;
 
-  cargoHash = "sha256-wpRprURXtN98dCeyivy7Jd57H99sQKWWSDOWQL20d0Q=";
+  cargoHash = "sha256-+hmhv53dYRb3OtzcRw37rx7gKzQ6syw+gWKNJz5+wlQ=";
 
   # build.rs builds the plugins for wasm32-unknown-unknown. nixpkgs' rustc
   # carries that target's std but links it with `lld` from PATH rather than

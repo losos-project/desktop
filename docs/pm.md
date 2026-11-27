@@ -1,5 +1,11 @@
 # pm on LosOS
 
+[pm](https://github.com/losos-project/pm) is LosOS's system manager. On a
+running system it is the only way to administer the machine, and it is how you
+build and run software. This page covers `pm system`, pm's plugins, driving
+this repository's flake from a pm build file, using nixpkgs in one,
+and virtual machines.
+
 ## Administering the machine
 
 There is no sudo, su or run0. An administrator changes the system with
@@ -10,12 +16,11 @@ There is no sudo, su or run0. An administrator changes the system with
 | `pm system start\|stop\|restart\|reload <unit>` | the same to a system unit; a bare name is a service |
 | `pm system update [--reboot]` | installs the newest version for the next boot (`systemd-sysupdate.service`), and reboots into it if asked and there was one |
 
-That is all it does. It runs no command as root and opens no shell. An
-administrator's session, or whatever takes it over, can only start and stop
-the units the image already has and install its signed updates. A machine that
-needs more, because something is broken, gets a root shell from the boot menu,
-which needs someone physically at the machine. See [When something goes
-wrong](troubleshooting.md#no-one-can-administer-the-machine).
+That is all. It runs no command as root and opens no shell, so an
+administrator's session, or malware that takes it over, can only start and
+stop the image's units and install signed updates. A broken machine that needs
+more gets a root shell from the boot menu, which needs someone physically at
+the machine ([When something goes wrong](troubleshooting.md#no-one-can-administer-the-machine)).
 
 `pm` asks `pmd --system`, a service that the system bus starts on the first
 call. It is `pm-system.service`, set up in `nixos/modules/pm.nix`. The daemon

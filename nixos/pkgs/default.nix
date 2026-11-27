@@ -1,6 +1,6 @@
 # Packages this repository builds itself. They are the programs under
 # github.com/losos-project (this tree, plus the derisk, mcsapi and pm
-# inputs). GTK, Qt, GRUB, QEMU, WebKit and WinBoat stay nixpkgs' builds, so
+# inputs). GTK, Qt, Limine, QEMU, WebKit and WinBoat stay nixpkgs' builds, so
 # they substitute from cache.nixos.org. A patch of one of those used to
 # rebuild it and everything callPackage'd against it.
 final: prev:
@@ -15,14 +15,50 @@ let
   # through here. Nothing else in nixpkgs is touched, so it all still
   # substitutes from cache.nixos.org.
   moldStdenv = final.stdenvAdapters.useMoldLinker final.stdenv;
+  rustPlatformMold =
+    let
+      rp = final.makeRustPlatform {
+        inherit (final) rustc cargo;
+        stdenv = moldStdenv;
+      };
+      # Force every Cargo build to one job. pm's checkPhase and other Rust
+      # builds can saturate all cores and OOM the host; this keeps them
+      # serialized. Individual packages may still set their own cargo flags,
+      # but CARGO_BUILD_JOBS=1 wins for cargo's -j default.
+      forceCargoJobs1 =
+        args:
+        let
+          env =
+            (args.cargoEnv or { })
+            // (args.env or { })
+            // {
+              CARGO_BUILD_JOBS = "1";
+              RUST_TEST_THREADS = "1";
+              NIX_BUILD_CORES = "1";
+            };
+        in
+        builtins.removeAttrs args [ "cargoEnv" ]
+        // {
+          inherit env;
+          dontUseCargoParallelTests = true;
+        };
+    in
+    rp
+    // {
+      buildRustPackage =
+        args:
+        rp.buildRustPackage (
+          if builtins.isFunction args then
+            finalAttrs: forceCargoJobs1 (args finalAttrs)
+          else
+            forceCargoJobs1 args
+        );
+    };
   callWithMold = final.lib.callPackageWith (
     final
     // {
       stdenv = moldStdenv;
-      rustPlatform = final.makeRustPlatform {
-        inherit (final) rustc cargo;
-        stdenv = moldStdenv;
-      };
+      rustPlatform = rustPlatformMold;
     }
   );
 in
@@ -107,7 +143,7 @@ in
   android-headers = callWithMold ./android-headers.nix { };
   libhybris = callWithMold ./libhybris.nix { };
   halium-gsi = final.callPackage ./halium-gsi.nix { };
-  # Fedora's Microsoft-signed shim, which starts LosOS's signed GRUB with
+  # Fedora's Microsoft-signed shim, which starts LosOS's signed Limine with
   # Secure Boot on (secure-boot.nix). Unpacked, not built.
   shim-signed = final.callPackage ./shim-signed.nix { };
   # Android app support (android-apps.nix): a virtual Pixel of each

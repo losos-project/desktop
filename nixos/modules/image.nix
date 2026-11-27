@@ -91,7 +91,7 @@ in
     ];
 
     partitions = {
-      # GRUB and grubenv go in from grub.nix, and the UKI from nixpkgs'
+      # Limine goes in from limine.nix, and the UKI from nixpkgs'
       # verity-store module.
       ${partitionIds.esp} = {
         repartConfig = {
@@ -139,7 +139,7 @@ in
   # how the initrd finds /usr from usrhash= on the command line, and
   # sysupdate gives a partition the UUID its source's name carries (@u).
   # The image with the image's own version's kernel, initrd and command
-  # line on the ESP beside its UKI (uki-files.nix), and on x86_64 GRUB
+  # line on the ESP beside its UKI (uki-files.nix), and on x86_64 Limine
   # in the MBR and the BIOS boot partition (bios.nix). Added afterwards
   # rather than given to repart, because the command line carries the
   # usrhash= repart only reports once /usr is built, and the ESP is made
@@ -165,8 +165,8 @@ in
         esp=$(jq -er '.[] | select(.type=="esp") | .offset' $out/repart-output.json)
         MTOOLS_SKIP_CHECK=1 mcopy -i "$out/${raw}@@$esp" \
           ${config.system.build.ukiFiles}/* ::/EFI/Linux/
-        ${lib.optionalString (config.system.build ? grubBiosInstall) ''
-          ${lib.getExe config.system.build.grubBiosInstall} $out/${raw}
+        ${lib.optionalString (config.system.build ? limineInstall) ''
+          ${lib.getExe config.system.build.limineInstall} $out/${raw}
         ''}
       '';
 
@@ -219,8 +219,8 @@ in
         echo "/usr is $(numfmt --to=iec "$usr") of its ${cfg.usrSize} slot"
 
         cp ${config.system.build.uki}/${ukiFile} ${prefix}_${arch.name}.efi
-        # What Limine starts this version from on a BIOS PC or for the
-        # recovery shell (uki-files.nix), named as sysupdate fetches them.
+        # The kernel, initrd and command line Limine starts this version from
+        # on a BIOS PC (uki-files.nix), named as sysupdate fetches them.
         cp ${config.system.build.ukiReleaseFiles}/* .
         extract ${arch.usr}
         extract ${arch.usrVerity}
@@ -241,7 +241,10 @@ in
       ''
         mkdir -p $out
         cd $out
-        cp -a --link ${config.system.build.updateImages}/. . || cp -a ${config.system.build.updateImages}/. .
+        # -a would copy the update-images directory's 0555 mode onto $out;
+        # after a cross-filesystem --link failure the fallback could not write.
+        cp -a --no-preserve=ownership,mode --link ${config.system.build.updateImages}/. . 2>/dev/null \
+          || cp -a --no-preserve=ownership,mode ${config.system.build.updateImages}/. .
 
         xz --threads=$NIX_BUILD_CORES -c ${image}/${raw} > ${prefix}_${arch.name}.raw.xz
         cp ${config.system.build.installerIso} ${prefix}_${arch.name}-installer.iso
@@ -274,10 +277,9 @@ in
       payloads = config.system.build.updateImages;
     };
 
-  # The desktop qcow2 the same flake built, for an ephemeral try session from
-  # the installer (installer/default.nix, losos-installer-try-live.nix).
-  system.build.installerTryQcow2 = config.system.build.qcow2;
-
+  # A qcow2 of the same disk for `nix run .#vm`. The installer ISO grafts the
+  # raw disk instead (modules/try.nix): a device-mapper snapshot of it gives a
+  # Try session a writable layer without a nested hypervisor.
   system.build.qcow2 =
     pkgs.runCommand "${id}_${version}.qcow2" { nativeBuildInputs = [ pkgs.buildPackages.qemu-utils ]; }
       ''

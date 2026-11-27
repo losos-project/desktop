@@ -50,9 +50,10 @@ let
   # UEFI Limine reads this from the FAT, where the UKI is copied so boot():
   # reaches it. BIOS Limine reads the other file from the ISO.
   cmdline = config.boot.uki.settings.UKI.Cmdline;
+  # No serial here. On UEFI, serial: yes skips Limine's graphical
+  # terminal, so a machine with a serial port would boot in text.
   efiConf = pkgs.writeText "limine.conf" ''
     timeout: 3
-    serial: yes
     wallpaper: boot():/limine/salmon.png
     wallpaper_style: centered
     backdrop: 0a0e12
@@ -64,64 +65,82 @@ let
     interface_branding_colour: 48b3c0
     interface_help_colour: 94a2b0
 
-    /Install LosOS Desktop
-        comment: Install LosOS Desktop
-        protocol: efi
-        path: boot():/EFI/Linux/installer.efi
+  # The Try entry starts the desktop kernel and initrd from the same version
+  # the ISO ships. Its command line comes from that version's finished UKI, so
+  # the usrhash names the /usr in the compressed raw disk even though the hash
+  # is only known once the image has been built.
+  conf =
+    name:
+    let
+      wallpaper = if name == "efi" then "boot():/limine/salmon.png" else "boot():/boot/salmon.png";
+      installEntry =
+        if name == "efi" then
+          ''
+            protocol: efi
+            path: boot():/EFI/Linux/installer.efi
+          ''
+        else
+          ''
+            protocol: linux
+            path: boot():/boot/linux
+            module_path: boot():/boot/initrd
+            cmdline: ${cmdline}
+          '';
+    in
+    pkgs.runCommand name { } ''
+      try_cmdline=$(< ${losos.tryCmdline})
+      cat > $out <<EOF
+      timeout: 3
+      serial: yes
+      ${lib.optionalString (name == "bios") "serial_baudrate: 115200"}
+      wallpaper: ${wallpaper}
+      wallpaper_style: centered
+      backdrop: 0a0e12
+      term_background: 800a0e12
+      term_foreground: e2e8ee
+      term_background_bright: 48b3c0
+      term_foreground_bright: 0a0e12
+      interface_branding: ${config.system.nixos.distroName}
+      interface_branding_colour: 48b3c0
+      interface_help_colour: 94a2b0
 
-    /Try LosOS Desktop
-        comment: Try LosOS Desktop
-        protocol: linux
-        path: boot():/boot/linux
-        module_path: boot():/boot/initrd
-        cmdline: ${cmdline} losos.try=1
-  '';
-  biosConf = pkgs.writeText "limine-bios.conf" ''
-    timeout: 3
-    serial: yes
-    serial_baudrate: 115200
-    wallpaper: boot():/boot/salmon.png
-    wallpaper_style: centered
-    backdrop: 0a0e12
-    term_background: 800a0e12
-    term_foreground: e2e8ee
-    term_background_bright: 48b3c0
-    term_foreground_bright: 0a0e12
-    interface_branding: ${config.system.nixos.distroName}
-    interface_branding_colour: 48b3c0
+      /Install LosOS Desktop
+          comment: Install LosOS Desktop
+      ${installEntry}
 
-    /Install LosOS Desktop
-        comment: Install LosOS Desktop
-        protocol: linux
-        path: boot():/boot/linux
-        module_path: boot():/boot/initrd
-        cmdline: ${cmdline}
-
-    /Try LosOS Desktop
-        comment: Try LosOS Desktop
-        protocol: linux
-        path: boot():/boot/linux
-        module_path: boot():/boot/initrd
-        cmdline: ${cmdline} losos.try=1
-  '';
+      /Try LosOS Desktop
+          comment: Try LosOS Desktop
+          protocol: linux
+          path: boot():/boot/try-linux
+          module_path: boot():/boot/try-initrd
+          cmdline: $try_cmdline
+      EOF
+    '';
+  efiConf = conf "limine.conf";
+  biosConf = conf "limine-bios.conf";
 
   sb = import ../modules/shim.nix {
     inherit pkgs;
     inherit (losos.secureBoot) privateKey certificate;
   };
-  limineEfi = "${pkgs.limine}/share/limine/BOOT${lib.toUpper efiArch}.EFI";
-  grub = if sb.enable then sb.sign "grub${efiArch}.efi" limineEfi else limineEfi;
-  # The UKI GRUB starts, signed as the installed system's are
+  # The same SBAT-bearing Limine the installed system starts (limine-efi.nix).
+  limineEfi = import ../modules/limine-efi.nix {
+    inherit pkgs;
+    inherit efiArch;
+  };
+  limine = if sb.enable then sb.sign "limine${efiArch}.efi" limineEfi else limineEfi;
+  # The UKI Limine starts, signed as the installed system's are
   # (modules/secure-boot.nix).
   uki =
     if sb.enable then
       sb.sign "installer.efi" "${config.system.build.uki}/${ukiFile}"
     else
       "${config.system.build.uki}/${ukiFile}";
-  starters = sb.removable grub;
+  starters = sb.removable limine;
 
-  # What starts GRUB at the removable-media boot path: GRUB alone, or shim
-  # with GRUB beside it. The UKI GRUB starts is on the ISO 9660 filesystem
+  # What starts Limine at the removable-media boot path: Limine alone, or
+  # shim with Limine beside it under the name shim loads. The UKI Limine
+  # starts is on the ISO 9660 filesystem
   # with the rest of the medium. Sized from its contents as nixpkgs sizes
   # its own EFI image: a tenth more for FAT's own overhead, rounded up to a
   # whole MiB.
@@ -138,6 +157,7 @@ let
           ${toString (lib.attrValues starters)} \
           ${efiConf} ${art}/limine/salmon.png ${uki} \
           ${config.boot.uki.settings.UKI.Linux} ${config.boot.uki.settings.UKI.Initrd} \
+          ${losos.tryLinux} ${losos.tryInitrd} \
           | tail -n 1 | cut -f1)
         size=$(( (size * 110 / 100 / 1048576 + 1) * 1048576 ))
         truncate --size=$size $out
@@ -154,6 +174,8 @@ let
         mcopy -i $out ${uki} ::/EFI/Linux/installer.efi
         mcopy -i $out ${config.boot.uki.settings.UKI.Linux} ::/boot/linux
         mcopy -i $out ${config.boot.uki.settings.UKI.Initrd} ::/boot/initrd
+        mcopy -i $out ${losos.tryLinux} ::/boot/try-linux
+        mcopy -i $out ${losos.tryInitrd} ::/boot/try-initrd
         fsck.vfat -n $out
       '';
 
@@ -258,14 +280,16 @@ in
           nix-store.squashfs=${squashfs} \
           boot/installer.efi=${uki} \
           release.squashfs=${losos.embeddedRelease} \
-          try.qcow2=${losos.tryQcow2} \
+          try.squashfs=${losos.tryImage} \
           ${lib.optionalString (bios != { }) ''
             boot/limine-bios-cd.bin=${bios.cd} \
             boot/limine-bios.sys=${bios.sys} \
             boot/limine.conf=${biosConf} \
             boot/salmon.png=${art}/limine/salmon.png \
             boot/linux=${config.boot.uki.settings.UKI.Linux} \
-            boot/initrd=${config.boot.uki.settings.UKI.Initrd}
+            boot/initrd=${config.boot.uki.settings.UKI.Initrd} \
+            boot/try-linux=${losos.tryLinux} \
+            boot/try-initrd=${losos.tryInitrd}
           ''}
         ${lib.optionalString (bios != { }) ''
           limine bios-install $out

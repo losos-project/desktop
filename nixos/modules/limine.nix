@@ -6,32 +6,28 @@
 #
 # The menu is limine.conf on the ESP, rewritten from the UKI file names by
 # losos-limine-menu. The salmon and the palette are the same pictures
-# branding builds for the rest of boot. losos-grub-bless still settles a
-# UKI's tries in its file name once a boot succeeds. The file Limine starts
-# from is still named grub*.efi: shim looks for that name beside itself.
+# branding builds for the rest of boot. losos-limine-bless settles a UKI's
+# tries in its file name once a boot succeeds. losos-limine-trial spends one
+# try as soon as userspace can see the ESP, because Limine cannot rename a
+# file.
 #
-# UEFI used to boot with systemd-boot, which draws a text menu in the
-# firmware's console font and nothing else. GRUB draws the salmon behind
-# the menu as the rest of the boot does, from GRUB to Plymouth (splash.nix)
-# to the login screen. It is not coming back for that reason, and because
-# two loaders that count tries in two places were one more thing to keep in
-# step. What systemd-boot gave the rest of the system, GRUB gives too: the
-# bli module sets LoaderDevicePartUUID, so systemd-gpt-auto-generator finds
-# the root disk and the ESP as before, and chainloading leaves systemd-stub
-# to measure the UKI into the TPM as before.
+# The file Limine is started from is still named grub*.efi. Fedora's
+# Microsoft-signed shim loads \grub<arch>.efi from beside itself
+# (shim.nix, secondStage). The bytes are Limine.
 #
 # With LosOS's Secure Boot key (secure-boot.nix), Microsoft-signed shim is
-# what firmware starts, and it starts this GRUB signed (shim.nix):
+# what firmware starts, and it starts this Limine signed (shim.nix):
 #
-#   UEFI  firmware -> ESP: shim -> GRUB -> chainloads the UKI, through
+#   UEFI  firmware -> ESP: shim -> Limine -> chainloads the UKI, through
 #         shim's LoadImage, which checks it against the MOK list
 #
-# NixOS's own GRUB module stays off (boot.nix): it installs GRUB into a
-# running system and regenerates its menu on every rebuild, and this OS is
-# an image that is never rebuilt in place. The image and the installer put
-# this GRUB on the ESP, and losos-grub-update below replaces it with the one
+# NixOS's own GRUB module stays off (boot.nix): it would install GRUB into a
+# running system and regenerate a menu on every rebuild, and this OS is an
+# image that is never rebuilt in place. The image and the installer put
+# Limine on the ESP, and losos-limine-update below replaces it with the one
 # in /usr once an update has booted well, as systemd-boot-update does for
-# systemd-boot.
+# systemd-boot. A disk that still starts the previous loader (GRUB, or
+# systemd-boot) is moved over to Limine by that same unit.
 {
   config,
   lib,
@@ -45,17 +41,15 @@ let
   inherit (config.image.repart.verityStore) partitionIds;
   id = config.system.image.id;
   sb = config.system.build.secureBoot;
+  withSbat = import ./limine-efi.nix {
+    inherit pkgs;
+    efiArch = arch.efi;
+  };
 
   art = import ../branding {
     inherit pkgs;
     name = config.system.nixos.distroName;
   };
-
-  # Kept so a derivation that still asks for the old menu path evaluates.
-  # Nothing boots it. The menu Limine reads is written by limineMenu.
-  menu = pkgs.writeText "limine-unused.conf" ''
-    # The menu is losos-limine-menu's limine.conf, not this file.
-  '';
 
   limineMenu = pkgs.writeShellApplication {
     name = "losos-limine-menu";
@@ -81,34 +75,19 @@ let
     '';
   };
 
-  # What image.nix and the installer run on a disk once its UKIs are in
-  # place: the menu, and on x86_64 Limine's BIOS boot code.
-  biosInstall = lib.getExe limineMenu;
+  # Limine's EFI program, with the SBAT section above, signed with
+  # LosOS's key when there is one so shim will start it.
+  efi = pkgs.runCommand "losos-limine-${arch.efi}" { } ''
+    mkdir $out
+    cp ${if sb.enable then sb.sign "limine${arch.efi}.efi" withSbat else withSbat} $out/limine.efi
+  '';
 
-  # Limine's EFI program, signed with LosOS's key when there is one, so
-  # shim will start it. The name on the ESP stays grub.efi because that is
-  # the file shim loads from beside itself.
-  efi = pkgs.runCommand "losos-limine-${arch.efi}" { } (
-    if sb.enable then
-      ''
-        mkdir $out
-        cp ${sb.sign "grub${arch.efi}.efi" "${pkgs.limine}/share/limine/BOOT${lib.toUpper arch.efi}.EFI"} $out/grub.efi
-      ''
-    else
-      ''
-        mkdir $out
-        cp ${pkgs.limine}/share/limine/BOOT${lib.toUpper arch.efi}.EFI $out/grub.efi
-      ''
-  );
-
-  # Everything on the ESP that starts GRUB: shim and MokManager beside it
-  # with Secure Boot's key, at the removable-media path and at a path of
-  # its own; and the certificate MokManager enrolls (shim.nix).
-  # A menu the image can boot before losos-limine-menu has rewritten it.
-  # The writer replaces it once the UKIs are on the disk.
+  # A menu the image can boot before losos-limine-menu has rewritten it
+  # from the UKIs. The writer replaces it once those are on the disk.
+  # No serial: on UEFI that flag skips the graphical terminal. BIOS reads
+  # /limine.conf, which the writer gives a serial console.
   stubConf = pkgs.writeText "limine.conf" ''
     timeout: 3
-    serial: yes
     wallpaper: boot():/limine/salmon.png
     wallpaper_style: centered
     backdrop: 0a0e12
@@ -121,10 +100,13 @@ let
     interface_help_colour: 94a2b0
   '';
 
+  # Everything on the ESP that starts Limine: shim and MokManager beside
+  # it with Secure Boot's key, at the removable-media path and at a path
+  # of its own; and the certificate MokManager enrolls (shim.nix).
   starters =
-    sb.removable "${efi}/grub.efi"
+    sb.removable "${efi}/limine.efi"
     // {
-      "/EFI/losos/grub${arch.efi}.efi" = "${efi}/grub.efi";
+      "/EFI/losos/${sb.secondStage}" = "${efi}/limine.efi";
       "/limine/salmon.png" = "${art}/limine/salmon.png";
       "/limine.conf" = stubConf;
       "/EFI/BOOT/limine.conf" = stubConf;
@@ -138,117 +120,59 @@ let
       "/EFI/losos/mm${arch.efi}.efi" = sb.mokManagerFile;
     };
 
-  # grubenv as grub-editenv creates it: a signature line padded with # to
-  # 1024 bytes. GRUB writes it in place and never creates it, so the ESP has
-  # to start with one.
-  env = pkgs.runCommand "losos-grubenv" { } ''
-    {
-      printf '# GRUB Environment Block\n'
-      head -c 1024 /dev/zero | tr '\0' '#'
-    } | head -c 1024 > $out
-  '';
-
-  # grubenv from Linux, as GRUB's save_env writes it: the same 1024 bytes
-  # rewritten where they are, since GRUB can only write into blocks the file
-  # already has. grub-editenv would do the same, and bring all of GRUB into
-  # the image for it.
-  grubenv = pkgs.writeShellApplication {
-    name = "losos-grubenv";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.gnugrep
-      config.systemd.package
-    ];
-    text = ''
-      # losos-grubenv set NAME VALUE | unset NAME | reset | systemd-boot
-      #
-      # set, unset and reset edit the ESP's grubenv; reset empties it.
-      # systemd-boot succeeds when systemd-boot started this boot rather
-      # than GRUB: a disk installed before GRUB replaced it, whose ESP still
-      # starts systemd-boot, and whose boots systemd-bless-boot settles.
-      info=/sys/firmware/efi/efivars/LoaderInfo-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
-      if [ "''${1-}" = systemd-boot ]; then
-        [ -r "$info" ] || exit 1
-        tail -c +5 "$info" | tr -d '\0' | grep -q '^systemd-boot'
-        exit
-      fi
-
-      file="$(bootctl --print-esp-path)/EFI/losos/grubenv"
-      [ -f "$file" ] || { echo "losos-grubenv: no $file" >&2; exit 1; }
-      new=$(mktemp)
-      trap 'rm -f "$new"' EXIT
-      case "''${1-}" in
-        set | unset)
-          name=''${2:?a variable name}
-          {
-            printf '# GRUB Environment Block\n'
-            grep -v -e '^#' -e "^$name=" "$file" || true
-            if [ "$1" = set ]; then
-              printf '%s=%s\n' "$name" "''${3?a value}"
-            fi
-          } > "$new"
-          ;;
-        reset) printf '# GRUB Environment Block\n' > "$new" ;;
-        *)
-          echo "usage: losos-grubenv set NAME VALUE | unset NAME | reset | systemd-boot" >&2
-          exit 2
-          ;;
-      esac
-      size=$(stat -c %s "$new")
-      if [ "$size" -gt 1024 ]; then
-        echo "losos-grubenv: $file would outgrow its 1024 bytes" >&2
-        exit 1
-      fi
-      head -c $((1024 - size)) /dev/zero | tr '\0' '#' >> "$new"
-      dd if="$new" of="$file" bs=1024 count=1 conv=notrunc status=none
-      sync --file-system "$file"
-    '';
-  };
-
-  # The UKI this boot started, as Limine recorded it. UEFI sets
-  # LoaderEntrySelected to the entry name, which is the file name. A BIOS
-  # boot puts the same name on the kernel command line as losos.uki=.
-  bootedUki = ''
-    entry=
+  # This system's UKI, counted or not. The menu names entries "LosOS
+  # Desktop <version>", and Limine turns that into LoaderEntrySelected, so
+  # the file name is not in the EFI variable. The booted /usr is this
+  # version, and sysupdate keeps one UKI of it.
+  #
+  # A disk still started by systemd-boot reports that in LoaderInfo.
+  # systemd-bless-boot owns the count then, and this does nothing.
+  ownUki = ''
     info=/sys/firmware/efi/efivars/LoaderInfo-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
-    selected=/sys/firmware/efi/efivars/LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
     if [ -r "$info" ] && tail -c +5 "$info" | tr -d '\0' | grep -q '^systemd-boot'; then
       exit 0
     fi
-    if [ -r "$selected" ]; then
-      entry=$(tail -c +5 "$selected" | tr -d '\0')
-    fi
-    if [ -z "$entry" ]; then
-      entry=$(grep -o 'losos\.uki=[^ ]*' /proc/cmdline | head -n 1 | cut -d= -f2- || true)
-    fi
+    esp=$(${config.systemd.package}/bin/bootctl --print-esp-path)
+    boot=$(${config.systemd.package}/bin/bootctl --print-boot-path)
+    file=
+    for dir in "$boot" "$esp"; do
+      found=$(find "$dir/EFI/Linux" -maxdepth 1 -name '${id}_${cfg.version}+*.efi' -print -quit 2>/dev/null || true)
+      if [ -n "$found" ]; then
+        file=$found
+        break
+      fi
+      if [ -f "$dir/EFI/Linux/${id}_${cfg.version}.efi" ]; then
+        file=$dir/EFI/Linux/${id}_${cfg.version}.efi
+        break
+      fi
+    done
   '';
 
-  # Spends one try as soon as userspace can see the ESP. A kernel that dies
-  # before this runs is started again with the same count: Limine cannot
-  # rename a file or write the count itself.
+  # Spends one try as soon as userspace can see the ESP, then rewrites the
+  # menu so the next boot names the file the rename left. A kernel that
+  # dies before this runs is started again with the same count: Limine
+  # cannot rename a file or write the count itself. A crash after the
+  # rename but before the rewrite would leave the menu pointing at a file
+  # that is gone, so both happen here.
   trial = pkgs.writeShellApplication {
     name = "losos-limine-trial";
     runtimeInputs = [
       pkgs.coreutils
+      pkgs.findutils
       pkgs.gnugrep
+      limineMenu
     ];
     text = ''
-      ${bootedUki}
-      [ -n "$entry" ] || exit 0
+      ${ownUki}
+      [ -n "$file" ] || exit 0
+      entry=$(basename "$file")
       case $entry in
         *+*) ;;
-        *) exit 0 ;;
+        *)
+          losos-limine-menu --esp "$esp"
+          exit 0
+          ;;
       esac
-      esp=$(${config.systemd.package}/bin/bootctl --print-esp-path)
-      boot=$(${config.systemd.package}/bin/bootctl --print-boot-path)
-      file=
-      for dir in "$boot" "$esp"; do
-        if [ -e "$dir/EFI/Linux/$entry" ]; then
-          file="$dir/EFI/Linux/$entry"
-          break
-        fi
-      done
-      [ -n "$file" ] || exit 0
       base=''${entry%%+*}
       counter=''${entry#*+}
       counter=''${counter%.efi}
@@ -261,6 +185,7 @@ let
       dir=$(dirname "$file")
       mv "$file" "$dir/$base+$((tries - 1))-$((made + 1)).efi"
       sync --file-system "$dir"
+      losos-limine-menu --esp "$esp"
     '';
   };
 
@@ -268,63 +193,51 @@ let
   # its counter. The trial service may already have lowered the count, so
   # this looks up the version rather than the name from boot.
   bless = pkgs.writeShellApplication {
-    name = "losos-grub-bless";
+    name = "losos-limine-bless";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.findutils
       pkgs.gnugrep
       config.systemd.package
-      grubenv
+      limineMenu
     ];
     text = ''
-      ${bootedUki}
-      [ -n "$entry" ] || exit 0
+      ${ownUki}
+      [ -n "$file" ] || exit 0
+      entry=$(basename "$file")
       case $entry in
         *+*) ;;
-        *) exit 0 ;;
+        *)
+          losos-limine-menu --esp "$esp"
+          exit 0
+          ;;
       esac
-      esp=$(bootctl --print-esp-path)
-      boot=$(bootctl --print-boot-path)
-      base=''${entry%%+*}
-      version=''${base#${id}_}
-      version=''${version%.efi}
-      file=
-      for dir in "$boot" "$esp"; do
-        found=$(find "$dir/EFI/Linux" -maxdepth 1 -name "${id}_$version*.efi" 2>/dev/null | head -n 1 || true)
-        if [ -n "$found" ]; then
-          file=$found
-          break
-        fi
-      done
-      [ -n "$file" ] || exit 0
       dir=$(dirname "$file")
-      mv "$file" "$dir/${id}_$version.efi"
+      mv "$file" "$dir/${id}_${cfg.version}.efi"
       sync --file-system "$dir"
-      echo "Marked ${id}_$version.efi as good."
-      if [ -f "$esp/EFI/losos/grubenv" ]; then
-        losos-grubenv reset || true
-      fi
+      echo "Marked ${id}_${cfg.version}.efi as good."
+      losos-limine-menu --esp "$esp"
     '';
   };
 
-  # What systemd-boot-update.service does for systemd-boot: the GRUB on the
-  # ESP is the one the image or the installer put there, and /usr carries
-  # the one its version was built with, so after an update this copies the
-  # new one over the old. It runs only once losos-grub-bless has run, so a
-  # version's GRUB reaches the ESP only after that version has started
-  # cleanly, and never goes backwards: a rollback to an older version leaves
-  # the newer GRUB, which reads the same names and grubenv, in place.
+  # What systemd-boot-update.service does for systemd-boot: the Limine on
+  # the ESP is the one the image or the installer put there, and /usr
+  # carries the one its version was built with, so after an update this
+  # copies the new one over the old. It runs only once losos-limine-bless
+  # has run, so a version's Limine reaches the ESP only after that version
+  # has started cleanly, and never goes backwards: a rollback to an older
+  # version leaves the newer Limine, which reads the same names, in place.
   #
-  # It replaces only files that are already LosOS's: GRUB, recognised by
-  # the variable its early config sets, or the systemd-boot older installs
-  # started with, which moves them to GRUB. EFI/BOOT/BOOT<ARCH>.EFI on a
-  # disk the Windows installer set up is Windows', and stays so. Under a
-  # BIOS-capable disk it rewrites GRUB's boot code in the MBR and the BIOS
-  # boot partition too, with bios.nix's losos-grub-bios-install, when the
-  # MBR already holds GRUB's. EFI/losos/installed records what it installed
-  # last, so a boot with nothing new writes nothing.
+  # It replaces only files that are already LosOS's: Limine, recognised by
+  # its base-revision string; the GRUB an older install still starts,
+  # recognised by the variable its early config set; or the systemd-boot
+  # older installs started with. EFI/BOOT/BOOT<ARCH>.EFI on a disk the
+  # Windows installer set up is Windows', and stays so. On an x86_64 disk
+  # with a BIOS boot partition it reinstalls Limine's BIOS stage too.
+  # EFI/losos/installed records what it installed last, so a boot with
+  # nothing new writes nothing.
   update = pkgs.writeShellApplication {
-    name = "losos-grub-update";
+    name = "losos-limine-update";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.diffutils
@@ -337,7 +250,7 @@ let
     ];
     text = ''
       version=${lib.escapeShellArg cfg.version}
-      stamp="version=$version efi=${efi} bios=${toString biosInstall}${lib.optionalString sb.enable " shim=${sb.shimFile}"}"
+      stamp="version=$version efi=${efi} bios=${lib.getExe limineMenu}${lib.optionalString sb.enable " shim=${sb.shimFile}"}"
 
       esp=$(bootctl --print-esp-path)
       # /efi can be an automount; looking inside mounts it.
@@ -349,7 +262,7 @@ let
         installed=$(sed -n 's/^version=\([^ ]*\).*/\1/p' "$record")
         newest=$(printf '%s\n%s\n' "$installed" "$version" | sort -V | tail -n 1)
         if [ "$newest" != "$version" ]; then
-          echo "The ESP has GRUB from $installed, newer than $version; leaving it."
+          echo "The ESP has Limine from $installed, newer than $version; leaving it."
           exit 0
         fi
       fi
@@ -357,8 +270,8 @@ let
 
       # The Windows installer lists what it added to the ESP, so that
       # --uninstall removes exactly that (src/losos-windows-installer); a
-      # file this adds goes on its list too. Installs from before GRUB kept
-      # the list under loader/.
+      # file this adds goes on its list too. Installs from before Limine
+      # kept the list under loader/.
       created() {
         local list
         for list in "$dir/losos-windows-installer.txt" "$esp/loader/losos-windows-installer.txt"; do
@@ -377,28 +290,29 @@ let
         mv -f "$2.new" "$2"
         echo "Wrote ''${2#"$esp"/}."
       }
-      # Limine, the GRUB an older install still starts, or the systemd-boot
-      # older installs started with; or shim, with Limine beside it.
+      # Limine, the GRUB an older install still starts (its early config
+      # set losos_disk), or the systemd-boot older installs started with;
+      # or shim, with Limine or that GRUB beside it.
       ours() {
         [ -f "$1" ] || return 1
         grep -aq -e 'limine: Base revision' -e losos_disk -e '#### LoaderInfo: systemd-boot' "$1" && return 0
         grep -aq 'github.com/rhboot/shim' "$1" \
-          && grep -aq -e 'limine: Base revision' -e losos_disk "$(dirname "$1")/grub${arch.efi}.efi" 2> /dev/null
+          && grep -aq -e 'limine: Base revision' -e losos_disk "$(dirname "$1")/${sb.secondStage}" 2> /dev/null
       }
 
-      # What firmware starts under DIR/NAME: shim, and GRUB and MokManager
-      # beside it, with Secure Boot's key; GRUB itself without.
+      # What firmware starts under DIR/NAME: shim, and Limine and MokManager
+      # beside it, with Secure Boot's key; Limine itself without.
       start_from() {
         ${
           if sb.enable then
             ''
               put ${sb.shimFile} "$1/$2"
-              put ${efi}/grub.efi "$1/grub${arch.efi}.efi"
+              put ${efi}/limine.efi "$1/${sb.secondStage}"
               put ${sb.mokManagerFile} "$1/mm${arch.efi}.efi"
             ''
           else
             ''
-              put ${efi}/grub.efi "$1/$2"
+              put ${efi}/limine.efi "$1/$2"
             ''
         }
       }
@@ -408,13 +322,17 @@ let
           start_from "$(dirname "$esp/EFI/$file")" "$(basename "$file")"
         fi
       done
-      put ${efi}/grub.efi "$dir/grub${arch.efi}.efi"
+      put ${efi}/limine.efi "$dir/${sb.secondStage}"
       ${lib.optionalString sb.enable ''
         put ${sb.shimFile} "$dir/shim${arch.efi}.efi"
         put ${sb.mokManagerFile} "$dir/mm${arch.efi}.efi"
         put ${sb.certificateDer} "$esp${sb.enrolPath}"
       ''}
-      [ -f "$dir/grubenv" ] || put ${env} "$dir/grubenv"
+      # GRUB's boot counter. Limine keeps the count in the UKI's file name.
+      if [ -f "$dir/grubenv" ]; then
+        rm -f "$dir/grubenv"
+        echo "Removed EFI/losos/grubenv."
+      fi
       ${lib.getExe limineMenu} --esp "$esp"
       ${lib.optionalString (arch.name == "x86_64") ''
         source=$(findmnt --noheadings --raw --output SOURCE --types vfat --mountpoint "$esp")
@@ -438,14 +356,14 @@ let
     '';
   };
 
-  # The firmware entry the Windows installer adds for GRUB goes first in
+  # The firmware entry the Windows installer adds for Limine goes first in
   # the boot order, and Windows' own updates and some firmware put Windows
-  # Boot Manager back in front of it (docs/windows-installer.md). GRUB's
+  # Boot Manager back in front of it (docs/windows-installer.md). Limine's
   # menu offers Windows anyway, so each LosOS boot that gets as far as
   # boot-complete.target puts LosOS's entry first again, whether it names
-  # GRUB or the shim beside it (shim.nix). A disk the image or the
-  # installer laid out starts from the removable-media path and has no
-  # entry, and this does nothing there.
+  # Limine (under shim's second-stage file name) or the shim beside it
+  # (shim.nix). A disk the image or the installer laid out starts from the
+  # removable-media path and has no entry, and this does nothing there.
   bootOrder = pkgs.writeShellApplication {
     name = "losos-boot-order";
     runtimeInputs = [
@@ -466,19 +384,16 @@ let
       [ "''${order%%,*}" = "$ours" ] && exit 0
       rest=$(printf '%s\n' "$order" | tr , '\n' | grep -vixF "$ours" | paste -sd, || true)
       efibootmgr --quiet --bootorder "$ours''${rest:+,$rest}"
-      echo "Put Boot$ours, LosOS's GRUB, first in the boot order again."
+      echo "Put Boot$ours, LosOS, first in the boot order again."
     '';
   };
 in
 {
-  system.build.grub = {
+  system.build.limine = {
     inherit
       art
-      menu
       efi
       starters
-      env
-      grubenv
       update
       bootOrder
       limineMenu
@@ -487,23 +402,19 @@ in
   };
 
   # image.nix and the installer run this on the disk after its UKIs are
-  # copied, while the ESP is not mounted.
-  system.build.grubBiosInstall = limineMenu;
+  # copied. It writes limine.conf, and on x86_64 installs Limine's BIOS
+  # boot code. The ESP need not be mounted: the program reads the disk.
+  system.build.limineInstall = limineMenu;
 
-  environment.systemPackages = [
-    grubenv
-    limineMenu
-  ];
+  environment.systemPackages = [ limineMenu ];
 
   # The removable-media path, which firmware boots with no boot entry
   # registered, so this image needs no efibootmgr and no install step; and
   # a copy at the path of its own that the Windows installer registers with
   # the firmware, where Windows' fallback owns the first one.
-  image.repart.partitions.${partitionIds.esp}.contents =
-    lib.mapAttrs (_: source: { inherit source; }) starters
-    // {
-      "/EFI/losos/grubenv".source = env;
-    };
+  image.repart.partitions.${partitionIds.esp}.contents = lib.mapAttrs (_: source: {
+    inherit source;
+  }) starters;
 
   # As systemd-bless-boot.service is wired: after boot-complete.target,
   # which systemd-boot-check-no-failures gates (boot.nix), pulled in early
@@ -513,7 +424,7 @@ in
     wantedBy = [ "basic.target" ];
     after = [ "local-fs.target" ];
     before = [
-      "losos-grub-bless.service"
+      "losos-limine-bless.service"
       "boot-complete.target"
     ];
     unitConfig.DefaultDependencies = false;
@@ -529,7 +440,7 @@ in
     wantedBy = [ "multi-user.target" ];
     after = [
       "local-fs.target"
-      "losos-grub-bless.service"
+      "losos-limine-bless.service"
     ];
     before = [ "shutdown.target" ];
     conflicts = [ "shutdown.target" ];
@@ -542,8 +453,8 @@ in
     };
   };
 
-  systemd.services.losos-grub-bless = {
-    description = "Mark the UKI GRUB started as good";
+  systemd.services.losos-limine-bless = {
+    description = "Mark the UKI Limine started as good";
     wantedBy = [ "basic.target" ];
     requires = [ "boot-complete.target" ];
     after = [
@@ -560,14 +471,14 @@ in
     };
   };
 
-  systemd.services.losos-grub-update = {
-    description = "Install the GRUB this version carries";
+  systemd.services.losos-limine-update = {
+    description = "Install the Limine this version carries";
     wantedBy = [ "basic.target" ];
     requires = [ "boot-complete.target" ];
     after = [
       "local-fs.target"
       "boot-complete.target"
-      "losos-grub-bless.service"
+      "losos-limine-bless.service"
     ];
     conflicts = [ "shutdown.target" ];
     before = [ "shutdown.target" ];

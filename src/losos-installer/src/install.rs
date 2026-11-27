@@ -1,7 +1,7 @@
 //! The install itself: systemd-repart lays out the disk, systemd-sysupdate
 //! fills it.
 //!
-//! repart creates the ESP, with GRUB and its grubenv copied in, and
+//! repart creates the ESP, with Limine copied in, and
 //! both slots' /usr partitions, empty and labelled `_empty`. That label is
 //! what sysupdate looks for when it needs a partition to write a version
 //! into, so the install that follows is an ordinary update: sysupdate reads
@@ -72,7 +72,7 @@ pub struct Plan {
     pub local: Option<PathBuf>,
     /// A program that makes the disk start on a legacy BIOS PC, run with
     /// the disk as its argument once the system is on it. The OS passes
-    /// its GRUB installer here on x86_64 (bios.nix); UEFI firmware ignores
+    /// its Limine installer here on x86_64 (bios.nix); UEFI firmware ignores
     /// what it writes.
     pub bios_boot: Option<PathBuf>,
     /// Root encrypted with this PIN, laid out as this says, when the person
@@ -544,7 +544,7 @@ fn download(plan: &Plan, disk: &str, events: &Sender<Event>) -> Result<(), Strin
         ));
     }
     // After sysupdate, so a disk whose download failed is left with no boot
-    // code that would start GRUB on an empty ESP.
+    // code that would start Limine on an empty ESP.
     if let Some(program) = &plan.bios_boot {
         let program = program.to_string_lossy().into_owned();
         command(&program, &[disk], false, events)?;

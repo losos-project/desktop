@@ -1,411 +1,354 @@
 # What is not done
 
-- **Slovak eID beyond signing in.** The eID klient runs in a machine and
-  signs in to slovensko.sk ([the Slovak eID](tokens.md#the-slovak-eid)),
-  but D.Signer, which the same download carries for qualified signatures
-  on documents, is not set up anywhere, and the eID klient is x86_64 only,
-  so an arm64 PC has neither. Nobody has signed in with a real card through
-  a machine yet, or to the computer itself
-  ([signing in with the eID](tokens.md#signing-in-with-the-eid)), and
-  Settings has no row for eID sign-in: `losos-eid-signin` sets it up.
-- **arm64 macOS.** The image does not build `qemu-vmapple` or Reims. Stock
-  QEMU has no `vmapple` machine. Nobody has booted macOS on the old port,
-  and nothing in derisk starts it. [arm64 macOS machines](macos-arm64.md)
-  lists what that port was.
-- **Peripherals in their machines.** [Peripherals](peripherals.md) moves
-  USB devices and Bluetooth radios into machines of their own. Some of it
-  is not finished:
-  - Bluetooth headphones pair and connect in sys-bluetooth, but there is
-    no PipeWire there and no path for their sound to the host's.
-  - A camera reaches apps on the host as one size, 1280x720, whatever the
-    camera can do, and its own microphone goes to its machine with it,
-    where nothing carries its sound to the host. Sound cards play and
-    record through the host's PipeWire, printers print from the host's
-    CUPS, and cameras film through a v4l2loopback device.
-  - A printer's scanner goes to its machine with it, and nothing there
-    scans. A printer Gutenprint and CUPS have no driver for, and that
-    speaks neither IPP over USB, PostScript nor PCL, gets no queue.
-  - A keyboard or mouse plugged into a port sys-usb holds comes to the
-    host over USB/IP, so the host parses its HID descriptors. Qubes's input
-    proxy, which passes only key and pointer events, is not done.
-  - A Bluetooth radio that is not on USB, on a UART or SDIO as on some
-    Arm laptops, stays the host's, and Settings does not see it.
-  - Every part has run only in virtual machines: the router, sys-usb and a
-    receiving machine nested in QEMU, and controller passthrough through
-    QEMU's emulated IOMMU (`nixos/tests/peripherals.nix`). None of it has
-    met a PC's own USB controllers or a real Bluetooth radio.
-- **The gaming machine.** [The gaming machine](gaming-machine.md) needs a
-  second graphics card. Some of it is not finished:
-  - A PC with one card cannot hand it to the machine and take it back
-    while the desktop waits on the processor.
-  - Settings has no page for it yet; `losos-gaming` and
-    `pm system start losos-gaming-reserve@<address>` do it.
-  - It has not run with a real card yet: the VM test defines the machine
-    in libvirt and checks the boot unit, without a card to move.
-  - Disks and other devices still carry QEMU's names, which some
-    anti-cheats look for.
-- **Focus mode.** [Focus mode](focus-mode.md) pauses background work, but
-  the desktop's own bar and dock stay on screen: a full-screen request
-  from a program does not yet hide them.
-- **The network and files machines.** [The network machine](network-machine.md)
-  and [the files machine](files-machine.md) have gaps:
-  - Handing a network card over by VFIO has only run in QEMU. The VM test
-    runs the fallback for a PC without an IOMMU.
-  - sys-net forwards IPv4 only. The host has no IPv6 while it routes
-    through it.
-  - The keyboard's Wi-Fi and airplane keys reach the host's rfkill, not
-    the machine's. Settings' Wi-Fi switch works.
-  - The edge as a way out has a command, `losos-edge`, and no row in
-    Settings yet. sys-net checks no gateway's passport, so an edge on
-    the network counts as a gateway by its own word; it is only ever the
-    way to the official edges it lists, never the exit.
-  - The edge's tunnel carries IPv4 only, like the rest of sys-net.
-  - The [VPN](vpn.md) has a command, `losos-vpn`, and no row in Settings
-    yet, and the host learns only whether sys-vpn runs, not whether its
-    tunnel is up.
-  - In schizo mode with a VPN, a provider's endpoint must be an address
-    in its file, not a name: sys-vpn would ask Tor for the name, and Tor
-    goes out through sys-vpn. Windscribe's files name their endpoints.
-  - Without an IOMMU, NetworkManager on the host keeps the networks the
-    host has saved, and sys-net keeps none of its own.
-  - Network shares have a command, `losos-shares`, and no page in
-    Settings or Files. WebDAV shares have not been tried against a
-    server.
-  - OpenSSH's `sftp-server` in sys-files is not chrooted to the volume it
-    serves. The host is the only one that can ask for one.
-- **The portal machine.** [The portal machine](portal-machine.md) has
-  gaps:
-  - Its dialogs are not attached to the app's window, which is on
-    another machine's display, so they open as windows of their own.
-  - What a machine may write back is kept until the host restarts. After
-    that, saving a copy a machine was given before changes only the copy.
-  - A folder picked for an app in a machine goes back file by file. An
-    empty folder made in the copy reaches the host only once a file is
-    put in it, and a link made in the copy stays in the machine.
-  - Changes made to a picked folder on the host after it was copied do
-    not reach the machine's copy.
-  - Only the files and screenshot portals copy files. A portal that hands
-    an app a file in another way, such as the Account portal's picture,
-    hands a machine's app a path it cannot open.
-- **pm on a NixOS host.** pm's jail mirrors the host's `/bin`, `/lib` and
-  `/usr`, and also mounts `/nix/store` and the store-backed `PATH`
-  directories read-only. So a step whose tools come from the store runs. A
-  `losos-nix` step running `nix eval` and `nix hash` worked that way in pm's
-  jail on a Nix-provisioned host. A recipe that names FHS paths, such as
-  `/bin/cat` or a compiler under `/usr`, still finds nothing, and every recipe
-  in the old pm tree did that. In this image `/usr` is the Nix store's
-  partition and `/bin` holds only `sh`. So pm itself runs here, including
-  `pm --help`, `pm source-path`, signing and `explain`, and the boot test
-  checks it is installed. A recipe written for an FHS host does not build on
-  it, though. For the same reason, seven of pm's test targets are skipped in
-  the Nix build, and `nixos/pkgs/pm.nix` lists them.
-- **The Agent's tools.** The image carries neither Claude Code, which nixpkgs
-  marks unfree, nor the Rust toolchain that the [Agent](agent.md)'s previews
-  build with. A chat needs `claude`, and a preview needs `cargo` with the
-  `wasm32-wasip2` target, both installed by the person first.
-- **Searching what is in every file.** `derisk-index` reads plain text,
-  PDFs and OpenDocument and Office Open XML files, but not the text in
-  pictures or scanned PDFs, which would take OCR, nor the older binary
-  `.doc`, `.xls` and `.ppt` formats. Those are found by name alone. Only the
-  first MiB of a file's text is indexed. Hidden files and anything
-  `.gitignore` leaves out are not indexed unless Settings names their folder.
-- **The Agent's machine.** The [Agent](agent.md) works on a copy of the
-  folder the person picks, so a file changed on the host while the copy is
-  open is not seen in the machine until the folder is picked again. The
-  machine has no Nix and no pm, so the Agent's `nix_build` and
-  `pm_build` tools fail there. Files the Agent asks to open, such as an
-  artifact, stay in the machine, because only web links open on the
-  desktop. The machine draws in software, with no GPU. Nothing on the
-  desktop shows that the machine is running or stops it, other than closing
-  the Agent and waiting ten minutes.
-- **A default for text files.** Since Sonne left, nothing claims text and
-  source files as their default for `xdg-open`. Files opens them in whatever
-  app happens to list their type, if any. derisk's Text Editor cannot be
-  handed a file, because its desktop entry lives inside the derisk binary
-  with no file argument and no types.
-- **The guest template in full.** Only a reduced build of the
-  [guest](hypervisor.md), without Danube, Flatpak and the Calculator, has
-  booted, and no machine's window has reached a desktop through it yet. It is
-  a whole second NixOS in `/usr`, so it carries its own copy of store paths
-  the host also has, such as Mesa, Danube and fonts, and takes that room from
-  the 8 GiB `/usr` slot. Giving machines the host's store over virtiofs would
-  save it. A machine's disk grows once, to the size it was made with, and
-  nothing makes an existing machine's disk larger. Portal dialogs in a
-  machine, such as a Flatpak's file chooser, are the
-  [portal machine](portal-machine.md)'s now, and nobody has tried them
-  with a real app in a machine.
-- **The Flatpak machine's loose ends.** Flatpak's files move off the host
-  only for administrators,
-  because anyone else would get a password dialog they did not ask for.
-  Other users copy their `~/.var/app` into the machine by hand. The host's
-  copy of `~/.var/app` stays after the copy, until its owner deletes it.
-  Flatpak apps inside the machine draw in software, like the rest of its
-  apps, so a game from Flathub runs slower than it did on the host.
-- **Windows and other distributions in machines.** No Windows has been
-  installed from the Windows tools CD yet, so its answer file, its drivers and
-  its first sign-in have only been read, not run. The Linux tools CD's
-  `setup.sh` has not run in any distribution either. The desktop does not yet
-  show a machine's own screen by itself, though `virt-viewer --attach` does.
-  [Machines from an installer CD](hypervisor.md#machines-from-an-installer-cd)
-  describes both CDs.
-- **Windows app support.** [Windows app support](windows-apps.md) has not
-  set up Windows on a real PC yet. The setup, `pm container` and rootless
-  Podman ran here, but dockur's Windows needs KVM, which the sessions this was
-  built in lack. Its windows are FreeRDP's X11 windows, drawn through the
-  session's one xwayland-satellite, so the desktop does not frame them in a
-  colour of their own. It has no GPU, so Windows draws its apps and encodes
-  their H.264 in software. USB passthrough, which WinBoat does only with
-  Docker, is not offered. Windows is not activated.
-- **App windows.** [App windows](app-windows.md) has run on GitHub's Macs,
-  driven by scripts and from LosOS booted in a VM on them. Pictures go
-  to the compositor through shared memory rather than the GPU's own
-  buffers. The pointer is always the arrow, only text crosses the
-  clipboard, and drag and drop and sound stay in the guest. A Mac package
-  downloaded in another machine stays there; only this desktop's own hand
-  packages to macOS.
-- **macOS app support.** [macOS app support](macos-apps.md) has not set
-  up macOS yet. That needs a Mac running LosOS, because Apple's licence
-  lets macOS run only on Apple hardware, and CI's Macs run macOS rather
-  than LosOS. The installer inside macOS builds the app server with Rust
-  and Apple's command line tools, which macOS downloads, rather than
-  installing a built one. Reims vGPU has not drawn macOS here.
-- **No hosted proxy.** GitHub Pages serves files only. Of what
-  [`proxy/`](binary-cache.md) did, updates moved to GitHub Releases, through
-  an index on the documentation site and a service on each machine
-  ([Releases](releases.md#updating-from-github-releases)). CI reads the Nix
-  cache through the proxy's own code on its runner. Three things still need a
-  deployment that runs code, set as `LOSOS_PROXY_URL`:
-  - the daily `/ping` and the [choice screens](choice-screens.md) it turns
-    on, which stay off without one;
-  - the web flasher's own downloads, so without one it sends the person to
-    the release page ([Web flasher](web-flasher.md#where-the-files-come-from));
-  - a public cache URL for a builder outside CI, though `proxy/serve.ts` runs
+The known gaps, grouped by area. Each item links to the page that describes the
+working part.
+
+## Boot, install and updates
+
+- Testing. Every CI run boots the x86_64 image in QEMU with `nix flake check`,
+  under UEFI and SeaBIOS ("Tested" in [Boot loader](boot-loaders.md)). That
+  covers first-boot partitioning, finding root, dm-verity `/usr`, boot counting
+  and blessing a new UKI, laptop hibernate and resume with a TPM, the installer
+  ISO under both firmwares, and an install from a nightly's files through to
+  the installed disk's first boot. Not yet seen: a running system taking an
+  update from the channel and booting it (the tests rename a UKI to fake one),
+  the aarch64 image starting at all (the arm64 runner has no KVM, and emulation
+  times out waiting for the disk), and any of it on a real PC.
+- A complete image build. CI builds release images within its runner time
+  budget. Local builds may take longer.
+- A recovery shell under UEFI. The root shell from
+  [When something goes wrong](troubleshooting.md#no-one-can-administer-the-machine)
+  edits a BIOS entry's command line in Limine. A UEFI entry chainloads the UKI
+  and has no command line, and a UKI only takes kernel arguments as a
+  replacement for its whole command line. So x86_64 PCs under UEFI and aarch64
+  PCs have no way to the shell since the switch from GRUB to Limine.
+- A PIN at startup. Only [the installer](installer.md#asking-for-a-pin-at-startup)
+  encrypts root with a TPM and PIN. A written image, first-boot setup and the
+  Windows installer leave root plain, and a factory reset recreates root plain
+  from `disk.nix`. The TPM slot is bound to no PCRs until the UKIs are signed.
+  The VM test unlocks the installed root with `systemd-cryptsetup` next to the
+  installer, but no test boots an installed system through the PIN prompt yet,
+  because that needs a release to install. Settings can't change the PIN.
+  Use `systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-with-pin=yes --tpm2-pcrs=`
+  with the recovery key.
+- Signing keys. There is no key rotation. A new key needs an update signed by
+  the old key that carries both. As in the pm tree, a key belongs to whoever
+  owns the machine.
+- A shim of LosOS's own. [Secure Boot](secure-boot.md) uses Fedora's
+  Microsoft-signed shim, because LosOS's shim has not been through
+  shim-review. Each PC enrolls LosOS's key in MokManager once. The arm64 shim
+  is signed only by Microsoft's 2023 CA, which older arm64 firmware may not
+  trust. Releases are signed only once the `SECURE_BOOT_KEY` secret and
+  `nixos/keys/secure-boot.crt` are both in place.
+- Hibernation. No machine hibernates: the locked-down kernel refuses, and
+  mainline Linux can't authenticate a hibernation image well enough
+  ([Hibernation](hibernation.md)).
+- sysext. Extensions merge into `/usr`, which holds little but the Nix store,
+  so an extension can add a program but not replace one.
+- No hosted proxy. GitHub Pages serves only files. Updates moved to GitHub
+  Releases ([Updating from GitHub Releases](releases.md#updating-from-github-releases)),
+  and CI reads the Nix cache through the proxy's code on its runner. Three
+  things still need a deployment of [`proxy/`](binary-cache.md) set as
+  `LOSOS_PROXY_URL`:
+  - The daily `/ping` and the [choice screens](choice-screens.md) it turns on.
+  - The web flasher's own downloads. Without them it sends you to the release
+    page ([Where the files come from](web-flasher.md#where-the-files-come-from)).
+  - A public cache URL for builders outside CI, though `proxy/serve.ts` runs
     the same cache locally.
 
   Systems installed from an image built with a proxy URL keep asking that
-  proxy for updates until they are reinstalled, or until the proxy serves
-  them one more update.
-- **A cadence picked on a machine that updates from a proxy.** An image built
-  with `LOSOS_PROXY_URL` names the proxy's `/updates/<cadence>/<arch>/` for
-  its own cadence in its sysupdate transfers, which are part of `/usr`.
-  Settings still lists the cadences there. But `losos-update-channel` only
-  exists where updates come from GitHub Releases, so the page says
+  proxy for updates until they are reinstalled or the proxy serves one more
+  update.
+- Choosing a cadence with a proxy. An image built with `LOSOS_PROXY_URL` names
+  the proxy's `/updates/<cadence>/<arch>/` in its sysupdate transfers in
+  `/usr`. Settings still lists the cadences, but `losos-update-channel` only
+  exists for GitHub Releases updates, so the page says
   [the choice](releases.md#choosing-a-cadence) is not available.
-- **A complete image build.** CI builds release images within its runner
-  time budget. Local image builds may take longer.
-- **Hibernation.** No machine hibernates. The locked-down kernel refuses to,
-  and nothing in mainline Linux authenticates a hibernation image well
-  enough to let it. [Hibernation](hibernation.md) has the details.
-- **Signing.** There is no key rotation. A new key needs an update signed by
-  the old one that carries both. As in the pm tree, a key belongs to whoever
-  owns the machine.
-- **A shim of LosOS's own.** [Secure Boot](secure-boot.md) uses Fedora's
-  Microsoft-signed shim, because LosOS's has not been through shim-review.
-  So each PC enrolls LosOS's key in MokManager once, instead of the
-  firmware trusting LosOS's shim as it comes. The arm64 shim is signed only
-  by Microsoft's 2023 CA, which arm64 firmware from before it may not
-  trust. Releases are signed only once the repository's `SECURE_BOOT_KEY`
-  secret and `nixos/keys/secure-boot.crt` are both in place.
-- **[The Windows installer](windows-installer.md) has not run on Windows.**
-  Its install was checked against a disk image laid out like Windows', which
-  then booted. The half that talks to Windows has only been compiled. That
-  half shrinks C:, issues the partition table IOCTLs, mounts the ESP, and
-  handles firmware variables and BitLocker. Beyond that:
-  - **Secure Boot must be off.** The installer registers Limine itself with
-    the firmware, not shim, and has not been taught to put shim, MokManager
-    and the certificate beside it ([Secure Boot](secure-boot.md)).
-  - **SmartScreen.** The `.exe` has no Authenticode signature, so Windows
-    warns before running it.
-  - **Windows' recovery partition.** Updates that grow it, as KB5034441 did,
-    shrink C: to make room behind it. With LosOS behind C: they cannot, and
-    they fail as they do on any disk with no free space after C:.
-  - **The boot order.** Some firmware, and some Windows updates, put Windows
-    Boot Manager first again. LosOS puts its own entry back in front each
-    time it starts. Until it next does, Windows starts by itself, and LosOS
-    is one pick away in the firmware's boot menu.
-  - **arm64.** The installer is built for x86_64 only, because Windows on
-    arm64 runs on laptops this OS has no kernel configuration for.
-- **[Installer reports](installer.md#reporting-a-failed-install) cover a
-  failed install only.** The backend writes them, so nothing is reported when
-  the backend itself stops, or when derisk crashes. A report needs a GitHub
-  account and a second device, or a browser, to approve the sign-in. The
-  GitHub App and `LOSOS_REPORT_CLIENT_ID` are set up, but no report has
-  reached the real GitHub yet: the tests sign in to a stand-in.
-- **[Desktop reports](reporting.md) see only some problems.** A window is
-  noticed only when its app misses the ping that a click or a key into it
-  sends, so a hung window nobody touches is not. Settings is the only app
-  that reports an action that never finished, and only for Bluetooth
-  pairing, a backup and asking for a factory reset. Nothing is reported when
-  derisk itself crashes.
-- **gnome-control-center.** The image does not carry it, and the two
-  patches that used to sit beside it are gone. What they added is on derisk
-  Settings' System page instead: the security report, and the factory reset.
-  Only a UEFI machine offers the factory reset, because systemd's request to
-  reset needs UEFI. Neither has been tried on hardware.
-- **NVIDIA on real hardware.** The [driver choice](drivers.md) was tested in a
-  VM with a report that names an RTX 4090. No NVIDIA card has run the image.
-  The open module taking a card, derisk's compositor on it, explicit sync,
-  suspend, VA-API, hardened_malloc under NVIDIA's libraries, and laptops with
-  two GPUs are all untested. A machine with an NVIDIA card and another GPU
-  draws on whichever is the boot display, and nothing offloads an app to the
-  other.
-- **derisk drives one display.** `derisk display-manager` starts
-  `derisk greeter`, derisk's lock screen used as the login screen, and after
-  a login, `derisk session --execute`. Each takes the seat from logind and
-  scans out through DRM/KMS on the first connected display, at its preferred
-  mode, as set up in `nixos/modules/desktop.nix`. A second display stays dark,
-  and hotplug is not handled. X11 apps run through xwayland-satellite, a user
-  unit that starts with the session, also in `desktop.nix`. It has been seen
-  serving an X11 client under a headless weston, but not yet under derisk's
-  compositor.
-- **derisk's portal has gaps.** Screen sharing through
-  xdg-desktop-portal-wlr copies frames into shared memory, not dma-bufs. A
-  shared window is cut out of the screen, so anything covering it is shared
-  too. The colour and area pickers show a screenshot frozen across the
-  screen. They were tried under X11, not yet in a derisk session, and the
-  lock screen's picture has not been tried in one either.
-- **The Halium GSI has not run on a device.** It evaluates for aarch64, and an
-  x86_64 build of the same boot path booted under QEMU, as the pull request
-  that made it the one target shows. No arm64 build has been flashed, no
-  bootloader has loaded its `init_boot`, and the web flasher has only talked
-  to a simulated fastboot device. Only a phone can confirm three things: that
-  a generic kernel's configuration has everything systemd and the desktop
-  use, `CONFIG_USER_NS` for Flatpak's sandbox above all; that `vendor_boot`'s
-  ramdisk and this one unpack together as intended; and that Halium's
-  Android 14 system image starts each vendor's HALs. Beyond that:
-  - **The display.** derisk drives the display itself through DRM/KMS. A
-    device whose kernel has a DRM driver, such as msm, mediatek or panfrost,
-    can show the desktop with Mesa. A device that only has Android's
-    hwcomposer cannot, because nothing here drives hwcomposer. That needs a
-    hwcomposer backend in derisk or a compositor in front of it.
-  - **Updates.** sysupdate is not wired up. The flasher writes userdata
-    whole, so installing a newer release erases the phone. There is no
-    verity on the root either, and the bootloader stays unlocked.
-  - **Phones without `init_boot`.** The flasher writes their own boot image
-    back with this ramdisk after theirs. Its repacking matches AOSP's
-    `mkbootimg` byte for byte for header versions 0 to 4, and it was run
-    against a simulated phone in fastbootd. No real bootloader has booted
-    such an image yet, and a phone whose ramdisk links `/etc` or `/lib`
-    elsewhere would merge badly with this one.
-  - **Kernels older than 5.10.** Phones that launched with Android 11 or
-    earlier run 4.x or 5.4 kernels, which systemd does not support at all.
-    The flasher reads the kernel's version and refuses them. Supporting them
-    would need an older systemd or a kernel built per device.
-  - **hardened_malloc.** The GSI's [allocator](allocator.md) is built for a
-    39-bit address space and tried by the initrd before it is preloaded,
-    but no phone's kernel has run that trial yet. A phone with 16 KiB pages
-    fails it, and its processes keep glibc's malloc. derisk gets it only
-    through the preload there, without the length check on Rust's frees
-    that a PC's derisk has.
-  - **Telephony, audio, sensors, camera.** There is no ofono, no
-    PulseAudio or PipeWire droid modules, and no sensorfw. Android's init
-    starts the HALs, but nothing on the Linux side talks to them yet beyond
-    EGL.
-- **Wi-Fi, Bluetooth and power modes in Settings.** derisk Settings' Network
-  page lists, joins and forgets networks through NetworkManager, which lets
-  the `networkmanager` group change them. First-boot setup puts the account
-  it creates in that group. An account made before setup did that is not in
+- [The Windows installer](windows-installer.md) has not run on Windows. Its
+  install was checked against a disk image laid out like Windows', which then
+  booted. The Windows half (shrinking C:, partition table IOCTLs, mounting the
+  ESP, firmware variables and BitLocker) has only been compiled. Also:
+  - Secure Boot must be off. The installer registers Limine with the firmware
+    directly and does not yet install shim, MokManager and the certificate
+    ([Secure Boot](secure-boot.md)).
+  - The `.exe` has no Authenticode signature, so SmartScreen warns.
+  - Windows updates that grow the recovery partition, as KB5034441 did, shrink
+    C: to make room. With LosOS behind C: they fail, as on any disk with no
+    free space after C:.
+  - Some firmware and Windows updates put Windows Boot Manager first again.
+    LosOS moves its entry back each time it starts. Until then Windows boots by
+    default, and LosOS is in the firmware boot menu.
+  - It is x86_64 only, because Windows on arm64 runs on laptops this OS has no
+    kernel configuration for.
+- [Installer reports](installer.md#reporting-a-failed-install) cover only a
+  failed install. The backend writes them, so nothing is reported when the
+  backend itself stops or derisk crashes. A report needs a GitHub account and a
+  second device or browser to approve the sign-in. The GitHub App and
+  `LOSOS_REPORT_CLIENT_ID` are set up, but no report has reached the real
+  GitHub: the tests sign in to a stand-in.
+
+## Hardware
+
+- NVIDIA. The [driver choice](drivers.md) was tested in a VM with a report
+  naming an RTX 4090. No NVIDIA card has run the image. Untested: the open
+  module taking a card, derisk's compositor on it, explicit sync, suspend,
+  VA-API, hardened_malloc under NVIDIA's libraries, and dual-GPU laptops. With
+  an NVIDIA card and another GPU, derisk draws on the boot display, and nothing
+  offloads apps to the other.
+- One display. `derisk display-manager` starts `derisk greeter` (the lock
+  screen as login screen) and, after login, `derisk session --execute`
+  (`nixos/modules/desktop.nix`). Each takes the seat from logind and scans out
+  through DRM/KMS on the first connected display at its preferred mode. A
+  second display stays dark, and hotplug is not handled. X11 apps run through
+  xwayland-satellite, a user unit started with the session. It has served an
+  X11 client under headless weston, not yet under derisk's compositor.
+- Wi-Fi, Bluetooth and power modes in Settings. The **Network** page uses
+  NetworkManager, which lets the `networkmanager` group change networks.
+  First-boot setup adds its account to that group. An older account isn't in
   it, and its Network page says so until
   `homectl update --member-of=wheel,networkmanager <user>` adds it. The
-  Bluetooth page pairs without asking anything, so a device that wants a
-  passkey typed or compared does not pair. None of the three pages has run
-  against a real adapter or against `power-profiles-daemon` on hardware. The
-  command palette's Power Mode rows ran against the daemon's placeholder
-  driver on a private bus, which offers no Performance profile. The Halium
-  GSI has no Bluetooth, because the phone's controller sits behind its vendor
-  HAL and nothing here bridges that to BlueZ.
-- **A recovery shell under UEFI.** The boot menu's root shell for a
-  machine nobody can administer, described in [When something goes
-  wrong](troubleshooting.md#no-one-can-administer-the-machine), is an edit
-  of a BIOS entry's command line in Limine's menu. A UEFI entry chainloads
-  the UKI and has no command line to edit, and a UKI takes kernel arguments
-  only as a replacement for its whole command line. So neither an x86_64 PC
-  under UEFI nor an aarch64 PC has a worked-out way to the shell since the
-  switch from GRUB to Limine.
-- **A PIN at startup is the installer's only.** [The
-  installer](installer.md#asking-for-a-pin-at-startup) encrypts root with a
-  TPM and a PIN when asked, but a PC set up from a written image, first-boot
-  setup and the Windows installer leave root plain. A factory reset recreates
-  root from `disk.nix`, which has no encryption, so it comes back plain too.
-  The TPM slot is bound to no PCRs until the UKIs are signed. The VM test
-  unlocks the installed root with `systemd-cryptsetup` beside the installer;
-  no test yet boots an installed system through the PIN prompt, since that
-  needs a release to install. There is no way to change the PIN from
-  Settings; `systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto
-  --tpm2-with-pin=yes --tpm2-pcrs=` with the recovery key does it.
-- **sysext.** Extensions merge into `/usr`, which here holds little but the
-  Nix store, so an extension can add a program but cannot replace one.
-- **Android app support.** [Android app support](android-apps.md) boots
-  its Pixel and opens an app's display in CI, on a runner with KVM and no
-  GPU. CI's Pixel draws with `-gpu host` through Mesa's llvmpipe, the same
-  path a GPU's driver takes, but no CI run has had a real GPU, and Vulkan
-  through gfxstream is only on with one ([The GPU](android-apps.md#the-gpu)).
-  Google Play needs a person to sign in to
-  a Google account on the Pixel before it installs anything. The Pixel has
-  no camera, and no USB passthrough. Its windows have no colour of their
-  own, since they come from scrcpy on the desktop rather than from a
-  machine. Google builds no emulator for Linux on ARM, so aarch64 PCs and
-  the GSI have no Android app support.
-- **Booted under QEMU only.** Every CI run boots the x86_64 image in QEMU
-  with `nix flake check`, under UEFI and under SeaBIOS, as "Tested" in
-  [Boot loader](boot-loaders.md) describes. First boot lays out the disk with
-  systemd-repart. Root is found, by gpt-auto on UEFI and on the disk the
-  boot loader names on a BIOS. `/usr` is dm-verity, and a new UKI is counted down and
-  blessed. A laptop with a TPM hibernates and resumes. The installer ISO
-  starts under both firmwares. An install from a nightly's files was run in
-  QEMU through to the installed disk's first boot, so sysupdate has written
-  a disk other than the running one. Three things have not been seen yet. A
-  running system has not taken an update from the channel and booted it; the
-  tests rename a UKI to stand in for a new one. The aarch64 image has not
-  started at all, since the arm64 runner has no KVM and the aarch64 VM under
-  emulation times out waiting for its disk. And none of it has run on a PC
-  instead of in QEMU.
-- **Danube is unfinished in places.** [Danube](danube.md)'s extensions
-  cannot see requests through `webRequest`, talk to a native program, or use
-  cookies, context menus, history, bookmarks or the side panel, as its
-  "Extensions" section lists. A download that stopped cannot be resumed.
-  Its sandboxes need unprivileged user namespaces, and a phone's own kernel
-  may refuse them. Danube then stops instead of running a page outside a
-  sandbox, so on such a phone it does not open at all. `--no-sandbox` skips
-  only the outer sandbox. Danube has run with derisk on the desktop, in a
-  VM, but not yet on a phone.
-- **Ad blocking is DNS-wide only for names.** A filter list's URL and element
-  rules apply in Danube alone. Other browsers and apps get only whole
-  [blocked domains](adblock.md), and a program
-  with its own DNS over HTTPS skips it entirely.
-- **Labels on the network cover `virbr0` only.** A machine on a network
-  someone made in virt-manager is not filtered by its label. Neither is a
-  red machine kept from the host's public address, on a PC that has one
-  rather than a LAN address. A machine's new label takes effect when it
-  next starts ([labels on the network](hypervisor.md#labels-on-the-network)).
-- **Encrypted DNS moves trust rather than removing it.** With
-  [encrypted DNS](adblock.md#encrypted-dns) on, the network no longer sees
-  the names, but the resolver does, Quad9 or Mullvad by default. Queries are
-  not padded (RFC 8467), so their sizes still hint at the names, and the
-  TLS connection's fingerprint is rustls', not a browser's. Only Tor
-  hides the names from both.
-- **The LosOS boxes machine passes on names, not everything.** It routes the
-  other machines' connections to a box only on ports 80 and 443, by the name
-  they ask for. An app's own port on a box is reached directly, and nothing
-  stops a machine that knows a box's address from reaching it without the
-  [LosOS boxes](losos-boxes.md) machine. The machine's keyring has no sign-in
-  to unlock it, so the first `losos` command that stores a key or token asks
-  for a keyring password in a window of the machine. Nothing makes the
-  machine automatically either, and its owner makes it from the template.
-  The machine itself has not met a real box on a real LAN yet: the machines
-  test boots a stand-in box beside the host, and the real box in
-  `nixos/tests/losos-box.nix` is found by a desktop with no machine. Away
-  from home only `losos`, the palette's search and LosOS Cloud's link reach a
-  box, through its edge; backups and the other machines' connections still
-  need the box's own network.
-- **Backups to a LosOS box keep one copy.** LosOS
-  cloud keeps old versions and the trash, but LosOS Git keeps only the latest
-  state of each branch, and only the configs' repository has a history. A
-  repository deleted at home stays on the box.
-  Symbolic links are recorded for restore, and Git LFS objects are uploaded.
-  A box with HTTPS turned off through `losos.tls.enable` cannot be backed up
-  to. Only an administrator's run can start a stopped LosOS boxes machine.
-  A box older than LosOS Login's sign-in for backups offers the password
-  sign-in to LosOS cloud; without a LosOS Git token, repositories go to
-  LosOS cloud as files. The test uses both a stand-in and a real box. See
-  [Backups to a LosOS box](backup.md).
+  **Bluetooth** page pairs without prompting, so devices that need a passkey
+  typed or compared don't pair. None of the three pages has run against a real
+  adapter or `power-profiles-daemon` on hardware. The palette's Power Mode rows
+  ran against the daemon's placeholder driver on a private bus, which has no
+  Performance profile. The Halium GSI has no Bluetooth, because nothing bridges
+  the vendor HAL to BlueZ.
+- gnome-control-center is gone, with its two patches. What they added, the
+  security report and factory reset, is on the **System** page of derisk
+  Settings. Only UEFI machines offer factory reset, because systemd's reset
+  request needs UEFI. Neither has been tried on hardware.
+- [Peripherals](peripherals.md) in their machines:
+  - Bluetooth headphones pair and connect in sys-bluetooth, but there is no
+    PipeWire there and no path for their sound to the host.
+  - Cameras reach host apps at 1280x720 only, and a camera's microphone goes to
+    its machine, where nothing carries the sound to the host.
+  - A printer's scanner goes to its machine, and nothing there scans. A printer
+    with no Gutenprint or CUPS driver that speaks neither IPP over USB,
+    PostScript nor PCL gets no queue.
+  - A keyboard or mouse on a port sys-usb holds reaches the host over USB/IP,
+    so the host parses its HID descriptors. Qubes's input proxy, which passes
+    only key and pointer events, is not done.
+  - A Bluetooth radio on UART or SDIO, as on some Arm laptops, stays on the
+    host, and Settings doesn't see it.
+  - All of it has run only in VMs: the router, sys-usb and a receiving machine
+    nested in QEMU, and controller passthrough through QEMU's emulated IOMMU
+    (`nixos/tests/peripherals.nix`). None of it has met real USB controllers or
+    a real Bluetooth radio.
+
+## Machines
+
+- The guest template. Only a reduced [guest](hypervisor.md), without Danube,
+  Flatpak and the Calculator, has booted, and no machine window has reached a
+  desktop through it yet. It is a second NixOS in `/usr` with its own copies of
+  store paths the host also has (Mesa, Danube, fonts), taking room from the
+  8 GiB `/usr` slot. Sharing the host's store over virtiofs would save that.
+  A machine's disk grows once, to its creation size, and nothing enlarges an
+  existing disk. Portal dialogs in a machine now come from the
+  [portal machine](portal-machine.md), untried with a real app.
+- Labels on the network cover `virbr0` only. A machine on a network made in
+  virt-manager is not filtered, and on a PC with a public address a red machine
+  is not kept from it. A new label applies at the machine's next start
+  ([Labels on the network](hypervisor.md#labels-on-the-network)).
+- The Flatpak machine. Flatpaks move off the host only for administrators,
+  because anyone else would get an unexpected password dialog. Other users copy
+  their `~/.var/app` in by hand, and the host copy stays until its owner
+  deletes it. Flatpak apps in the machine draw in software, so Flathub games
+  run slower than on the host.
+- Windows and other distributions. No Windows has been installed from the
+  Windows tools CD, so its answer file, drivers and first sign-in have only
+  been read. The Linux tools CD's `setup.sh` has not run in any distribution.
+  The desktop doesn't show a machine's own screen by itself yet, though
+  `virt-viewer --attach` does
+  ([Machines from an installer CD](hypervisor.md#machines-from-an-installer-cd)).
+- [The network machine](network-machine.md) and [the files machine](files-machine.md):
+  - VFIO card handover has only run in QEMU. The VM test runs the no-IOMMU
+    fallback.
+  - sys-net forwards IPv4 only, so the host has no IPv6 through it. The edge
+    tunnel is IPv4 only too.
+  - The keyboard's Wi-Fi and airplane keys reach the host's rfkill, not the
+    machine's. The Wi-Fi switch in Settings works.
+  - The edge exit has a command, `losos-edge`, but no row in Settings. sys-net
+    checks no gateway's passport, so an edge on the network is a gateway on its
+    own word. It is only ever the way to the official edges it lists, never the
+    exit.
+  - The [VPN](vpn.md) has a command, `losos-vpn`, but no row in Settings, and
+    the host learns only whether sys-vpn runs, not whether its tunnel is up.
+  - In schizo mode with a VPN, the provider's endpoint must be an address, not
+    a name: sys-vpn would ask Tor for the name, and Tor goes out through
+    sys-vpn. Windscribe's files use names.
+  - Without an IOMMU, the host's NetworkManager keeps the saved networks and
+    sys-net keeps none.
+  - Network shares have a command, `losos-shares`, but no page in Settings or
+    Files. WebDAV has not been tried against a server.
+  - `sftp-server` in sys-files is not chrooted to the volume it serves. Only
+    the host can ask for a volume.
+- [The portal machine](portal-machine.md):
+  - Its dialogs open as separate windows, not attached to the app's window,
+    which is on another machine's display.
+  - Write-back permissions last until the host restarts. After that, saving a
+    copy a machine got earlier changes only the copy.
+  - A folder picked for a machine syncs back file by file. An empty folder
+    reaches the host only once it has a file, and links made in the copy stay
+    in the machine.
+  - Changes on the host to a picked folder after the copy don't reach the
+    machine.
+  - Only the files and screenshot portals copy files. Other portals that pass a
+    file, such as the Account portal's picture, give a machine's app a path it
+    can't open.
+- The LosOS boxes machine routes other machines' connections to a box only on
+  ports 80 and 443, by name. An app's own port on a box is reached directly,
+  and a machine that knows a box's address can bypass the
+  [LosOS boxes](losos-boxes.md) machine. Its keyring has no sign-in to unlock
+  it, so the first `losos` command that stores a key or token asks for a
+  keyring password in a machine window. Nothing creates the machine
+  automatically: you create it from the template. It has not met a real box on
+  a real LAN: the machines test boots a stand-in box, and the real box in
+  `nixos/tests/losos-box.nix` is found by a desktop with no machine. Away from
+  home only `losos`, palette search and LosOS Cloud's link reach a box, through
+  its edge. Backups and other machines' connections need the box's own network.
+- [Backups to a LosOS box](backup.md) keep one copy of repositories. LosOS
+  cloud keeps old versions and the trash, but LosOS Git keeps only each
+  branch's latest state, and only the configs repository has history. A
+  repository deleted at home stays on the box. Symbolic links are recorded for
+  restore, and Git LFS objects are uploaded. A box with HTTPS turned off
+  (`losos.tls.enable`) can't be backed up to. Only an administrator's run can
+  start a stopped LosOS boxes machine. A box older than LosOS Login's backup
+  sign-in offers password sign-in to LosOS cloud, and without a LosOS Git token
+  repositories go to LosOS cloud as files. The test uses both a stand-in and a
+  real box.
+- [The gaming machine](gaming-machine.md) needs a second graphics card:
+  - A PC with one card can't hand it over and take it back while the desktop
+    waits on the processor.
+  - Settings has no page yet. Use `losos-gaming` and
+    `pm system start losos-gaming-reserve@<address>`.
+  - It hasn't run with a real card: the VM test defines the machine and checks
+    the boot unit without a card to move.
+  - Disks and other devices still carry QEMU's names, which some anti-cheats
+    look for.
+
+## Apps
+
+- [Danube](danube.md) extensions can't see requests through `webRequest`, talk
+  to native programs, or use cookies, context menus, history, bookmarks or the
+  side panel (see its "Extensions" section). Stopped downloads can't resume.
+  Its sandboxes need unprivileged user namespaces. A phone kernel may refuse
+  them, and then Danube stops rather than run a page unsandboxed, so it doesn't
+  open at all. `--no-sandbox` skips only the outer sandbox. Danube has run with
+  derisk in a VM, not on a phone.
+- [Ad blocking](adblock.md) applies a filter list's URL and element rules in
+  Danube only. Other apps get only blocked domains, and a program with its own
+  DNS over HTTPS skips it.
+- [Encrypted DNS](adblock.md#encrypted-dns) hides names from the network but
+  not from the resolver (Quad9 or Mullvad by default). Queries are not padded
+  (RFC 8467), so their sizes hint at the names, and the TLS fingerprint is
+  rustls', not a browser's. Only Tor hides names from both.
+- Slovak eID beyond signing in. The eID klient runs in a machine and signs in
+  to slovensko.sk ([The Slovak eID](tokens.md#the-slovak-eid)). D.Signer, in
+  the same download, is not set up, and the klient is x86_64 only. Nobody has
+  signed in with a real card through a machine, or to the computer itself
+  ([Signing in with the eID](tokens.md#signing-in-with-the-eid)). Settings has
+  no row for eID sign-in. `losos-eid-signin` sets it up.
+- [The Agent](agent.md). The image carries neither Claude Code (unfree in
+  nixpkgs) nor the Rust toolchain for previews. You install `claude`, and
+  `cargo` with the `wasm32-wasip2` target, first. The Agent works on a copy of
+  the folder you pick, so host changes appear only when you pick the folder
+  again. The machine has no Nix or pm, so `nix_build` and `pm_build` fail
+  there. Files the Agent opens, such as an artifact, stay in the machine,
+  because only web links open on the desktop. The machine draws in software.
+  Nothing shows it running or stops it, except closing the Agent and waiting
+  ten minutes.
+- File content search. `derisk-index` reads plain text, PDFs, OpenDocument and
+  Office Open XML. It can't read text in pictures or scanned PDFs (that needs
+  OCR) or old binary `.doc`, `.xls` and `.ppt`. Those are found by name only.
+  It indexes the first MiB of each file's text, and skips hidden files and
+  anything `.gitignore` excludes unless Settings names their folder.
+- A default for text files. Since Sonne left, nothing claims text and source
+  files for `xdg-open`, so Files opens them in whatever app lists the type, if
+  any. derisk's Text Editor can't be handed a file, because its desktop entry
+  lives inside the derisk binary with no file argument and no types.
+- [Windows app support](windows-apps.md) hasn't set up Windows on a real PC.
+  The setup, `pm container` and rootless Podman ran, but dockur's Windows needs
+  KVM, which the build sessions lacked. Its windows are FreeRDP X11 windows
+  through the session's xwayland-satellite, so the desktop doesn't frame them
+  in a colour. With no GPU, Windows draws apps and encodes H.264 in software.
+  USB passthrough, which WinBoat does only with Docker, is not offered. Windows
+  is not activated.
+- [App windows](app-windows.md) has run on GitHub's Macs, from scripts and from
+  LosOS booted in a VM on them. Pictures go to the compositor through shared
+  memory, not GPU buffers. The pointer is always the arrow, only text crosses
+  the clipboard, and drag and drop and sound stay in the guest. A Mac package
+  downloaded in another machine stays there. Only this desktop hands packages
+  to macOS.
+- [macOS app support](macos-apps.md) hasn't set up macOS. That needs a Mac
+  running LosOS, because Apple's licence allows macOS only on Apple hardware,
+  and CI's Macs run macOS. The installer inside macOS builds the app server
+  with Rust and Apple's command line tools instead of installing a prebuilt
+  one. Reims vGPU hasn't drawn macOS here.
+- arm64 macOS. The image doesn't build `qemu-vmapple` or Reims, and stock QEMU
+  has no `vmapple` machine. Nobody has booted macOS on the old port, and
+  nothing in derisk starts it ([arm64 macOS machines](macos-arm64.md)).
+- [Android app support](android-apps.md) boots its Pixel and opens an app's
+  display in CI, on a KVM runner with no GPU, drawing with `-gpu host` through
+  Mesa's llvmpipe. No CI run has had a real GPU, and Vulkan through gfxstream
+  is only on with one ([The GPU](android-apps.md#the-gpu)). Google Play needs
+  you to sign in to a Google account on the Pixel first. The Pixel has no
+  camera and no USB passthrough. Its windows have no colour, because they come
+  from scrcpy on the desktop, not from a machine. Google builds no emulator for
+  Linux on ARM, so aarch64 PCs and the GSI have no Android apps.
+- [Focus mode](focus-mode.md) pauses background work, but the desktop's bar
+  and dock stay visible: a program's full-screen request doesn't hide them yet.
+- [pm](pm.md) on a NixOS host. pm's jail mirrors the host's `/bin`, `/lib` and
+  `/usr` and mounts `/nix/store` and the store-backed `PATH` directories
+  read-only, so steps whose tools come from the store run. A `losos-nix` step
+  running `nix eval` and `nix hash` worked that way on a Nix-provisioned host.
+  A recipe that names FHS paths such as `/bin/cat` or a compiler under `/usr`
+  finds nothing, and every recipe in the old pm tree did that. Here `/usr` is
+  the Nix store partition and `/bin` holds only `sh`. pm itself runs
+  (`pm --help`, `pm source-path`, signing, `explain`), and the boot test checks
+  it is installed, but FHS recipes don't build. Seven of pm's test targets are
+  skipped in the Nix build for the same reason. `nixos/pkgs/pm.nix` lists them.
+- [Desktop reports](reporting.md) see only some problems. A window counts as
+  hung only when it misses the ping a click or key sends, so an untouched hung
+  window goes unnoticed. Only Settings reports an action that never finished,
+  and only for Bluetooth pairing, a backup and a factory reset request. Nothing
+  is reported when derisk itself crashes.
+- derisk's portal. Screen sharing through xdg-desktop-portal-wlr copies frames
+  to shared memory, not dma-bufs. A shared window is cut out of the screen, so
+  anything covering it is shared too. The colour and area pickers show a frozen
+  screenshot. They were tried under X11, not in a derisk session, and neither
+  was the lock screen's picture.
+
+## Phones
+
+The [Halium GSI](halium.md) has not run on a device. It evaluates for aarch64,
+and an x86_64 build of the same boot path booted under QEMU. No arm64 build has
+been flashed, no bootloader has loaded its `init_boot`, and the web flasher has
+only talked to a simulated fastboot device. Only a phone can confirm that a
+generic kernel has everything systemd and the desktop use (`CONFIG_USER_NS` for
+Flatpak's sandbox above all), that `vendor_boot`'s ramdisk and this one unpack
+together, and that Halium's Android 14 system image starts each vendor's HALs.
+Beyond that:
+
+- Display. derisk drives the display through DRM/KMS. A device whose kernel has
+  a DRM driver (msm, mediatek, panfrost) can show the desktop with Mesa. A
+  device with only Android's hwcomposer can't, until derisk gets a hwcomposer
+  backend or a compositor sits in front of it.
+- Updates. sysupdate is not wired up. The flasher writes userdata whole, so a
+  newer release erases the phone. Root has no verity, and the bootloader stays
+  unlocked.
+- Phones without `init_boot`. The flasher writes their boot image back with
+  this ramdisk after theirs. Its repacking matches AOSP's `mkbootimg` byte for
+  byte for header versions 0 to 4 and ran against a simulated phone in
+  fastbootd, but no real bootloader has booted such an image. A phone whose
+  ramdisk links `/etc` or `/lib` elsewhere would merge badly.
+- Kernels older than 5.10. Phones that launched with Android 11 or earlier run
+  4.x or 5.4 kernels, which systemd doesn't support. The flasher reads the
+  kernel version and refuses them.
+- hardened_malloc. The GSI's [allocator](allocator.md) is built for a 39-bit
+  address space and tested by the initrd before preloading, but no phone kernel
+  has run that test. A phone with 16 KiB pages fails it and keeps glibc's
+  malloc. derisk gets hardened_malloc only through the preload there, without
+  the length check on Rust's frees that a PC's derisk has.
+- Telephony, audio, sensors, camera. There is no ofono, no PulseAudio or
+  PipeWire droid modules, and no sensorfw. Android's init starts the HALs, but
+  nothing on the Linux side talks to them yet beyond EGL.

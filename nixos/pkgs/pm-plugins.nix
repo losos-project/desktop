@@ -100,6 +100,7 @@ stdenv.mkDerivation {
 
   buildPhase = ''
     runHook preBuild
+    export CARGO_BUILD_JOBS=1
     (cd ours && cargo build --offline --release --target wasm32-unknown-unknown ${packages local})
     (cd pm/plugins && cargo build --offline --release --target wasm32-unknown-unknown ${packages fromPm})
     # The encoder wraps a core module into a component; it runs here, on the

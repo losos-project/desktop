@@ -13,3 +13,10 @@ result
 result-*
 /losos-desktop.qcow2
 /losos-desktop-efivars.fd
+
+# Local Nix state, checkouts of flake inputs kept for inspection, and scratch
+# disks from Try verification. None of these are sources of this repository.
+/.cache/
+/derisk/
+/mcsapi/
+/losos_try/

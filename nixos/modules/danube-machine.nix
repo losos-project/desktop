@@ -98,7 +98,7 @@ let
     [source.vendored-sources]
     directory = "$build/vendor"
     EOF
-    CARGO_TARGET_DIR="$build/target" cargo build --offline --release \
+    CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR="$build/target" cargo build --offline --release \
       --manifest-path "$build/src/danube/Cargo.toml"
     install -m 0755 "$build/target/release/danube" /usr/local/bin/danube
     install -Dm 0644 "$cdpath/org.losos.Danube.desktop" \

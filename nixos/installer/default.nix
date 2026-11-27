@@ -24,10 +24,17 @@ let
 
   # Where a release disk is mounted, when one is attached.
   releaseDisk = "/run/losos/release";
-  # Where the embedded release is mounted when the ISO carries one.
-  embeddedRelease = "/iso/release";
+  # Where the embedded release is mounted when the ISO carries one. /iso is
+  # the medium's read-only ISO 9660 filesystem, so systemd cannot create a
+  # mount point there; /run is a tmpfs.
+  embeddedRelease = "/run/losos/embedded-release";
 
-  tryLive = pkgs.callPackage ../pkgs/losos-installer-try-live.nix { };
+  # Kexec into the desktop kernel and initrd that ship with this image. The
+  # desktop initrd snapshots the raw disk in /iso/try.squashfs (modules/try.nix);
+  # no nested QEMU and no X server are involved.
+  tryLive = pkgs.callPackage ../pkgs/losos-installer-try-live.nix {
+    inherit (losos) tryLinux tryInitrd tryCmdline;
+  };
 
   # systemd-sysupdate is a libexec program, not one on PATH.
   sysupdateBin = pkgs.linkFarm "systemd-sysupdate-bin" [
@@ -50,7 +57,7 @@ let
         sysupdateBin
         pkgs.coreutils
         pkgs.util-linux
-        # repart formats the ESP and copies GRUB into it with these.
+        # repart formats the ESP and copies Limine into it with these.
         pkgs.dosfstools
         pkgs.mtools
         # systemd-pull checks SHA256SUMS.gpg with gpg itself, and the
@@ -115,9 +122,9 @@ in
   };
 
   boot = {
-    # GRUB on the medium starts the UKI (iso.nix), with its menu built into
-    # its own image; NixOS's GRUB module, which installs one on a disk and
-    # writes its menu there, has no disk here to do that on.
+    # Limine on the medium starts the UKI (iso.nix), from limine.conf on
+    # the medium; NixOS's GRUB module, which installs GRUB on a disk and
+    # writes a GRUB menu there, has no disk here to do that on.
     loader.grub.enable = false;
     # How quiet the boot is, so nothing writes over the splash before the
     # installer takes the screen, is splash.nix's, as on the installed
@@ -190,12 +197,7 @@ in
   # default goes.
   environment.systemPackages = [
     pkgs.curl
-    tryLive
-    pkgs.qemu
   ];
-
-  boot.initrd.kernelModules = lib.mkAfter [ "kvm" ];
-  boot.kernelModules = [ "kvm" ];
 
   # The release signing key: sysupdate verifies SHA256SUMS.gpg here exactly
   # as it does on the installed system, under the name systemd 261's
@@ -244,23 +246,34 @@ in
   # screen, and losos-installer is only the backend it starts.
   systemd.defaultUnit = "graphical.target";
 
+  # A power-key event used to go straight through logind's default
+  # HandlePowerKey=poweroff, with no confirmation and no shutdown inhibitor
+  # held by the installer. In a VM that is virsh shutdown or virt-manager's
+  # Shut Down, and on hardware it is the power button: either could land in
+  # the middle of sysupdate's flashing phase and cut the machine off. The
+  # installer's only power action is the explicit one in the UI after it has
+  # finished, so hardware keys have nothing to do here.
+  services.logind.settings.Login = {
+    HandlePowerKey = "ignore";
+    HandlePowerKeyLongPress = "ignore";
+    HandleRebootKey = "ignore";
+    HandleRebootKeyLongPress = "ignore";
+  };
+
   systemd.services.losos-installer-try-live = {
     description = "Ephemeral try session of LosOS Desktop";
-    unitConfig.ConditionPathExists = "/iso/try.qcow2";
+    unitConfig.ConditionPathExists = "/iso/try.squashfs";
     serviceConfig = {
-      Type = "simple";
+      Type = "oneshot";
+      RemainAfterExit = true;
       ExecStart = lib.getExe tryLive;
-      TTYPath = "/dev/tty1";
-      TTYReset = true;
-      TTYVHangup = true;
-      TTYVTDisallocate = true;
     };
   };
 
   systemd.services.losos-installer-try-on-boot = {
     description = "Start an ephemeral try session from the boot menu";
     unitConfig.ConditionKernelCommandLine = "losos.try";
-    unitConfig.ConditionPathExists = "/iso/try.qcow2";
+    unitConfig.ConditionPathExists = "/iso/try.squashfs";
     wantedBy = [ "graphical.target" ];
     before = [ "derisk-installer.service" ];
     serviceConfig = {
@@ -363,7 +376,7 @@ in
                "--report-repo"
                losos.reportRepo
              ]}"
-        # GRUB into the installed disk's MBR and BIOS boot partition, so a
+        # Limine into the installed disk's MBR and BIOS boot partition, so a
         # legacy BIOS PC starts it as UEFI firmware does (bios.nix).
         +
           lib.optionalString (losos.biosBoot != null)

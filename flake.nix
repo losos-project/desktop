@@ -452,9 +452,9 @@
               if [ ! -e "$disk" ]; then
                 qemu-img create -f qcow2 -F qcow2 -b ${config.system.build.qcow2} "$disk" 40G
               fi
-              # The firmware's variable store is per machine and writable:
-              # Limine records which loader started and from which
-              # partition there.
+              # The firmware's variable store is per machine and writable.
+              # Limine records which loader started and which partition
+              # the boot came from (LoaderInfo, LoaderDevicePartUUID).
               if [ ! -e "$vars" ]; then
                 install -m 0644 ${pkgs.OVMF.variables} "$vars"
               fi

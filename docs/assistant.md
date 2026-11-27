@@ -23,9 +23,9 @@ conversation. After that it works without a network. On a PC, Ollama's Vulkan
 build runs it on the GPU when there is one and on the CPU otherwise.
 
 The default is Qwen3 4B Instruct, `qwen3:4b-instruct`, 2.5 GB and Apache-2.0.
-Ollama's small models were compared on the same requests, and this one used
-the desktop's tools best. It looks up a window's ID before snapping it, and it
-finishes requests that take several steps. `granite4:micro`, at 2.1 GB, is
+Of Ollama's small models tried on the same requests, it used the desktop's
+tools best: it looks up a window's ID before snapping it and finishes
+multi-step requests. `granite4:micro`, at 2.1 GB, is
 smaller and faster but made up window IDs. `qwen3.5:2b`, at 2.7 GB, repeated
 steps it had already done.
 
@@ -47,16 +47,16 @@ cut down for a small model. Each action is one flat tool, and results come
 back as short text. The model runs them over an agent connection, so it can do
 nothing an agent over `derisk mcp` couldn't. It can:
 
-- read the open windows, the installed apps and the settings, and find
-  elements on screen by role and name;
-- open apps, web pages and web searches, and focus, snap, minimize, close
-  and move windows between workspaces;
-- with the person's say-so, click and type in apps, press keys, change a
-  setting, open a file, and lock, suspend or end the session.
+- Read the open windows, installed apps and settings, and find elements on
+  screen by role and name.
+- Open apps, web pages and web searches, and focus, snap, minimize, close and
+  move windows between workspaces.
+- With your approval, click and type in apps, press keys, change a setting,
+  open a file, and lock, suspend or end the session.
 
-The steps in the last group wait in the palette with Allow and Don't
-allow, and Enter allows. Only real input answers them. A click an agent
-injected does not count, so the model cannot approve itself. Logging out,
+Steps in the last group wait in the palette with **Allow** and **Don't allow**,
+and Enter allows. Only real input answers them, not a click an agent injected,
+so the model can't approve itself. Logging out,
 rebooting and powering off also ask on screen afterwards, as they do for
 every agent. The model cannot change the `assistant.*` settings that say
 where requests go, and it cannot rebind shortcuts. One request stops after

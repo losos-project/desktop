@@ -1,5 +1,5 @@
 # Boot the real image with Secure Boot on, as a PC that trusts Microsoft's
-# keys does: the firmware starts shim, which starts the signed GRUB, which
+# keys does: the firmware starts shim, which starts the signed Limine, which
 # chainloads the signed UKI through shim (docs/secure-boot.md). LosOS's key,
 # image.nix's test key here, is in the MOK list as MokManager leaves it once
 # a person has enrolled it, and Settings' Security page counts Secure Boot
@@ -61,7 +61,7 @@ in
           machine.succeed("journalctl -k -b | grep -q \"Loaded X.509 cert 'LosOS Desktop Secure Boot (test)\"")
           machine.succeed("journalctl -k -b | grep -q 'Secure boot enabled'")
 
-      with subtest("GRUB started the UKI under Secure Boot"):
+      with subtest("Limine started the UKI under Secure Boot"):
           loader = machine.succeed(
               "tail -c +5 /sys/firmware/efi/efivars/LoaderInfo-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f | tr -d '\\0'"
           )

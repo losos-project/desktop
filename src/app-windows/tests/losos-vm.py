@@ -307,7 +307,11 @@ def boot(args, machine):
 
 def grub(args, machine, run):
     """Stops GRUB's countdown and boots the image's entry by hand, with a
-    root shell on the second serial port that the rest is driven from."""
+    root shell on the second serial port that the rest is driven from.
+
+    The published nightly this job boots is still GRUB. Limine images take
+    the other path.
+    """
     if not run.step("GRUB menu", machine.wait_serial("executed automatically", 600)):
         return False
     machine.key("up", every=0.5)
@@ -349,6 +353,58 @@ def grub(args, machine, run):
         prompts = machine.serial().count("grub>") + 1
         machine.key("ret", every=1)
     return True
+
+
+def limine(args, machine, run):
+    """Stops Limine's countdown and boots the image's entry with a root
+    shell on the second serial port that the rest is driven from.
+
+    The VM is SeaBIOS, so the entry is Limine's linux protocol. Its
+    command line is the UKI's, and this appends the serial console and
+    the debug shell. The editor opens on the comment line; four lines
+    down is cmdline (comment, protocol, path, module_path).
+    """
+    if not run.step("Limine menu", machine.wait_serial("Booting automatically", 600)):
+        return False
+    # The key that stops the countdown is consumed, and is not a menu key.
+    machine.key("up", every=0.5)
+    machine.key("e", every=1)
+    if not run.step("Limine editor", machine.wait_serial("Discard and Exit", 120)):
+        return False
+    machine.key("down", "down", "down", "down", "end", every=0.4)
+    extra = " console=ttyS0 systemd.debug_shell=ttyS1"
+    for attempt in range(3):
+        since = len(machine.serial())
+        machine.type(extra, every=0.08)
+        end = time.time() + 8
+        echo = ""
+        while time.time() < end:
+            echo = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\r\n]", "", machine.serial()[since:])
+            if "systemd.debug_shell=ttyS1" in echo:
+                break
+            time.sleep(0.2)
+        if "systemd.debug_shell=ttyS1" in echo:
+            break
+        log(f"Limine echoed {echo[-80:]!r} for the debug shell, typing it again")
+    else:
+        return run.step("Limine editor accepted the debug shell", False, echo[-200:])
+    machine.key("f10", every=1)
+    log(f"booting {args.version} from Limine")
+    return True
+
+
+def boot_menu(args, machine, run):
+    """The job boots the newest published nightly, which is still GRUB.
+    A Limine image prints a different countdown. Drive whichever appears."""
+    end = time.time() + 600
+    while time.time() < end:
+        serial = machine.serial()
+        if "Booting automatically" in serial:
+            return limine(args, machine, run)
+        if "executed automatically" in serial:
+            return grub(args, machine, run)
+        time.sleep(0.2)
+    return run.step("boot menu", False)
 
 
 def sign_in(machine, run):
@@ -542,7 +598,7 @@ def main():
     qemu = boot(args, machine)
     ok = False
     try:
-        if grub(args, machine, run) and sign_in(machine, run):
+        if boot_menu(args, machine, run) and sign_in(machine, run):
             if args.only_boot:
                 ok = True
             elif start_client(machine, run):

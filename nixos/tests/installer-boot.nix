@@ -1,5 +1,5 @@
 # Boot the installer from its actual ISO under UEFI, or with `bios` under a
-# legacy BIOS through GRUB's El Torito image (iso.nix), including the initrd
+# legacy BIOS through Limine's El Torito image (iso.nix), including the initrd
 # mounts and the service that owns tty1.
 {
   self,
@@ -84,7 +84,20 @@ in
   testScript = ''
     machine.${if bios then "fail" else "succeed"}("test -d /sys/firmware/efi")
     machine.succeed("findmnt --kernel /iso")
+    machine.succeed("test -f /iso/try.squashfs")
+    machine.fail("test -e /iso/try.qcow2")
     machine.succeed("findmnt --kernel /nix/store")
+    # The squashfs is read from the medium, but mounted on tmpfs: /iso is
+    # read-only, so a mount point there makes iso-release.mount fail and takes
+    # derisk-installer.service down with it.
+    machine.succeed("findmnt --kernel /run/losos/embedded-release")
+    # An ACPI power button (virsh shutdown, virt-manager's Shut Down, or the
+    # physical button) must not cut an install short. The installer finishes
+    # with an explicit request of its own after flashing is done.
+    machine.succeed(
+        "grep -qx 'HandlePowerKey=ignore' /etc/systemd/logind.conf "
+        "&& grep -qx 'HandleRebootKey=ignore' /etc/systemd/logind.conf"
+    )
     machine.wait_for_unit("derisk-installer.service")
     machine.succeed(
         "systemctl show derisk-installer.service --property=TTYPath --value "

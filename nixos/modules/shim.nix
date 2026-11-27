@@ -1,20 +1,28 @@
 # What Secure Boot needs on an ESP (docs/secure-boot.md): Fedora's
-# Microsoft-signed shim at the path firmware starts, GRUB signed with
+# Microsoft-signed shim at the path firmware starts, Limine signed with
 # LosOS's key beside it, MokManager, and LosOS's certificate for MokManager
 # to enroll. Plain data, called by secure-boot.nix for the image and by the
 # installer's iso.nix for its medium.
 #
-#   firmware (Microsoft's keys) -> shim -> GRUB (LosOS's key, in MokList)
-#     -> the UKI (LosOS's key), which GRUB loads through shim's LoadImage
+#   firmware (Microsoft's keys) -> shim -> Limine (LosOS's key, in MokList)
+#     -> the UKI (LosOS's key), which Limine loads through shim's LoadImage
 #
 # shim 16 replaces the firmware's LoadImage with its own, which also trusts
-# the MOK list, and GRUB 2.14 loads through it, so GRUB's chainloader
-# starts a UKI the firmware alone would refuse. systemd-stub then starts the
-# kernel inside the UKI, which shim accepts as part of an image it already
-# checked.
+# the MOK list, and a second stage that loads through it starts a UKI the
+# firmware alone would refuse. Limine chainloads the UKI that way.
+# systemd-stub then starts the kernel inside the UKI, which shim accepts as
+# part of an image it already checked. Limine's EFI program gets an SBAT
+# section before it is signed (limine-efi.nix); shim refuses a second stage
+# without one.
 #
-# Without a private key this is the layout from before: GRUB alone at the
-# removable-media path, nothing signed.
+# The second stage's file name is grub<arch>.efi. That is the name this
+# shim was built to load (DEFAULT_LOADER), and the Microsoft signature is
+# over that binary, so the name cannot change. The file is Limine.
+#
+# Without a private key this is the layout from before: Limine alone at the
+# removable-media path, nothing signed. The copy under EFI/losos keeps the
+# shim second-stage name either way, so a firmware entry and a later signed
+# install name the same file.
 {
   pkgs,
   # A path the build can read the key at (options.nix), or null.
@@ -82,25 +90,28 @@ rec {
   shimFile = "${shim}/shim${efi}.efi";
   mokManagerFile = "${shim}/mm${efi}.efi";
 
-  # The files that start GRUB from one directory of an ESP under the name
+  # Fedora's shim loads this name from beside itself. The file is Limine.
+  secondStage = "grub${efi}.efi";
+
+  # The files that start Limine from one directory of an ESP under the name
   # firmware starts (BOOT<ARCH>.EFI, or shim<arch>.efi where a boot entry
-  # names it), keyed by path. shim looks for grub<arch>.efi and
-  # mm<arch>.efi beside itself.
+  # names it), keyed by path. shim looks for secondStage and mm<arch>.efi
+  # beside itself.
   starting =
-    dir: name: grub:
+    dir: name: loader:
     if enable then
       {
         "${dir}/${name}" = shimFile;
-        "${dir}/grub${efi}.efi" = grub;
+        "${dir}/${secondStage}" = loader;
         "${dir}/mm${efi}.efi" = mokManagerFile;
       }
     else
-      { "${dir}/${name}" = grub; };
+      { "${dir}/${name}" = loader; };
 
   # The removable-media path, which firmware starts with no boot entry, and
   # the certificate.
   removable =
-    grub:
-    starting "/EFI/BOOT" "BOOT${EFI}.EFI" grub
+    loader:
+    starting "/EFI/BOOT" "BOOT${EFI}.EFI" loader
     // lib.optionalAttrs enable { ${enrolPath} = certificateDer; };
 }

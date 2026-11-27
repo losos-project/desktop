@@ -87,7 +87,7 @@ Secure Boot"` shows the kernel loading LosOS's certificate from the MOK list.
 | `EFI/losos/shimx64.efi`, `grubx64.efi`, `mmx64.efi` | the same three, for a firmware entry of LosOS's own |
 | `ENROLL_THIS_KEY_IN_MOKMANAGER.cer` | LosOS's certificate, in the DER form MokManager reads |
 
-`losos-grub-update` writes them at the first boot of each version, as it
+`losos-limine-update` writes them at the first boot of each version, as it
 writes Limine. It also puts shim in front of the Limine, GRUB or systemd-boot
 an older install left at the removable-media path. A disk installed before signed
 releases gets shim and the certificate with its first signed update, and
@@ -121,14 +121,21 @@ byte would break Microsoft's signature.
   this adds nothing it did not already trust.
 
 shim refuses a boot loader whose SBAT generation is older than its
-revocation list, and looks for that generation in the loader's `.sbat`
-section. LosOS signs Limine's EFI program from nixpkgs as it is, and that
-program has no `.sbat` section; LosOS adds none.
+revocation list, and refuses a second stage with no `.sbat` section at all.
+Limine 12's EFI program ships without one. `nixos/modules/limine-efi.nix`
+adds the section before the program is signed, after the image's own
+sections so it does not cover them:
 
-> [!WARNING]
-> shim 16 refuses, with Secure Boot on, a loader without SBAT data. Until
-> `checks.x86_64-linux.secure-boot` passes with Limine, do not count on a
-> signed release starting with Secure Boot on.
+```
+sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md
+limine,1,Limine,limine,<limine version>,https://github.com/limine-bootloader/limine
+limine.losos,1,LosOS Desktop,limine,<limine version>,https://github.com/losos-project/desktop
+```
+
+`limine.losos` is LosOS's own generation. Shim's revocation list does not
+name `limine`, so generation 1 is not refused. Raising `limine.losos` is
+how a later LosOS build would retire this one without retiring every
+Limine. The signature is over the program with that section in it.
 
 shim is BSD-licensed, and redistributing it in binary form needs this
 notice:

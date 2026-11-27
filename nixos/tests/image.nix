@@ -12,8 +12,8 @@ rec {
       losos.version = "1";
 
       # The layout a release signed with LosOS's key has, shim and
-      # MokManager in front of GRUB, signed with a key made for the tests.
-      # The firmware here has Secure Boot off, so shim starts GRUB without
+      # MokManager in front of Limine, signed with a key made for the tests.
+      # The firmware here has Secure Boot off, so shim starts Limine without
       # checking it; secure-boot.nix boots the same image with it on.
       losos.secureBoot =
         let

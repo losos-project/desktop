@@ -6,7 +6,7 @@
 //! - an XBOOTLDR partition (the Boot Loader Specification's `$BOOT` beside
 //!   the ESP) for the UKIs. Windows' ESP is usually 100 MB, a UKI is about
 //!   45 MB and sysupdate keeps two, so they cannot live on the ESP the way
-//!   they do on a disk of LosOS's own. GRUB reads UKIs from both,
+//!   they do on a disk of LosOS's own. Limine reads UKIs from both,
 //!   and update.nix writes UKIs to `$BOOT`, which is this partition when it
 //!   exists and the ESP when it does not.
 //! - slot A's `/usr` verity and data partitions, at disk.nix's sizes, holding

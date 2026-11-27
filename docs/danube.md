@@ -1,124 +1,105 @@
 # Danube
 
-Danube is the OS's web browser and the default for links and web pages. Its
-module is `nixos/modules/danube.nix` and its code is in `src/danube`. It is
-[WPE WebKit](https://wpewebkit.org), the WebKit port with no toolkit of its
-own, drawn inside a window built from mcsapi's components in derisk's theme.
-Danube is only the web view. derisk's command palette is its address bar,
-its tab switcher and its list of extensions, and derisk's top bar carries its
-menus. It runs Chrome's extensions unmodified, with its own extension
-runtime. It also opens the sign-in page of a network that asks for one
-first, known as a captive portal, and it loads the content blockers that
-[system-wide ad blocking](adblock.md) compiles.
+Danube is the web browser and the default for links and web pages. It is
+[WPE WebKit](https://wpewebkit.org), the WebKit port with no toolkit, drawn in
+a window built from mcsapi components in derisk's theme. Danube is only the web
+view: derisk's command palette is its address bar, tab switcher and extension
+list, and derisk's top bar holds its menus. It runs Chrome extensions
+unmodified, opens captive portal sign-in pages, and loads the content blockers
+that [system-wide ad blocking](adblock.md) compiles. The module is
+`nixos/modules/danube.nix` and the code is in `src/danube`.
 
 ## How it is put together
 
-WPE's headless platform renders each page into a buffer and hands that
-buffer over instead of putting it on screen. Danube copies the active tab's
-frame into an egui texture and draws it. The window's own interface is small:
-a progress line, a permission request's bar, a security key's bar, a
-crashed page's notice and toasts. All of it is ordinary mcsapi code with the same components as
-derisk's apps, recoloured whenever derisk publishes a new theme to
-`$XDG_RUNTIME_DIR/derisk/theme.json`. Pointer, wheel, touch and key input over
-the page goes back to WebKit as WPE events. Typed text goes as one key press
-per character, and Ctrl+C, Ctrl+X and Ctrl+V move data between WebKit's
-clipboard and the desktop's.
+WPE's headless platform renders each page into a buffer instead of onto the
+screen. Danube copies the active tab's frame into an egui texture and draws it.
+The rest of the window is small: a progress line, permission and security key
+bars, a crashed-page notice and toasts. It is ordinary mcsapi code, recoloured
+whenever derisk publishes a new theme to `$XDG_RUNTIME_DIR/derisk/theme.json`.
+Pointer, wheel, touch and key input goes back to WebKit as WPE events. Typed
+text goes as one key press per character, and Ctrl+C, Ctrl+X and Ctrl+V move
+data between WebKit's clipboard and the desktop's.
 
-WebKit runs on the process's main thread under GLib's main loop, and the
-window runs on a second thread under winit's, in `engine.rs` and `ui.rs`. Two
-bounded crossbeam channels join them, and nothing is locked. The window
-sends commands. WebKit sends events, such as a tab opening, its title, a
-frame or a permission request, and asks for a repaint. The window builds its
-own picture of the tabs from those events. A frame that does not fit in the
-channel is dropped in favour of the next. The other threads are derisk's
-menus, later `danube` runs handing over URLs, and the captive portal's
-recheck. They are scoped to the same `run` and end with WebKit.
+WebKit runs on the main thread under GLib's main loop, and the window on a
+second thread under winit's (`engine.rs` and `ui.rs`). Two bounded crossbeam
+channels join them, with no locks. The window sends commands. WebKit sends
+events, such as a new tab, a title, a frame or a permission request, and asks
+for repaints. A frame that doesn't fit in the channel is dropped for the next.
+The other threads (derisk's menus, URLs handed over by later `danube` runs, and
+the captive portal recheck) are scoped to the same `run` and end with WebKit.
 
-There are no Rust bindings for WPE's 2.0 API, so the crate makes its own.
-At build time `build.rs` runs bindgen over the installed `wpe/webkit.h` and
-`wpe/headless/wpe-headless.h`, allowlisted to WebKit's and WPE's symbols and
-the few GLib calls Danube uses, and `ffi.rs` includes the result. Every
-signature and enum value comes from the library itself, so a WebKit update
-that changes one fails to compile instead of failing at runtime. `webkit.rs`
-wraps the objects in types such as `Display`, `WebView`, `View`, `Toplevel`,
-`Settings`, `NetworkSession` and `FilterStore`. Each type owns one reference
-and gives it back when dropped, offers the calls as methods, and takes
-closures for signals, which GObject frees with the connection. `engine.rs`
-holds only the tab logic on top of them and has no `unsafe` in it.
+There are no Rust bindings for WPE's 2.0 API, so the crate generates its own.
+`build.rs` runs bindgen over the installed `wpe/webkit.h` and
+`wpe/headless/wpe-headless.h`, allowlisted to WebKit's and WPE's symbols and a
+few GLib calls, and `ffi.rs` includes the result. A WebKit update that changes
+a signature fails to compile instead of failing at runtime. `webkit.rs` wraps
+the objects in types such as `Display`, `WebView`, `View`, `Toplevel`,
+`Settings`, `NetworkSession` and `FilterStore`. Each owns one reference,
+releases it on drop, and takes closures for signals. `engine.rs` holds the tab
+logic on top and has no `unsafe`.
 
-The browser runs in the Danube machine and links Arch's `wpewebkit`
-package. This repository does not compile WebKit. nixpkgs packages only
-WebKitGTK, and a WPE build would be compiled here on every nixpkgs bump.
+The browser runs in the Danube machine and links Arch's `wpewebkit` package.
+This repository doesn't compile WebKit: nixpkgs packages only WebKitGTK, and a
+WPE build here would recompile on every nixpkgs bump.
 
 ![Danube's main thread runs WebKit under GLib's loop and its window thread runs winit and egui; two bounded channels carry commands one way and events and frames the other; each web process has its own sandbox; tabs and menus go to derisk over the agent socket and picked commands come back](images/danube.svg)
 
 ## The window
 
-The window is the page and nothing else. It has no toolbar, no address bar
-and no tab strip. derisk's command palette manages addresses, tabs and
-extensions, and derisk's top bar shows Danube's menus. The window's title
-names the tab in front. Over the page the window draws only what has to be
-there:
+The window is the page, with no toolbar, address bar or tab strip. Its title
+names the front tab. Over the page it draws only:
 
-- a progress line along the top while a page loads;
-- an extension's popup in the top right corner;
-- a bar for a site's permission request;
-- the find bar, along the bottom, while it is open;
-- a notice on a page whose web process died;
-- the link under the pointer.
+- A progress line along the top while a page loads.
+- An extension's popup in the top right corner.
+- A bar for a site's permission request.
+- The find bar along the bottom, while open.
+- A notice on a page whose web process died.
+- The link under the pointer.
 
-A phone window, one whose short side is under 600 logical pixels as in
-[GTK and Qt on a phone](gtk-qt-phone.md), sends a mobile User-Agent string
-with "Android" and "Mobile" in it. Sites then serve their phone version from
-the next page loaded.
+A phone window, one whose short side is under 600 logical pixels
+([GTK and Qt apps on a phone](halium.md#gtk-and-qt-apps-on-a-phone)), sends a mobile User-Agent with
+"Android" and "Mobile", so sites serve their phone version from the next load.
 
-The palette is the address bar. Ctrl+L or Alt+D in Danube asks derisk to
-show it. Text typed there that reads as a web address, such as
-`example.com`, `localhost:8080` or a full URL, opens in a new Danube tab. For
-anything else, the palette searches with the desktop's search engine, which
-the [choice screen](choice-screens.md) and Settings, Default apps pick.
-Danube has no search setting of its own.
+### The palette as address bar
+
+Press Ctrl+L or Alt+D to open derisk's palette. Text that reads as a web
+address, such as `example.com`, `localhost:8080` or a full URL, opens in a new
+tab. Anything else is searched with the desktop's search engine, set by the
+[choice screen](choice-screens.md) and **Settings › Default apps**. Danube has
+no search setting of its own.
 
 ![derisk's command palette with "losos desktop" typed: matching apps first, then "Search the web for losos desktop" with the chosen engine](images/choice-screens-palette-search.png)
 
-The palette's Tabs and Extensions headings come from derisk's bundled
-browser plugin, a WebAssembly palette plugin like its other sources. The
-plugin shows what Danube registers with `register_palette` on the agent
-socket. That registration lists the tabs, with each one's id, title, URL and
-whether it is active, and the extensions, with each one's id, name, whether
-it is enabled and whether it has options. Danube sends it again whenever
-anything changes. When the person picks an entry, it comes back as a
-`palette` event with a command. `activate_tab`, `close_tab` and `new_tab` do
-what they say. `open` carries the http(s) URL derisk made from the typed
-text, with `https://` for a bare host and `http://` for localhost, and Danube
-opens it in a new tab. `enable_extension`, `disable_extension` and
-`extension_options` also do what they say. An older derisk without the
-plugin refuses the registration, and the menus below still list the tabs.
+The palette's Tabs and Extensions headings come from derisk's bundled browser
+plugin, a WebAssembly palette plugin. It shows what Danube registers with
+`register_palette` on the agent socket: each tab's id, title, URL and active
+state, and each extension's id, name, enabled state and whether it has options.
+Danube re-sends it on every change. A picked entry comes back as a `palette`
+event with a command: `activate_tab`, `close_tab`, `new_tab`, `open`,
+`enable_extension`, `disable_extension` or `extension_options`. `open` carries
+the URL derisk built from the typed text, with `https://` for a bare host and
+`http://` for localhost. An older derisk without the plugin refuses the
+registration, and the menus still list the tabs.
 
-The menus are derisk global menus. They appear in the top bar and in the
-command palette, where "Tabs › Wikipedia" switches to that tab and
-"Close Tab › Wikipedia" closes it:
+### Menus
 
-- **Page** has the address, "Secure" or "Not secure", and how many of
-  [system-wide ad blocking](adblock.md)'s filter sets are in force. The top
-  bar shows these lines and the palette leaves them out. Then come Open
-  Address, which opens the palette, Copy Address, and Find in Page.
-- **Tabs** lists each tab by its title, then New Tab, Next Tab and Previous
-  Tab.
-- **Navigate** has Back, Forward, Reload and Stop.
-- **Bookmarks** has Bookmark This Page, or Remove Bookmark on a page that
-  has one, then each bookmark by its title.
-- **History** lists the fifteen pages visited last, newest first, then
-  Clear History.
-- **Close Tab** lists each tab by its title.
-- **Extensions** has each extension's button, meaning its popup or what it
-  does when clicked, its options page, and Enable or Disable.
+The menus are derisk global menus, in the top bar and in the palette, where
+"Tabs › Wikipedia" switches to that tab and "Close Tab › Wikipedia" closes it.
 
-Danube registers them over derisk's agent socket,
-`$XDG_RUNTIME_DIR/derisk/agent.sock`, and finds its window by app id,
-`org.losos.Danube`, and title. It sends them again whenever a tab opens,
-closes, or changes its title, address or security. Outside a derisk session
-there is no palette and no menus, and only the keyboard reaches the tabs.
+| Menu | Contents |
+| --- | --- |
+| Page | The address, "Secure" or "Not secure", and how many ad-blocking filter sets apply (top bar only), then Open Address, Copy Address and Find in Page |
+| Tabs | Each tab by title, then New Tab, Next Tab and Previous Tab |
+| Navigate | Back, Forward, Reload and Stop |
+| Bookmarks | Bookmark This Page or Remove Bookmark, then each bookmark |
+| History | The last fifteen pages, newest first, then Clear History |
+| Close Tab | Each tab by title |
+| Extensions | Each extension's button (its popup or click action), its options page, and Enable or Disable |
+
+Danube registers them over `$XDG_RUNTIME_DIR/derisk/agent.sock`, finds its
+window by app id `org.losos.Danube` and title, and re-sends them whenever a tab
+opens, closes, or changes title, address or security state. Outside a derisk
+session there are no palette or menus, and only the keyboard reaches the tabs.
 
 | Keys | Action |
 | --- | --- |
@@ -131,131 +112,109 @@ there is no palette and no menus, and only the keyboard reaches the tabs.
 | Ctrl+F | Find in the page |
 | Ctrl+D | Bookmark the page, or remove its bookmark |
 
-A middle click on a link opens it in a tab behind the current one. An
-extension's own shortcuts from its manifest's `commands` work too, such as
-Bitwarden's Ctrl+Shift+L to fill a login, and Esc closes its popup.
+A middle click opens a link in a background tab. Extension shortcuts from a
+manifest's `commands` work too, such as Bitwarden's Ctrl+Shift+L to fill a
+login, and Esc closes an extension popup.
 
-Downloads go to `~/Downloads` and never overwrite a file there.
-[Downloads](#downloads) explains how they are fetched and shown.
+Downloads go to `~/Downloads` and never overwrite a file ([Downloads](#downloads)).
 
 ## Finding text
 
-Ctrl+F, or Find in Page in the Page menu, opens the find bar along the
-bottom of the window. Typing there highlights every match in the page,
-ignoring case, and scrolls to the first; the bar says how many there are, up
-to a thousand. Enter and Next go to the next match and Shift+Enter and
-Previous to the one before, wrapping round the page. Esc or Close takes the
-bar and the highlights away, wherever the keyboard is. Switching tabs with
-the bar open searches the new tab for the same text, and a page that
-navigates or reloads is searched again once it has loaded.
+Press Ctrl+F, or pick **Find in Page**, to open the find bar. Typing highlights
+every case-insensitive match, scrolls to the first, and shows the count, up to
+1000. Enter or **Next** goes forward and Shift+Enter or **Previous** back,
+wrapping around. Esc or **Close** removes the bar and highlights from anywhere.
+Switching tabs searches the new tab for the same text, and a page that
+navigates or reloads is searched again once loaded.
 
 ## History and bookmarks
 
-Every page a tab finishes loading goes in the history, newest first, once
-per address, up to a thousand pages. A page's title is taken when it
-arrives, which is often after the load. Only pages from the web and local
-files count: not a new tab, an extension's page or the captive portal's
-sign-in. The bookmarks keep the order they were added in. Both live in
-`~/.local/share/danube`, as `history.json` and `bookmarks.json`, written
-whole to a new file that replaces the old one whenever they change.
+Every page a tab finishes loading goes into the history once per address,
+newest first, up to 1000 pages. The title is recorded when it arrives, often
+after the load. Only web pages and local files count, not new tabs, extension
+pages or the captive portal sign-in. Bookmarks keep the order you added them.
+Both live in `~/.local/share/danube` as `history.json` and `bookmarks.json`,
+rewritten through a replacement file on each change.
 
-The History and Bookmarks menus show them, so the command palette searches
-them as it does every menu: typing part of a bookmark's title finds it.
-Picking one loads it in the tab in front. Clear History empties the history
-and leaves the bookmarks. The captive portal's window and a page shown as
-the desktop background keep neither.
+The History and Bookmarks menus show them, so the palette searches them like
+any menu: type part of a bookmark's title to find it. Picking one loads it in
+the front tab. **Clear History** keeps the bookmarks. The captive portal window
+and a background page keep neither.
 
 ## Uploading files
 
-A page's file upload button opens the desktop's file chooser, through the
-file chooser portal, `org.freedesktop.portal.FileChooser`. Several files can
-be chosen where the page allows it, and the page's accepted types are the
-dialog's first filter, with every file as the second, since a page's list is
-only a hint.
+A page's upload button opens the desktop's file chooser through
+`org.freedesktop.portal.FileChooser`. You can pick several files where the page
+allows it. The page's accepted types are the first filter and all files the
+second, because a page's list is only a hint.
 
-The sandbox shows Danube nothing of the home directory beyond its own
-folders and Downloads, so a file chosen anywhere else has to be handed in.
-The portals do that for a sandboxed app through the document portal: the
-chosen file appears under `$XDG_RUNTIME_DIR/doc`, which inside Danube's
-sandbox is the document portal's view for `org.losos.Danube` and holds only
-the files the person chose for it. Danube's web processes read them from
-there too.
+The sandbox shows Danube only its own folders and Downloads, so a file chosen
+elsewhere is handed in through the document portal. It appears under
+`$XDG_RUNTIME_DIR/doc`, which inside the sandbox is the document portal's view
+for `org.losos.Danube` and holds only files you chose. The web processes read
+them from there too.
 
-The portals recognise a sandboxed app as they recognise a Flatpak. The
-process on the other end of the app's bus connection, which is its
-xdg-dbus-proxy, has a `/.flatpak-info` at its root naming the app and an
-instance, and `$XDG_RUNTIME_DIR/.flatpak/<instance>/bwrapinfo.json` names
-the sandbox's process. Danube starts its proxy in a small sandbox of its own
-carrying that file, writes `bwrapinfo.json` when its own sandbox starts, and
-removes it when it ends.
+The portals recognise Danube the way they recognise a Flatpak. Its
+xdg-dbus-proxy has a `/.flatpak-info` at its root naming the app and an
+instance, and `$XDG_RUNTIME_DIR/.flatpak/<instance>/bwrapinfo.json` names the
+sandbox process. Danube runs the proxy in a small sandbox with that file,
+writes `bwrapinfo.json` when its sandbox starts, and removes it at the end.
 
 ## Site notifications
 
-A site that the person allowed to show notifications (see
-[Sites' permissions](#sites-permissions)) shows them on the desktop, through
-derisk's notification server, as downloads do. Each one says which site
-sent it on its last line, so a page cannot pass its words off as the
-system's. Clicking it brings its tab to the front and runs the page's own
-click handler. Dismissing it runs the page's close handler, and a page
-closing its own takes it off the desktop. A notification with the tag of
-one still shown replaces it. Without a notification server, the text shows
-as a toast in the window instead.
+Sites you allow ([Sites' permissions](#sites-permissions)) show notifications
+on the desktop through derisk's notification server. Each names the sending
+site on its last line, so a page can't pass its words off as the system's.
+Clicking one brings its tab to the front and runs the page's click handler,
+dismissing runs its close handler, and a page can close its own. A
+notification with the tag of one still showing replaces it. Without a
+notification server, the text shows as a toast in the window.
 
 ## Downloads
 
-WebKit decides what counts as a download: a response it cannot show, a link
-with `download`, or an extension's `downloads.download`. Once the response
-has arrived, Danube names the file, using the server's name or the
-extension's. For a plain GET over HTTP or HTTPS, it then stops WebKit's
-transfer and hands the file to [aria2](https://aria2.github.io/), in
-`src/danube/crates/danube/src/downloads.rs`. aria2 requests the final
-address, after WebKit's redirects, with what WebKit would have sent. That
-means the cookies WebKit's jar holds for it, HttpOnly ones included, the
-request's Referer, and the window's User-Agent. It splits the file over one
-connection per hardware thread with `split`, up to 16 to one server, which
-is the most aria2 allows with `max-connection-per-server`. Each range is at
-least 1 MiB. A server that caps each connection's speed then delivers the
-file that many times faster. A server that does not answer range requests
-gets one connection, as before.
+WebKit decides what is a download: a response it can't show, a link with
+`download`, or an extension's `downloads.download`. Once the response arrives,
+Danube names the file from the server's or extension's name. For a plain GET
+over HTTP or HTTPS, it stops WebKit's transfer and hands the file to
+[aria2](https://aria2.github.io/) (`src/danube/crates/danube/src/downloads.rs`).
+aria2 requests the final address after redirects, with what WebKit would have
+sent: the cookies from WebKit's jar, HttpOnly included, the Referer and the
+User-Agent. It splits the file over one connection per hardware thread, up to
+16 per server (aria2's `max-connection-per-server` limit), each range at least
+1 MiB. A server that caps per-connection speed delivers that many times faster.
+A server without range support gets one connection.
 
-One aria2c runs per browser. It starts with the first download, inside
-Danube's sandbox, so it can reach the network and `~/Downloads` and nothing
-else in the home. Danube talks to it over JSON-RPC on a loopback port, with
-a random secret. aria2 reads the secret from a file only the user can read,
-in the sandbox's private `/tmp`, and the file is removed once aria2 answers.
-The secret never appears on aria2's command line.
+One aria2c runs per browser, started with the first download inside Danube's
+sandbox, so it reaches the network and `~/Downloads` and nothing else in your
+home. Danube talks to it over JSON-RPC on a loopback port with a random secret.
+aria2 reads the secret from a user-only file in the sandbox's private `/tmp`,
+removed once aria2 answers, so it never appears on the command line.
 
 > [!WARNING]
-> aria2 stops with Danube (`--stop-with-process`), and a download Danube had
-> not finished is removed with it.
+> aria2 stops with Danube (`--stop-with-process`), and any unfinished download
+> is deleted.
 
-WebKit keeps the downloads aria2 should not take: a POST's answer, a `blob:`
-or `data:` URL, and an extension's own pages. It also takes over any
-download aria2 failed on before the first byte, such as one behind a login
-that only the page's session knows. It asks again from the same tab, so the
-tab's cookies go with the request. If aria2 could not be started at all,
-WebKit takes every download from then on.
+WebKit keeps the downloads aria2 can't take: POST responses, `blob:` and
+`data:` URLs, and extension pages. It also takes over any download aria2 failed
+on before the first byte, such as one behind a login only the page's session
+knows, and requests it again from the same tab with the tab's cookies. If aria2
+can't start at all, WebKit handles every download from then on.
 
-Each running download shows as a desktop notification with the file's name,
-how much has arrived out of the total, the speed, aria2's connections, a
-progress bar and a Cancel button. The notification is `resident` with no
-timeout, so it stays until the download ends. It updates in place at most
-once a second. At the end it is replaced one last time by a notification
-saying the download finished, failed or was cancelled, and the server lets
-that one expire. If the person closes the notification while the download
-runs, it does not come back until the download ends. derisk serves the
-notifications. When there is no notification server on the bus, Danube
-reports how each download ended in a toast instead.
+Each running download is a resident desktop notification with no timeout,
+showing the file name, progress, speed, aria2's connections, a progress bar and
+**Cancel**. It updates at most once a second. At the end a final notification
+says the download finished, failed or was cancelled, and that one expires. If
+you close the notification mid-download, it stays closed until the end. Without
+a notification server, Danube reports the result in a toast.
 
 ## Extensions
 
-Danube runs Chrome's extensions, Manifest V2 and V3, as they come from the
-Chrome Web Store, and Firefox extensions written to the same API. WPE WebKit
-has no extension runtime of its own, because WebKitGTK and WPE leave that to
-the browser. Danube's runtime is in `src/danube/crates/danube/src/extensions`.
-Bitwarden's Chrome extension, unmodified, signs in to a self-hosted server,
-unlocks, and fills a login from its popup, from Ctrl+Shift+L and from its
-menu in the page's field.
+Danube runs Chrome extensions, Manifest V2 and V3, straight from the Chrome Web
+Store, and Firefox extensions written to the same API. WebKitGTK and WPE leave
+the extension runtime to the browser, so Danube has its own in
+`src/danube/crates/danube/src/extensions`. Bitwarden's unmodified Chrome
+extension signs in to a self-hosted server, unlocks, and fills logins from its
+popup, from Ctrl+Shift+L and from its menu in the page's field.
 
 ```sh
 danube install-extension bitwarden.crx   # a .zip, .crx, .xpi or a directory
@@ -263,156 +222,140 @@ danube list-extensions
 danube uninstall-extension nngceckbapebfimnlniiiahkandclblb
 ```
 
-These commands run outside the sandbox, because the file can be anywhere,
-and tell a running Danube to load the change. Each extension is unpacked
-into `~/.local/share/danube/extensions/<id>/`. The id is the one Chrome
-would give it, taken from the key in its manifest or its `.crx` header, so
-the extension keeps the id its server knows. It keeps its storage as JSON
-files in `~/.local/share/danube/extension-data/<id>/`.
-`~/.config/danube/extensions` records which extensions are turned off. The
-Extensions menu and the palette's Extensions heading turn each one on or off
-and open its options page.
+These commands run outside the sandbox, because the file can be anywhere, and
+tell a running Danube to reload. Each extension unpacks into
+`~/.local/share/danube/extensions/<id>/`, with the id Chrome would give it
+(from the manifest key or the `.crx` header), so it keeps the id its server
+knows. Its storage is JSON in `~/.local/share/danube/extension-data/<id>/`.
+`~/.config/danube/extensions` records which extensions are off. The Extensions
+menu and palette heading turn each one on or off and open its options.
 
 How an extension runs:
 
-- **Its files** come from Danube's own `chrome-extension://<id>/` scheme,
-  each page with the manifest's content security policy. A web page may load
-  only the files the manifest lists in `web_accessible_resources`. WebKit
-  lets a page's frame reach them because Danube puts those files on each
-  tab's CORS allow list.
-- **Its background** is a hidden web view. That is either a background page,
-  or a service worker run as a page, since WebKit has no worker to give an
-  extension. Its popup and any offscreen document are hidden web views too.
-  The popup's frames go to the window, which draws them over the page and
-  sends the popup the pointer and keys.
-- **Its content scripts** are WebKit user scripts in the extension's own
-  isolated world, and its CSS goes in as user style sheets. Each tab has its
-  own content manager, so Danube knows which tab a message came from without
-  the page saying.
-- **`chrome.*`** and `browser.*` come from `api.js`, which runs first in
-  every one of those contexts. Each call is a script message to the runtime
-  on WebKit's thread, which answers it. The runtime covers messaging and
-  ports, tabs, storage, scripting, alarms, the action's popup and badge,
-  commands, i18n, downloads, notifications as Danube's own toasts, and
-  offscreen documents. WebKit's own calls into a page reach only its main
-  frame. So a context collects what it has to be told, such as a message or
-  an event, by sending a message that the runtime answers only once there is
-  something to deliver.
-- **A sandboxed page in a web page's frame**, such as Bitwarden's menu in a
-  login field, has an opaque origin, and WebKit lets such a page load
-  nothing from the extension's scheme. Danube serves that page with its
-  scripts and style sheets written into it, and adds the scripts' hashes to
-  its policy. When the page switches to another style sheet, such as a
-  theme, Danube swaps in the same file written inline.
+- Its files come from Danube's `chrome-extension://<id>/` scheme, each page
+  with the manifest's content security policy. A web page may load only the
+  files listed in `web_accessible_resources`, which Danube puts on each tab's
+  CORS allow list.
+- Its background is a hidden web view: a background page, or a service worker
+  run as a page, because WebKit has no worker to give an extension. Popups and
+  offscreen documents are hidden web views too. The window draws a popup's
+  frames over the page and forwards pointer and keys to it.
+- Content scripts are WebKit user scripts in the extension's isolated world,
+  and its CSS goes in as user style sheets. Each tab has its own content
+  manager, so Danube knows which tab sent a message without trusting the page.
+- `chrome.*` and `browser.*` come from `api.js`, which runs first in each of
+  those contexts. Each call is a script message to the runtime on WebKit's
+  thread. The runtime covers messaging and ports, tabs, storage, scripting,
+  alarms, the action's popup and badge, commands, i18n, downloads,
+  notifications (as Danube toasts), and offscreen documents. WebKit can only
+  call into a page's main frame, so each context collects messages and events
+  by sending a request that the runtime answers once there is something to
+  deliver.
+- A sandboxed extension page in a web page's frame, such as Bitwarden's menu in
+  a login field, has an opaque origin, and WebKit won't let it load anything
+  from the extension's scheme. Danube serves it with its scripts and style
+  sheets inlined and adds the script hashes to its policy. When the page
+  switches style sheet, for example to a theme, Danube swaps in that file
+  inlined.
 
-What an extension cannot do here:
+What an extension can't do here:
 
-- See or change requests. `webRequest` takes listeners and never calls
-  them, and `declarativeNetRequest` keeps no rules. Blocking is
+- See or change requests. `webRequest` accepts listeners and never calls them,
+  and `declarativeNetRequest` keeps no rules. Blocking is
   [system-wide ad blocking](adblock.md)'s job.
-- Talk to a native program with `runtime.connectNative`, so Bitwarden cannot
+- Talk to a native program with `runtime.connectNative`, so Bitwarden can't
   reach its desktop app for biometric unlock.
-- Run in a page's own world, `world: "MAIN"`, anywhere but its main frame.
-- Reach another of its views. `extension.getViews()` is empty and
-  `getBackgroundPage()` is null, since each view is a separate web process.
+- Run in a page's own world (`world: "MAIN"`) anywhere but the main frame.
+- Reach its other views. `extension.getViews()` is empty and
+  `getBackgroundPage()` is null, because each view is a separate web process.
 - Use `cookies`, `contextMenus`, `history`, `bookmarks`, the side panel or
   `identity`, which answer as if empty or fail.
-- Fetch one of its own files from a content script unless the manifest
-  lists it as web-accessible, which a page could not do either.
+- Fetch its own files from a content script unless the manifest lists them as
+  web-accessible. A page couldn't either.
 
 ## Sites' permissions
 
-Danube denies a page's request for any of these unless the person allows it:
-the camera, the microphone, the screen, location, notifications, the
-clipboard, pointer lock, the list of devices, protected (DRM) media, and its
-cookies on other sites. Danube asks in a bar over the page, for that site,
-once or remembered. Remembered answers are lines in
-`~/.config/danube/permissions`, in the form `host kind allow|deny`, which the
-person can edit or delete.
+Danube denies these unless you allow them: camera, microphone, screen,
+location, notifications, clipboard, pointer lock, the device list, protected
+(DRM) media, and cookies on other sites. It asks in a bar over the page, for
+that site, once or remembered. Remembered answers are lines in
+`~/.config/danube/permissions` in the form `host kind allow|deny`, which you
+can edit or delete.
 
 ## Security keys
 
-WebKit builds its own Web Authentication only for Apple's ports, so on Linux
-a page finds no `navigator.credentials` and cannot ask for a security key.
-Danube adds it in `webauthn.rs`, so a site such as Proton, GitHub or a bank
-can register a key and sign in with one:
+WebKit builds Web Authentication only for Apple's ports, so on Linux a page
+finds no `navigator.credentials`. Danube adds it in `webauthn.rs`, so sites
+such as Proton, GitHub or your bank can register and use a security key:
 
-- `webauthn.js` runs in the page's own world of the top frame before the
-  page's scripts. It defines `navigator.credentials.create` and `get`,
-  `PublicKeyCredential` and its responses as the specification has them,
-  and only on a secure page, which is HTTPS or `localhost`.
-- `webauthn-bridge.js` runs in a world of Danube's own in the same frame,
-  which is the only place the message handler exists. It passes each call
-  on and the answer back. A frame inside the page has no bridge, so an
-  embedded site cannot ask in the top site's name.
-- `webauthn.rs` checks the call against the address WebKit has for the tab,
-  never against what the page says about itself. The relying party must be
-  the page's host or a domain it is under, and never a public suffix such as
-  `co.uk` or `github.io`. Then Danube builds the client data the key signs and
-  talks CTAP2, or CTAP1 for an old U2F key, to every key on USB. It uses
-  Mozilla's `authenticator` crate, the code Firefox uses.
+- `webauthn.js` runs in the top frame's page world before the page's scripts.
+  It defines `navigator.credentials.create` and `get`, `PublicKeyCredential`
+  and its responses per the specification, only on secure pages (HTTPS or
+  `localhost`).
+- `webauthn-bridge.js` runs in Danube's own world in the same frame, the only
+  place the message handler exists, and relays calls and answers. Frames inside
+  the page have no bridge, so an embedded site can't ask in the top site's
+  name.
+- `webauthn.rs` checks each call against the tab's address as WebKit knows it,
+  never what the page claims. The relying party must be the page's host or a
+  parent domain, never a public suffix such as `co.uk` or `github.io`. Then
+  Danube builds the client data and talks CTAP2, or CTAP1 for old U2F keys, to
+  every USB key, using Mozilla's `authenticator` crate from Firefox.
 
-A bar over the page names the site and asks the person to touch their key.
-When the key wants its PIN, the bar has a field for it and says how many
-tries are left. Cancel stops the request, and so do closing the tab or
-leaving the page. The key's make and model reach the site only when the
-site asks for attestation; otherwise Danube removes them, as the
-specification allows. Danube has no key of its own built in and does not
-offer passkeys in autofill, so a site that asks for a platform
-authenticator is told there is none.
+A bar names the site and asks you to touch your key. If the key wants its PIN,
+the bar has a field and shows the remaining tries. **Cancel**, closing the tab
+or leaving the page stops the request. The key's make and model reach the site
+only if it asks for attestation. Otherwise Danube strips them, as the
+specification allows. Danube has no built-in key and no passkey autofill, so a
+site asking for a platform authenticator is told there is none.
 
-The browser's sandbox has no `/dev` from the host. A key's device node
-appears there when the key is plugged in, and a bind made when the sandbox
-starts cannot follow it. Binding the whole of `/dev` would give the browser
-every device the person may open. So the launcher, the `danube` process
-outside the sandbox, asks the keys. The sandbox gets one socket,
-`$XDG_RUNTIME_DIR/danube-keys`, and over it the browser sends each request
-with the tab's address, and then the PIN and Cancel the person gives. The
-launcher checks the request again before any key hears of it.
+The browser sandbox has no host `/dev`. A key's device node appears only when
+plugged in, which a bind made at sandbox start can't follow, and binding all of
+`/dev` would expose every device you can open. So the launcher, the `danube`
+process outside the sandbox, talks to the keys. The sandbox gets one socket,
+`$XDG_RUNTIME_DIR/danube-keys`, over which the browser sends each request with
+the tab's address, then your PIN and Cancel. The launcher checks the request
+again before any key sees it.
 
-In a machine, the keys are the host's, which
-[losos-tokens lends to every machine](tokens.md).
+In a machine, the keys are the host's, lent by
+[losos-tokens](tokens.md).
 
 ## Captive portals
 
 `danube captive-watch` is a user service in every session. It reads
-`nmcli monitor` and rechecks the network whenever NetworkManager reports a
-change and says the machine is connected. The check fetches GNOME's
+`nmcli monitor` and rechecks whenever NetworkManager reports a change and says
+the machine is connected. The check fetches
 `http://nmcheck.gnome.org/check_network_status.txt` over plain HTTP, which a
-portal intercepts. The request carries the request line, the host and
-"Danube" as the User-Agent, and nothing else. Any answer other than a 200
-saying "NetworkManager is online" means a portal. Then it opens
-`danube --captive-portal`, one window titled "Sign in to network" with no
-tabs, a profile that ends with the window, and no content blockers, since a
-portal's page is often built from what they block. That window checks again
-every three seconds and closes itself once the network lets traffic through.
-The desktop entry's "Sign in to network" action opens it by hand.
+portal intercepts, sending only the request line, the host and "Danube" as
+User-Agent. Anything but a 200 saying "NetworkManager is online" means a
+portal. Then it opens `danube --captive-portal`: one "Sign in to network"
+window with no tabs, a throwaway profile, and no content blockers, because
+portal pages are often built from what they block. The window rechecks every
+three seconds and closes once traffic flows. The desktop entry's **Sign in to
+network** action opens it by hand.
 
 ## The desktop background
 
-derisk can show a web page as the desktop background, chosen in Settings,
-Wallpaper, "Web page", and Danube draws it. derisk starts
+derisk can show a web page as the desktop background (**Settings ›
+Wallpaper › Web page**), and Danube draws it. derisk starts
 `danube --background URL --size WIDTHxHEIGHT --scale S` at the screen's size,
-the same way it starts ffmpeg for a video wallpaper, and reads frames from
-Danube's stdout. For every frame the page renders, Danube writes a width and
-a height as 32-bit little-endian numbers, then that many premultiplied RGBA
-pixels. The code is in `src/danube/crates/danube/src/background.rs`. There is
-no window. Any `http://`, `https://` or `file:///` address works. A local
-page can load the pictures and scripts beside it, because the sandbox shows
-its folder read-only.
+as it starts ffmpeg for a video wallpaper, and reads frames from stdout. For
+each frame, Danube writes width and height as 32-bit little-endian numbers,
+then that many premultiplied RGBA pixels
+(`src/danube/crates/danube/src/background.rs`). There is no window. Any
+`http://`, `https://` or `file:///` address works, and a local page can load
+files next to it, because the sandbox shows its folder read-only.
 
-The page gets nothing of the person's. It has a profile that ends with it, no
-extensions, every permission refused, no sound, and no keyboard or pointer.
-It gets the content blockers like any tab. When a window covers the screen,
-or in low power mode if the Settings app chooses, derisk writes `hide` on
-Danube's stdin. WebKit then stops painting the page and slows its timers, and
-Danube pauses the page's CSS animations, videos and sounds, which WebKit's
-compositor would otherwise keep running. `show` resumes exactly those. If
-derisk has not read a frame yet, the next frame replaces it instead of
-queueing behind it. A load that fails, or a web process that dies, ends the
-run with the reason on stderr, and derisk shows its own background instead.
-Danube's stdout carries only frames, and the web processes it starts write
-their output to stderr.
+The page gets nothing of yours: a throwaway profile, no extensions, every
+permission refused, no sound, keyboard or pointer. It does get the content
+blockers. When a window covers the screen, or in low power mode if Settings
+says so, derisk writes `hide` to Danube's stdin. WebKit stops painting and
+slows timers, and Danube pauses CSS animations, videos and sounds, which
+WebKit's compositor would otherwise keep running. `show` resumes exactly those.
+If derisk hasn't read a frame yet, the next replaces it rather than queueing. A
+failed load or a dead web process ends the run with the reason on stderr, and
+derisk falls back to its own background. Stdout carries only frames, and the
+web processes write to stderr.
 
 ## Sandbox and hardening
 
@@ -420,74 +363,73 @@ Danube uses two sandboxes, both built with the
 [Hakoniwa](https://github.com/souk4711/hakoniwa) crate in
 `src/danube/crates/danube-sandbox`.
 
-- **The browser.** When started outside the sandbox, `danube` builds a
-  container and runs itself again inside it. The container has:
-  - its own user, mount, PID, IPC and UTS namespaces;
-  - the Nix store, `/etc`, the GPU driver and sysfs, read-only, and
-    `/dev/dri`;
-  - an empty home where only `~/.local/share/danube`, `~/.cache/danube`,
-    `~/.config/danube` and `~/Downloads` are writable, and the user's
-    fonts, icons and derisk's settings are visible read-only where they
-    exist;
-  - an empty runtime directory with only the Wayland, PipeWire and
-    PulseAudio sockets, derisk's directory, the document portal's view for
-    Danube as `doc` (only files the person chose to upload), and the
-    launcher's socket for [security keys](#security-keys);
-  - the session bus through xdg-dbus-proxy, which lets through only the
-    desktop portals, notifications and the accessibility bus. The proxy
-    runs in a small sandbox of its own, with only the Nix store, `/etc` and
-    the runtime directory, and the `/.flatpak-info` that tells the portals
-    which app is asking ([Uploading files](#uploading-files)).
+### The browser
 
-  A seccomp filter denies the system calls Flatpak denies, such as keyctl,
-  ptrace's relatives, kexec and bpf, except the namespace calls the next
-  sandbox needs. There is no Landlock ruleset at this level. A process under
-  Landlock can neither mount nor write its user namespace's uid map, and the
-  next sandbox is built inside this one using both. The network is the
-  host's, since WebKit's network process needs it.
-- **Each web process.** WebKit puts every web process in its own sandbox,
-  built with bwrap. Arch's package does not take a replacement launcher,
-  so the machine uses that bwrap sandbox inside the machine's own.
-  `danube-sandbox` still knows how to read bwrap's arguments and build
-  the same sandbox with Hakoniwa, for a WebKit that honours
-  `WEBKIT_SANDBOX_LAUNCHER`. It uses WebKit's own filesystem layout and
-  its seccomp filter, loaded last, and carries in the file descriptors WebKit
-  hands over. Landlock then lets the web process read what that layout shows
-  and write only where WebKit made it writable. Paths that do not exist are
-  left out of the rules, because Hakoniwa refuses to start with a rule for a
-  missing path, and a machine may have no `/dev/dri`. A bind is also left
-  out when an earlier bind of the same path already shows it, such as the
-  D-Bus proxy's binary inside the Nix store, because Hakoniwa cannot place a
-  file bind over a file it may not write. An argument `danube-sandbox` does
-  not recognise is an error, so if a WebKit update asks for more, its web
-  processes fail to start instead of running with less protection.
+Started outside the sandbox, `danube` builds a container and runs itself again
+inside it. The container has:
 
-WebKit is built with level-3 fortify checks, stack clash protection, zeroed
-automatic variables, eager binding so the whole GOT is read-only, and
-control-flow protection where the CPU has it, which is CET on x86_64 and BTI
-and PAC on aarch64. WebDriver, the remote inspector and WebKit's unshipped
-experimental features, WebXR among them, are not built. JavaScriptCore's JIT
-compilers are off by default with `JSC_useJIT=false`. Scripts and
-WebAssembly run in its interpreters, which is slower, but a page can no
-longer make the browser write and run machine code, which most WebKit
-exploits rely on. `javascript.jit = true` in the user's settings turns the
-JIT back on. WebKit keeps its own allocator, libpas with its Gigacage, for
-JavaScript and DOM objects. Everything else it allocates through `malloc`,
-which is hardened_malloc wherever it runs, as [the allocator](allocator.md)
-describes. Tracking prevention, WebKit's ITP, is on, and there is no keyring
-for WebKit to save passwords in.
+- Its own user, mount, PID, IPC and UTS namespaces.
+- The Nix store, `/etc`, the GPU driver and sysfs read-only, and `/dev/dri`.
+- An empty home where only `~/.local/share/danube`, `~/.cache/danube`,
+  `~/.config/danube` and `~/Downloads` are writable, with your fonts, icons and
+  derisk settings visible read-only where they exist.
+- An empty runtime directory with only the Wayland, PipeWire and PulseAudio
+  sockets, derisk's directory, the document portal's view as `doc`, and the
+  launcher's socket for [security keys](#security-keys).
+- The session bus through xdg-dbus-proxy, which passes only the desktop
+  portals, notifications and the accessibility bus. The proxy runs in its own
+  small sandbox with the Nix store, `/etc`, the runtime directory and the
+  `/.flatpak-info` that identifies Danube to the portals
+  ([Uploading files](#uploading-files)).
+
+A seccomp filter denies what Flatpak denies, such as keyctl, ptrace's
+relatives, kexec and bpf, except the namespace calls the inner sandbox needs.
+There is no Landlock ruleset at this level, because a process under Landlock
+can neither mount nor write its user namespace's uid map, and the inner sandbox
+needs both. The network is the host's, because WebKit's network process needs
+it.
+
+### Each web process
+
+WebKit puts every web process in its own bwrap sandbox. Arch's package doesn't
+accept a replacement launcher, so the machine runs that bwrap sandbox inside
+its own. `danube-sandbox` can still read bwrap's arguments and build the same
+sandbox with Hakoniwa for a WebKit that honours `WEBKIT_SANDBOX_LAUNCHER`. It
+uses WebKit's filesystem layout and seccomp filter (loaded last) and carries in
+WebKit's file descriptors. Landlock then lets the web process read what the
+layout shows and write only where WebKit made it writable. Missing paths are
+left out of the rules, because Hakoniwa refuses rules for missing paths and a
+machine may lack `/dev/dri`. A bind already covered by an earlier one, such as
+the D-Bus proxy binary inside the Nix store, is skipped too, because Hakoniwa
+can't place a file bind over a file it may not write. An unrecognised argument
+is an error, so if a WebKit update asks for more, its web processes fail to
+start rather than run with less protection.
+
+### WebKit itself
+
+WebKit is built with level-3 fortify, stack clash protection, zeroed automatic
+variables, eager binding (a read-only GOT), and control-flow protection where
+the CPU has it: CET on x86_64, BTI and PAC on aarch64. WebDriver, the remote
+inspector and unshipped experimental features such as WebXR are not built.
+
+JavaScriptCore's JIT compilers are off by default (`JSC_useJIT=false`).
+Scripts and WebAssembly run in the interpreters, which is slower, but a page
+can no longer make the browser write and run machine code, which most WebKit
+exploits rely on. Set `javascript.jit = true` to turn the JIT back on. WebKit
+keeps libpas with its Gigacage for JavaScript and DOM objects. Everything else
+goes through `malloc`, which is hardened_malloc ([The allocator](allocator.md)).
+Tracking prevention (ITP) is on, and there is no keyring for WebKit to save
+passwords in.
 
 > [!WARNING]
 > The sandboxes need unprivileged user namespaces, which NixOS's kernel
-> allows. A phone's own kernel may not: see [what is not done](not-done.md).
+> allows. A phone's kernel may not ([What is not done](not-done.md)).
 
 ## Settings
 
-Settings live in the user's `~/.config/danube/settings.conf`, one
-`key = value` per line. A key left out keeps its default. There are no NixOS
-options for them. `losos.danube.home` and `losos.danube.jit` used to write
-`/etc/danube/settings.conf` under it, and they were removed because nothing
-set them.
+Settings live in `~/.config/danube/settings.conf`, one `key = value` per line.
+A missing key keeps its default. There are no NixOS options: `losos.danube.home`
+and `losos.danube.jit` were removed because nothing set them.
 
 | Key | Meaning |
 | --- | --- |
@@ -496,20 +438,19 @@ set them.
 | `downloads.aria2` | `false` leaves downloads to WebKit's own downloader, one connection each (on by default) |
 | `downloads.connections` | How many connections aria2 splits a download over (one per hardware thread by default; at most 16 go to one server) |
 
-There is no `search` key, and `losos.danube.search` went away with the
-address bar. The palette searches with the desktop's engine.
+There is no `search` key. `losos.danube.search` went away with the address bar,
+and the palette uses the desktop's engine.
 
 ## What it replaced
 
-Danube replaced Uranium, which was ungoogled-chromium under the OS's name.
-Uranium came with a launcher that turned it into Chrome for Android on a
-phone, five patches and a rebranding script for a build CI could only compile
-in rounds in `uranium.yml`, a Flatpak of it served from the proxy, and
-`uranium-tabs`, a native messaging host that mirrored its tabs into derisk's
-menus. Chromium draws its own interface with its own toolkit, so it could
-never be an mcsapi window or follow derisk's theme. It is not coming back.
+Danube replaced Uranium, ungoogled-chromium under the OS's name. Uranium needed
+a launcher that turned it into Chrome for Android on phones, five patches, a
+rebranding script, a build CI could only finish in rounds (`uranium.yml`), a
+Flatpak served from the proxy, and `uranium-tabs`, a native messaging host that
+mirrored its tabs into derisk's menus. Chromium draws its own interface, so it
+could never be an mcsapi window or follow derisk's theme. It is not coming back.
 
 > [!IMPORTANT]
-> Profiles do not carry over: Danube starts with a new one in
-> `~/.local/share/danube`, and a user's own `~/.config/mimeapps.list` that
-> names `uranium.desktop` has to name `org.losos.Danube.desktop` instead.
+> Profiles don't carry over. Danube starts with a new one in
+> `~/.local/share/danube`, and a `~/.config/mimeapps.list` that names
+> `uranium.desktop` must name `org.losos.Danube.desktop` instead.

@@ -6,11 +6,12 @@
 # nor /home. There is no nixos-rebuild here and no Nix on the machine to run
 # one with.
 #
-# Rollback needs no failure detection. GRUB offers the newest UKI; a UKI
-# installed by sysupdate carries a boot counter in its file name, which GRUB
-# counts down in grubenv; losos-grub-bless settles the name once
-# boot-complete.target is reached; an entry that never gets blessed runs out
-# of tries and GRUB falls back to the older one by itself (grub.nix). The
+# Rollback needs no failure detection. Limine offers the newest UKI; a UKI
+# installed by sysupdate carries a boot counter in its file name, which
+# losos-limine-trial counts down by renaming the file; losos-limine-bless
+# settles the name once boot-complete.target is reached; an entry that never
+# gets blessed runs out of tries and Limine falls back to the older one by
+# itself (limine.nix). The
 # older UKI's usrhash still names the older /usr, which is still there. A
 # BIOS PC boots the same way, from the kernel and initrd bios.nix's
 # transfers put beside each UKI.

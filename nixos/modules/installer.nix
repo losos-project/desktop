@@ -28,6 +28,63 @@ let
   cfg = config.losos;
   inherit (config.image.repart.verityStore) partitionIds;
 
+  # The ISO's initrd finds the medium by this label, both for the embedded
+  # release and for the raw desktop disk a Try boot snapshots.
+  volumeID = "losos-${cfg.version}-${pkgs.stdenv.hostPlatform.parsed.cpu.name}";
+
+  tryRaw = "${config.system.build.disk}/${config.image.baseName}.raw";
+
+  # The desktop UKI's own command line carries the usrhash of the /usr in the
+  # raw disk. Read it from the finished UKI rather than the configuration, as
+  # uki-files.nix does, so a Try boot starts the same version it ships.
+  tryUki = "${config.system.build.uki}/${config.system.boot.loader.ukiFile}";
+  tryCmdline =
+    pkgs.runCommand "losos-try-cmdline"
+      {
+        nativeBuildInputs = with pkgs.buildPackages; [
+          jq
+          systemdUkify
+          coreutils
+          util-linux
+        ];
+      }
+      ''
+        cmdline=$(ukify --json=short inspect ${tryUki} \
+          | jq -er '.".cmdline".text' | tr -d '\0\n')
+        case " $cmdline " in
+          *" usrhash="*" root=gpt-auto "* | *" root=gpt-auto "*" usrhash="*) ;;
+          *) echo "unexpected UKI command line: $cmdline" >&2; exit 1 ;;
+        esac
+        # The snapshot disk is not the medium the firmware booted from, so
+        # gpt-auto cannot name its root. uki-files.nix's udev rule links the
+        # root partition of the disk holding the ESP named by losos.esp; it
+        # compares partition UUIDs, so pass the snapshot ESP's PARTUUID and
+        # not its device path.
+        esp=$(sfdisk --dump ${tryRaw} \
+          | sed -n 's/.*uuid=\([^,]*\), name="esp".*/\1/p' \
+          | tr A-F a-f)
+        case "$esp" in
+          ????????-????-????-????-????????????) ;;
+          *) echo "no ESP partition UUID in the Try disk: '$esp'" >&2; exit 1 ;;
+        esac
+        cmdline=''${cmdline/root=gpt-auto/root=/dev/disk/by-loader/root losos.esp=$esp}
+        printf '%s losos.try=1 losos.iso=${volumeID}\n' "$cmdline" > $out
+      '';
+
+  # ISO 9660 level 3 cannot hold a file this large, and a qcow2 would need a
+  # userspace NBD daemon to survive switch-root. A squashfs keeps the raw disk
+  # compressed and seekable: the initrd loop-mounts the file inside it.
+  tryImage =
+    pkgs.runCommand "losos-try-image"
+      {
+        nativeBuildInputs = [ pkgs.buildPackages.squashfsTools ];
+      }
+      ''
+        mksquashfs ${tryRaw} $out -noappend -all-root -no-hardlinks \
+          -b 1048576 -comp zstd -Xcompression-level 3 \
+          -processors $NIX_BUILD_CORES -no-progress
+      '';
+
   # Where the installer mounts the new ESP while sysupdate writes the UKI.
   esp = "/run/losos-installer/esp";
 
@@ -36,9 +93,10 @@ let
   # here reads the same as its original in /etc/sysupdate.d.
   sysupdateFormat = pkgs.formats.ini { listToValue = toString; };
 
-  # GRUB and grubenv, as grub.nix puts them on the image's ESP, with shim,
-  # MokManager and the certificate when the image is signed for Secure Boot,
-  # and on x86_64 nothing more: BIOS GRUB lives in the BIOS boot partition.
+  # Limine, as limine.nix puts it on the image's ESP, with shim, MokManager
+  # and the certificate when the image is signed for Secure Boot, and on
+  # x86_64 Limine's BIOS stage file: the BIOS boot code itself lives in the
+  # BIOS boot partition.
   # The UKI is not in this set (repart-verity-store.nix adds it later), which
   # is as it should be: sysupdate installs the UKI, counted, like any update.
   espFiles = lib.mapAttrsToList (
@@ -74,7 +132,7 @@ let
       };
       inherit (partitions) "22-usr-verity-b" "23-usr-b";
     }
-    # The BIOS boot partition GRUB's core goes in on a legacy BIOS PC, laid
+    # The BIOS boot partition Limine's stage goes in on a legacy BIOS PC, laid
     # out as image.nix lays out the image's (bios.nix). First boot has no
     # definition of it, and leaves it be as it leaves any partition it does
     # not know.
@@ -164,7 +222,9 @@ let
     specialArgs.losos = {
       inherit (cfg) version channel;
       embeddedRelease = config.system.build.installerEmbeddedRelease;
-      tryQcow2 = config.system.build.installerTryQcow2;
+      inherit tryCmdline tryImage;
+      tryLinux = config.boot.uki.settings.UKI.Linux;
+      tryInitrd = config.boot.uki.settings.UKI.Initrd;
       releaseRepository = cfg.release.repository;
       inherit (cfg.update) baseUrl pubring;
       # Where the backend reads which assets make up the channel's files,
@@ -187,16 +247,13 @@ let
       # The swap definition for the PC's RAM, as first boot writes it
       # (disk.nix), for an install that makes swap itself.
       swap = "${pkgs.losos-swap}/lib/losos/losos-swap";
-      # The key the medium's GRUB and UKI are signed with, as the
+      # The key the medium's Limine and UKI are signed with, as the
       # image's are (secure-boot.nix).
       secureBoot = { inherit (cfg.secureBoot) privateKey certificate; };
       # Run on the disk once it is installed, so a legacy BIOS PC starts it
       # too; null where there is no BIOS (aarch64).
       biosBoot =
-        if config.system.build ? grubBiosInstall then
-          lib.getExe config.system.build.grubBiosInstall
-        else
-          null;
+        if config.system.build ? limineInstall then lib.getExe config.system.build.limineInstall else null;
     };
   };
 

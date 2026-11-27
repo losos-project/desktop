@@ -29,11 +29,10 @@ add_uki() {
   else
     return 0
   fi
-  # bash read collapses empty IFS-whitespace fields, and a tab is
-  # whitespace. An uncounted UKI has no "+tries", so this field would be
-  # empty and the partition UUID would slide into the file name. Limine
-  # then chainloads guid(1):/EFI/Linux/<esp-uuid> and panics.
-  printf '%s\t%s\t%s\t%s\t%s\n' "$version" "${left:--}" "$base" "$uuid" "$on_esp" >> "$work/ukilist"
+  # '|' rather than a tab: bash read collapses empty IFS-whitespace fields,
+  # and an uncounted UKI has an empty try count. A collapsed field shifts
+  # the partition UUID into the file name and the entry does not load.
+  printf '%s|%s|%s|%s|%s\n' "$version" "$left" "$base" "$uuid" "$on_esp" >> "$work/ukilist"
 }
 
 scan_tree() {
@@ -46,8 +45,8 @@ scan_tree() {
     [[ $base =~ ^${id}_([^/+_]+)(\+([0-9]+)(-[0-9]+)?)?\.efi$ ]] || continue
     version=${BASH_REMATCH[1]}
     add_uki "$base" "$uuid" "$on_esp"
-    if [ -f "$dir/${id}_$version.grub" ]; then
-      cp "$dir/${id}_$version.grub" "$work/${id}_$version.grub"
+    if [ -f "$dir/${id}_$version.cmdline" ]; then
+      cp "$dir/${id}_$version.cmdline" "$work/${id}_$version.cmdline"
     fi
     if [ -f "$dir/${id}_$version.linux" ]; then
       touch "$work/${id}_$version.linux"
@@ -122,12 +121,12 @@ esp_uuid=$(cat "$work/esp-uuid" 2>/dev/null || true)
 [ -n "$esp_uuid" ] || { echo "losos-limine-menu: no ESP on $target" >&2; exit 1; }
 
 # Spent (tries left 0) after everything else. Newest version first in each.
-awk -F '\t' '
+awk -F '|' '
   {
     spent = ($2 == "0")
-    print spent "\t" $0
+    print spent "|" $0
   }
-' "$work/ukilist" | sort -t $'\t' -k1,1n -k2,2Vr > "$work/sorted"
+' "$work/ukilist" | sort -t '|' -k1,1n -k2,2Vr > "$work/sorted"
 
 wallpaper_hash=
 if [ -f "$wallpaper_src" ] && command -v b2sum >/dev/null; then
@@ -135,13 +134,87 @@ if [ -f "$wallpaper_src" ] && command -v b2sum >/dev/null; then
 fi
 
 {
+  count=0
+  while IFS='|' read -r spent version left file uuid on_esp; do
+    [ -n "$file" ] || continue
+    [ -n "$spent" ] || continue
+    count=$((count + 1))
+    if [ "$left" = 0 ]; then
+      title="$name $version (failed to start)"
+    else
+      title="$name $version"
+    fi
+    # The visible name is the comment people read. LoaderEntrySelected is
+    # derived from it and is not the UKI's file name; trial and bless find
+    # the file by this system's version instead.
+    if [ "$on_esp" = 1 ]; then
+      path="boot():/EFI/Linux/$file"
+    else
+      path="guid($uuid):/EFI/Linux/$file"
+    fi
+    printf '/%s\n' "$title"
+    printf '    comment: %s\n' "$title"
+    printf '    protocol: efi\n'
+    printf '    path: %s\n' "$path"
+    printf '    if_fw_type: UEFI\n'
+    printf '\n'
+
+    # One line, the UKI's command line with root already named for a BIOS
+    # boot (uki-files.nix). losos.esp is this disk's ESP, which the file
+    # cannot know.
+    cmdfile=$work/${id}_$version.cmdline
+    if [ "$bios" = 1 ] && [ -f "$cmdfile" ] && [ -f "$work/${id}_$version.linux" ]; then
+      cmdline=$(head -n 1 "$cmdfile")
+      cmdline="$cmdline losos.esp=$esp_uuid losos.uki=$file"
+      if [ "$on_esp" = 1 ]; then
+        kpath="boot():/EFI/Linux/${id}_$version.linux"
+        ipath="boot():/EFI/Linux/${id}_$version.initrd"
+      else
+        kpath="guid($uuid):/EFI/Linux/${id}_$version.linux"
+        ipath="guid($uuid):/EFI/Linux/${id}_$version.initrd"
+      fi
+      printf '/%s\n' "$title"
+      printf '    comment: %s\n' "$title"
+      printf '    protocol: linux\n'
+      printf '    path: %s\n' "$kpath"
+      printf '    module_path: %s\n' "$ipath"
+      printf '    cmdline: %s\n' "$cmdline"
+      printf '    if_fw_type: BIOS\n'
+      printf '\n'
+    fi
+  done < "$work/sorted"
+  printf '%s\n' "$count" > "$work/count"
+} > "$work/entries"
+
+# Windows Boot Manager, when it shares the ESP.
+if [ -f "$work/windows" ] || [ -f "$(cat "$work/esp-mount" 2>/dev/null || echo /none)/EFI/Microsoft/Boot/bootmgfw.efi" ]; then
+  cat >> "$work/entries" <<'EOF'
+/Windows
+    comment: Windows
+    protocol: efi
+    path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
+    if_fw_type: UEFI
+
+EOF
+fi
+
+# serial: yes makes Limine's UEFI build skip the graphical terminal, so a
+# machine with a serial port (QEMU's OVMF among them) would draw text and
+# no salmon. UEFI reads the config beside its EFI program and ignores
+# /limine.conf. BIOS does not look there; it reads /limine.conf, where
+# serial stays on and the graphical menu still starts.
+header() {
+  local serial=$1
   printf 'timeout: 3\n'
-  printf 'serial: yes\n'
-  printf 'serial_baudrate: 115200\n'
+  if [ "$serial" = 1 ]; then
+    printf 'serial: yes\n'
+    printf 'serial_baudrate: 115200\n'
+  fi
   printf 'editor_enabled: yes\n'
-  printf 'wallpaper: boot():/limine/salmon.png'
-  if [ -n "$wallpaper_hash" ]; then printf '#%s' "$wallpaper_hash"; fi
-  printf '\n'
+  if [ -n "$wallpaper_hash" ]; then
+    printf '# wallpaper %s\n' "$wallpaper_hash"
+  fi
+  printf 'wallpaper: boot():/limine/salmon.png\n'
   printf 'wallpaper_style: centered\n'
   printf 'backdrop: 0a0e12\n'
   printf 'term_background: 800a0e12\n'
@@ -153,88 +226,23 @@ fi
   printf 'interface_help_colour: 94a2b0\n'
   printf 'interface_help_colour_bright: 48b3c0\n'
   printf '\n'
-
-  count=0
-  while IFS=$'\t' read -r spent version left file uuid on_esp; do
-    [ -n "$file" ] || continue
-    [ -n "$spent" ] || continue
-    if [ "$left" = "-" ]; then
-      left=
-    fi
-    count=$((count + 1))
-    title=$name
-    if [ "$left" = 0 ]; then
-      title="$name $version (failed to start)"
-    else
-      title="$name $version"
-    fi
-    # The entry path becomes LoaderEntrySelected, with "/" turned into ".".
-    # Naming it the UKI file keeps bless and the trial counter on that file.
-    if [ "$on_esp" = 1 ]; then
-      path="boot():/EFI/Linux/$file"
-    else
-      path="guid($uuid):/EFI/Linux/$file"
-    fi
-    printf '/%s\n' "$file"
-    printf '    comment: %s\n' "$title"
-    printf '    protocol: efi\n'
-    printf '    path: %s\n' "$path"
-    printf '    if_fw_type: UEFI\n'
-    printf '\n'
-
-    grub=$work/${id}_$version.grub
-    if [ "$bios" = 1 ] && [ -f "$grub" ] && [ -f "$work/${id}_$version.linux" ]; then
-      cmdline=$(sed -n 's/^set losos_cmdline="\(.*\)"$/\1/p' "$grub" | head -n 1)
-      cmdline=$(printf '%s\n' "$cmdline" | sed "s|root=\\\$losos_root|root=/dev/disk/by-loader/root losos.esp=$esp_uuid|")
-      cmdline="$cmdline losos.uki=$file"
-      if [ "$on_esp" = 1 ]; then
-        kpath="boot():/EFI/Linux/${id}_$version.linux"
-        ipath="boot():/EFI/Linux/${id}_$version.initrd"
-      else
-        kpath="guid($uuid):/EFI/Linux/${id}_$version.linux"
-        ipath="guid($uuid):/EFI/Linux/${id}_$version.initrd"
-      fi
-      printf '/%s\n' "$file"
-      printf '    comment: %s\n' "$title"
-      printf '    protocol: linux\n'
-      printf '    path: %s\n' "$kpath"
-      printf '    module_path: %s\n' "$ipath"
-      printf '    cmdline: %s\n' "$cmdline"
-      printf '    if_fw_type: BIOS\n'
-      printf '\n'
-    fi
-  done < "$work/sorted"
-  printf '%s\n' "$count" > "$work/count"
-} > "$work/limine.conf"
-
-# Windows Boot Manager, when it shares the ESP.
-if [ -f "$work/windows" ] || [ -f "$(cat "$work/esp-mount" 2>/dev/null || echo /none)/EFI/Microsoft/Boot/bootmgfw.efi" ]; then
-  cat >> "$work/limine.conf" <<'EOF'
-/Windows
-    comment: Windows
-    protocol: efi
-    path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
-    if_fw_type: UEFI
-
-EOF
-fi
+  cat "$work/entries"
+}
+header 1 > "$work/limine-bios.conf"
+header 0 > "$work/limine-uefi.conf"
 
 install_wallpaper() {
   local dest=$1
-  mkdir -p "$dest/limine"
+  mkdir -p "$dest/limine" "$dest/EFI/BOOT" "$dest/EFI/losos"
   cp "$wallpaper_src" "$dest/limine/salmon.png"
-  cp "$work/limine.conf" "$dest/limine.conf"
-  mkdir -p "$dest/EFI/BOOT" "$dest/EFI/losos"
-  cp "$work/limine.conf" "$dest/EFI/BOOT/limine.conf"
-  cp "$work/limine.conf" "$dest/EFI/losos/limine.conf"
+  cp "$work/limine-bios.conf" "$dest/limine.conf"
+  cp "$work/limine-uefi.conf" "$dest/EFI/BOOT/limine.conf"
+  cp "$work/limine-uefi.conf" "$dest/EFI/losos/limine.conf"
 }
 
 if [ "$mode" = --esp ]; then
   esp=$(cat "$work/esp-mount")
   install_wallpaper "$esp"
-  if [ -f "$(cat "$work/esp-mount")/EFI/Microsoft/Boot/bootmgfw.efi" ]; then
-    :
-  fi
 else
   offset=$(cat "$work/esp-offset")
   export MTOOLS_SKIP_CHECK=1
@@ -242,9 +250,9 @@ else
     mmd -i "$target@@$offset" "$dir" 2>/dev/null || true
   done
   mcopy -o -i "$target@@$offset" "$wallpaper_src" ::/limine/salmon.png
-  mcopy -o -i "$target@@$offset" "$work/limine.conf" ::/limine.conf
-  mcopy -o -i "$target@@$offset" "$work/limine.conf" ::/EFI/BOOT/limine.conf
-  mcopy -o -i "$target@@$offset" "$work/limine.conf" ::/EFI/losos/limine.conf
+  mcopy -o -i "$target@@$offset" "$work/limine-bios.conf" ::/limine.conf
+  mcopy -o -i "$target@@$offset" "$work/limine-uefi.conf" ::/EFI/BOOT/limine.conf
+  mcopy -o -i "$target@@$offset" "$work/limine-uefi.conf" ::/EFI/losos/limine.conf
   if [ "$bios" = 1 ] && [ -f "$limine/share/limine/limine-bios.sys" ]; then
     mcopy -o -i "$target@@$offset" "$limine/share/limine/limine-bios.sys" ::/limine-bios.sys
     idx=$(jq -r '
@@ -258,10 +266,3 @@ else
     fi
   fi
 fi
-
-# #region agent log
-debug_log=${LOSOS_DEBUG_LOG:-}
-if [ -n "$debug_log" ]; then
-  printf '%s\n' "{\"sessionId\":\"694f03\",\"hypothesisId\":\"menu\",\"location\":\"limine-menu.sh\",\"message\":\"wrote limine.conf\",\"data\":{\"entries\":$(cat "$work/count"),\"esp\":\"$esp_uuid\"},\"timestamp\":$(date +%s%3N)}" >> "$debug_log" || true
-fi
-# #endregion

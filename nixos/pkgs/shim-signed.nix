@@ -1,6 +1,6 @@
 # shim and MokManager as Fedora ships them, signed by Microsoft's UEFI CA,
 # which is what lets a PC with Secure Boot on and only the keys it came with
-# start LosOS (docs/secure-boot.md). shim starts GRUB once GRUB's signature
+# start LosOS (docs/secure-boot.md). shim starts Limine once Limine's signature
 # checks against a certificate in the machine's MOK list, and MokManager is
 # where a person puts LosOS's certificate on that list.
 #

@@ -48,13 +48,13 @@ without it. Then it:
    because that is how the initrd finds `/usr` from `usrhash=`.
 8. Copies Limine to `\EFI\losos\` on Windows' EFI system partition, as
    `grub<arch>.efi`, with a `limine.conf` that starts LosOS's UKI from the
-   XBOOTLDR partition and an empty `grubenv` beside it, and adds a firmware
+   XBOOTLDR partition beside it, and adds a firmware
    boot entry for it at the
    front of the boot order. The entry is a copy of Windows Boot Manager's
    own with the file swapped, so it points at the same disk in the same way.
    Some Windows updates and some firmware put Windows Boot Manager first
    again. Every LosOS start that reaches `boot-complete.target` moves the
-   LosOS entry back to the front, through `losos-boot-order` in `grub.nix`,
+   LosOS entry back to the front, through `losos-boot-order` in `limine.nix`,
    and Limine's menu offers Windows from LosOS's first boot on.
 9. Offers to restart.
 

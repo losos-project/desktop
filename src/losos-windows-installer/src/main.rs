@@ -2,7 +2,7 @@
 //!
 //! Run on Windows, it checks the machine can dual-boot, asks how much space
 //! to give LosOS, shrinks C: by that much, writes the newest signed release
-//! into the space, and adds GRUB, which then offers LosOS and Windows at
+//! into the space, and adds Limine, which then offers LosOS and Windows at
 //! every start. `--uninstall` takes all of that back.
 //!
 //! On Linux it does the same install into a disk image laid out like a
@@ -24,14 +24,6 @@ const USAGE: &str = "\
 usage: losos-windows-installer [--size GB] [--release DIR] [--channel URL] [--dry-run] [--yes]
        losos-windows-installer --uninstall [--yes]
        losos-windows-installer --image DISK --release DIR [--loader FILE] [--pubring FILE] [--ram GB] [--yes]";
-
-/// An empty grubenv, as grub.nix puts one on an ESP, for a build that was
-/// not given it: GRUB's signature line padded with `#` to 1024 bytes.
-fn empty_grubenv() -> Vec<u8> {
-    let mut env = b"# GRUB Environment Block\n".to_vec();
-    env.resize(1024, b'#');
-    env
-}
 
 #[derive(Default)]
 struct Options {
@@ -91,7 +83,6 @@ struct Settings {
     arch: Arch,
     keyring: Option<Vec<u8>>,
     loader: Vec<u8>,
-    grubenv: Vec<u8>,
     source: Source,
 }
 
@@ -107,9 +98,8 @@ fn settings(o: &Options) -> Result<Settings> {
         Some(p) => read(p)?,
         None => config::LOADER
             .map(<[u8]>::to_vec)
-            .ok_or_else(|| miette!(help = USAGE, "this build carries no GRUB; pass --loader"))?,
+            .ok_or_else(|| miette!(help = USAGE, "this build carries no Limine; pass --loader"))?,
     };
-    let grubenv = config::GRUBENV.map_or_else(empty_grubenv, <[u8]>::to_vec);
     let source = match (
         &o.release,
         &o.channel,
@@ -129,7 +119,6 @@ fn settings(o: &Options) -> Result<Settings> {
         arch,
         keyring,
         loader,
-        grubenv,
         source,
     })
 }
@@ -208,7 +197,6 @@ fn image_install(o: &Options) -> Result<()> {
     let files = install::fetch_files(&s.source, &release, &cache, &mut console)?;
     let boot = Boot {
         loader: &s.loader,
-        grubenv: &s.grubenv,
     };
     if let Err(e) = install::run(
         &mut image,
@@ -371,7 +359,7 @@ mod platform {
             release.version,
             size_text(shrink + behind.len())
         );
-        println!("  - add GRUB to the EFI system partition and make it start first,");
+        println!("  - add Limine to the EFI system partition and make it start first,");
         println!("    so every start offers LosOS and Windows");
         if machine.fast_startup {
             println!("  - turn Windows' fast startup off");
@@ -433,7 +421,6 @@ mod platform {
             let mut target = WindowsTarget::new(Disk::open(disk.number)?, &table)?;
             let boot = Boot {
                 loader: &s.loader,
-                grubenv: &s.grubenv,
             };
             install::run(
                 &mut target,
@@ -518,7 +505,7 @@ mod platform {
         let esp = table
             .esp()
             .ok_or_else(|| miette!("the disk Windows is on has no EFI system partition"))?;
-        println!("This will remove GRUB and LosOS's boot entry, and delete");
+        println!("This will remove Limine and LosOS's boot entry, and delete");
         println!(
             "{} partitions ({}) behind {drive}, giving their space back to it.",
             ours.len(),
@@ -536,7 +523,7 @@ mod platform {
         console.step("Removing the boot entry");
         let loader = format!("\\{}", install::loader_path(&s.arch).replace('/', "\\"));
         win::remove_boot_entry(&loader)?;
-        console.step("Removing GRUB from the EFI system partition");
+        console.step("Removing Limine from the EFI system partition");
         win::remove_esp_files(disk.number, esp.StartingOffset as u64)?;
         if !ours.is_empty() {
             console.step("Deleting LosOS's partitions");

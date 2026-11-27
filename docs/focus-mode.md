@@ -1,11 +1,10 @@
 # Focus mode
 
-Focus mode is for games and for heavy creative work: 3D, CAD, video and
-music. While a program like that is open, the background work the desktop
-does waits. File indexing, backups, updates, the ad-block list fetch and
-the like stop using the processor and the disk. Ollama, the language model
-behind Ask derisk, stops and gives its memory back. When the last of those
-programs closes, everything carries on where it stopped.
+Focus mode pauses the desktop's background work while a game or heavy creative
+app (3D, CAD, video, music) is open. File indexing, backups, updates, the
+ad-block list fetch and similar jobs stop using the processor and disk, and
+Ollama, the model behind Ask derisk, stops and frees its memory. When the last
+such program closes, everything resumes where it stopped.
 
 `nixos/modules/focus.nix` sets it up, and `losos-focus`
 (`src/losos-focus`) does the work.
@@ -63,10 +62,9 @@ changes: mcsapi's compositor redraws only what changed.
 
 ## Logging out
 
-If you log out while focus mode is on, it turns off. GameMode goes with
-your session, so the system unit that holds focus,
-`losos-focus@<you>.service`, also watches for your session to end. Updates
-never stay frozen until the next boot because of a session that closed.
+Logging out turns focus mode off. GameMode ends with your session, so the
+system unit that holds focus, `losos-focus@<you>.service`, also watches for
+your session to end, and updates never stay frozen until the next boot.
 
 With two people signed in, the system's work waits while either of them
 is in focus mode.
