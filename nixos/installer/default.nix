@@ -57,7 +57,7 @@ let
         sysupdateBin
         pkgs.coreutils
         pkgs.util-linux
-        # repart formats the ESP and copies GRUB into it with these.
+        # repart formats the ESP and copies Limine into it with these.
         pkgs.dosfstools
         pkgs.mtools
         # systemd-pull checks SHA256SUMS.gpg with gpg itself, and the
@@ -122,9 +122,9 @@ in
   };
 
   boot = {
-    # GRUB on the medium starts the UKI (iso.nix), with its menu built into
-    # its own image; NixOS's GRUB module, which installs one on a disk and
-    # writes its menu there, has no disk here to do that on.
+    # Limine on the medium starts the UKI (iso.nix), from limine.conf on
+    # the medium; NixOS's GRUB module, which installs GRUB on a disk and
+    # writes a GRUB menu there, has no disk here to do that on.
     loader.grub.enable = false;
     # How quiet the boot is, so nothing writes over the splash before the
     # installer takes the screen, is splash.nix's, as on the installed
@@ -376,7 +376,7 @@ in
                "--report-repo"
                losos.reportRepo
              ]}"
-        # GRUB into the installed disk's MBR and BIOS boot partition, so a
+        # Limine into the installed disk's MBR and BIOS boot partition, so a
         # legacy BIOS PC starts it as UEFI firmware does (bios.nix).
         +
           lib.optionalString (losos.biosBoot != null)

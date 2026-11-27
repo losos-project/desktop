@@ -36,7 +36,7 @@ pub struct Arch {
     pub verity_type: Guid,
     /// Root, which first boot makes: only `--uninstall` needs to know it.
     pub root_type: Guid,
-    /// The EFI machine type GRUB's file on the ESP is named after.
+    /// The EFI machine type Limine's file on the ESP is named after.
     pub efi: &'static str,
 }
 

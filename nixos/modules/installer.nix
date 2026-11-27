@@ -93,9 +93,10 @@ let
   # here reads the same as its original in /etc/sysupdate.d.
   sysupdateFormat = pkgs.formats.ini { listToValue = toString; };
 
-  # GRUB and grubenv, as grub.nix puts them on the image's ESP, with shim,
-  # MokManager and the certificate when the image is signed for Secure Boot,
-  # and on x86_64 nothing more: BIOS GRUB lives in the BIOS boot partition.
+  # Limine, as limine.nix puts it on the image's ESP, with shim, MokManager
+  # and the certificate when the image is signed for Secure Boot, and on
+  # x86_64 Limine's BIOS stage file: the BIOS boot code itself lives in the
+  # BIOS boot partition.
   # The UKI is not in this set (repart-verity-store.nix adds it later), which
   # is as it should be: sysupdate installs the UKI, counted, like any update.
   espFiles = lib.mapAttrsToList (
@@ -131,7 +132,7 @@ let
       };
       inherit (partitions) "22-usr-verity-b" "23-usr-b";
     }
-    # The BIOS boot partition GRUB's core goes in on a legacy BIOS PC, laid
+    # The BIOS boot partition Limine's stage goes in on a legacy BIOS PC, laid
     # out as image.nix lays out the image's (bios.nix). First boot has no
     # definition of it, and leaves it be as it leaves any partition it does
     # not know.
@@ -246,16 +247,13 @@ let
       # The swap definition for the PC's RAM, as first boot writes it
       # (disk.nix), for an install that makes swap itself.
       swap = "${pkgs.losos-swap}/lib/losos/losos-swap";
-      # The key the medium's GRUB and UKI are signed with, as the
+      # The key the medium's Limine and UKI are signed with, as the
       # image's are (secure-boot.nix).
       secureBoot = { inherit (cfg.secureBoot) privateKey certificate; };
       # Run on the disk once it is installed, so a legacy BIOS PC starts it
       # too; null where there is no BIOS (aarch64).
       biosBoot =
-        if config.system.build ? grubBiosInstall then
-          lib.getExe config.system.build.grubBiosInstall
-        else
-          null;
+        if config.system.build ? limineInstall then lib.getExe config.system.build.limineInstall else null;
     };
   };
 

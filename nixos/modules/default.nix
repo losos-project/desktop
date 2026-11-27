@@ -7,7 +7,7 @@
   imports = [
     ./base.nix
     ./boot.nix
-    ./grub.nix
+    ./limine.nix
     ./uki-files.nix
     ./secure-boot.nix
     ./bios.nix
@@ -58,7 +58,7 @@
     ./windows-installer.nix
     ./agent.nix
     # testing.nix is gone: its losos-selftest unit sat in every boot's
-    # transaction and sometimes kept losos-grub-bless from running, and its
+    # transaction and sometimes kept losos-limine-bless from running, and its
     # losos-ota-test could install an unverified release. Tests wait for the
     # bless themselves and rewrite sysupdate's transfers from the driver.
   ];

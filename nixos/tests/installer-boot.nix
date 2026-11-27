@@ -1,5 +1,5 @@
 # Boot the installer from its actual ISO under UEFI, or with `bios` under a
-# legacy BIOS through GRUB's El Torito image (iso.nix), including the initrd
+# legacy BIOS through Limine's El Torito image (iso.nix), including the initrd
 # mounts and the service that owns tty1.
 {
   self,

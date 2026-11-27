@@ -1,8 +1,8 @@
-# Boot the real image on a legacy BIOS: SeaBIOS, GRUB from the MBR, the
+# Boot the real image on a legacy BIOS: SeaBIOS, Limine from the MBR, the
 # UKI's kernel and initrd (modules/bios.nix). boot.nix checks what the system
 # does once it is up, which is the same under either firmware; this checks
-# what is particular to a BIOS boot, and that GRUB's boot counting ends where
-# systemd-boot's would.
+# what is particular to a BIOS boot, and that Limine's boot counting ends
+# where systemd-boot's would.
 { self }:
 
 { lib, ... }:
@@ -37,9 +37,9 @@ in
 
       machine.wait_for_unit("multi-user.target")
 
-      with subtest("GRUB started the system, and first boot found its disk"):
+      with subtest("Limine started the system, and first boot found its disk"):
           machine.fail("test -d /sys/firmware/efi")
-          # GRUB named the ESP it started the kernel from, and the initrd
+          # Limine named the ESP it started the kernel from, and the initrd
           # mounted root from that ESP's disk (bios.nix).
           machine.succeed("grep -q 'root=/dev/disk/by-loader/root' /proc/cmdline")
           machine.succeed("grep -q 'losos.esp=' /proc/cmdline")
@@ -53,17 +53,24 @@ in
           esp = machine.succeed("bootctl --print-esp-path").strip()
           machine.succeed(f"test -f {esp}/EFI/Linux/losos-desktop_1.efi")
           machine.succeed(f"test -f {esp}/EFI/Linux/losos-desktop_1.linux")
-          machine.succeed(f"test -f {esp}/EFI/losos/grubenv")
+          machine.succeed(f"test -f {esp}/EFI/Linux/losos-desktop_1.cmdline")
+          machine.succeed(f"test -f {esp}/limine.conf")
+          machine.succeed(f"grep -qx 'serial: yes' {esp}/limine.conf")
+          machine.succeed(
+              "grep -q 'path: boot():/EFI/Linux/losos-desktop_1.linux' "
+              f"{esp}/limine.conf"
+          )
+          machine.fail(f"test -e {esp}/EFI/losos/grubenv")
           # The bless runs after boot-complete.target, which comes after
           # multi-user.target, so it can still be queued here; waiting
           # still fails if its job was dropped or it failed.
-          machine.wait_for_unit("losos-grub-bless.service")
+          machine.wait_for_unit("losos-limine-bless.service")
 
-      with subtest("An update rewrites GRUB's BIOS boot code"):
-          # Without the record of what it installed, losos-grub-update
+      with subtest("An update rewrites Limine's BIOS boot code"):
+          # Without the record of what it installed, losos-limine-update
           # writes the boot code again, so a BIOS boot partition emptied
           # here is whole again for the reboot below.
-          machine.wait_for_unit("losos-grub-update.service")
+          machine.wait_for_unit("losos-limine-update.service")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
           bios = machine.succeed(
               "lsblk --raw --noheadings --output PATH,PARTTYPE /dev/vda"
@@ -71,7 +78,7 @@ in
           ).strip()
           machine.succeed(f"dd if=/dev/zero of={bios} bs=1M count=1 conv=fsync")
           machine.succeed(f"rm {esp}/EFI/losos/installed")
-          machine.succeed("systemctl restart losos-grub-update.service")
+          machine.succeed("systemctl restart losos-limine-update.service")
           machine.fail(f"cmp --bytes=512 {bios} /dev/zero")
 
       with subtest("Another disk's root partition is not mounted in its place"):
@@ -91,10 +98,10 @@ in
           machine.shutdown()
           machine.start()
           machine.wait_for_unit("multi-user.target")
-          machine.wait_for_unit("losos-grub-bless.service")
+          machine.wait_for_unit("losos-limine-bless.service")
           machine.succeed(f"test -f {esp}/EFI/Linux/losos-desktop_1.efi")
           machine.fail(f"ls {esp}/EFI/Linux/ | grep -q '+'")
-          machine.fail(f"grep -q '^losos_' {esp}/EFI/losos/grubenv")
+          machine.fail(f"test -e {esp}/EFI/losos/grubenv")
           # Both disks now have a root partition by that label.
           machine.succeed("findmnt --noheadings --output SOURCE / | grep -q '^/dev/vda'")
           machine.fail("test -e /other-disk")

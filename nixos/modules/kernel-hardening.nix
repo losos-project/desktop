@@ -68,7 +68,7 @@ in
     # anything runs on its way up. Nothing can lower it afterwards: writing
     # /sys/kernel/security/lockdown can only raise the mode, and the
     # parameter itself takes integrity or confidentiality and nothing else.
-    # The command line is built into the UKI, and GRUB starts the UKI
+    # The command line is built into the UKI, and Limine chainloads the UKI
     # without arguments (docs/secure-boot.md), so nothing between power and
     # boot can put another one in its place. sig_enforce is an enable-only
     # switch: once on, nothing turns it off.

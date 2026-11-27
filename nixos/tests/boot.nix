@@ -1,4 +1,4 @@
-# Boot the real image -- UEFI, GRUB, the UKI, a disk first boot has to
+# Boot the real image -- UEFI, Limine, the UKI, a disk first boot has to
 # lay out -- and check that each systemd piece this OS is built on is doing its
 # job, not merely installed.
 #
@@ -50,9 +50,9 @@ in
           # The boot that matters is the next one, with both disks there from
           # the start; the last subtest checks it.
 
-      with subtest("GRUB chainloaded the UKI and named the disk it came from"):
-          # bli's LoaderInfo, and the LoaderDevicePartUUID gpt-auto found root
-          # and the ESP by (grub.nix).
+      with subtest("Limine chainloaded the UKI and named the disk it came from"):
+          # Limine's LoaderInfo, and the LoaderDevicePartUUID gpt-auto found
+          # root and the ESP by (limine.nix).
           loader = machine.succeed(
               "tail -c +5 /sys/firmware/efi/efivars/LoaderInfo-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f | tr -d '\\0'"
           )
@@ -60,11 +60,20 @@ in
           machine.succeed("grep -q 'usrhash=' /proc/cmdline")
           esp = machine.succeed("bootctl --print-esp-path").strip()
           machine.succeed(f"test -f {esp}/EFI/Linux/losos-desktop_1.efi")
-          machine.succeed(f"test -f {esp}/EFI/losos/grubenv")
+          machine.succeed(f"test -f {esp}/limine.conf")
+          machine.fail(f"test -e {esp}/EFI/losos/grubenv")
+          # UEFI reads the config beside the EFI program. It must name the
+          # UKI, not a shifted empty field, and must not turn the menu to
+          # text by asking for serial.
+          machine.succeed(
+              f"grep -q 'path: boot():/EFI/Linux/losos-desktop_1.efi' {esp}/EFI/BOOT/limine.conf"
+          )
+          machine.succeed(f"grep -qx '/LosOS Desktop 1' {esp}/EFI/BOOT/limine.conf")
+          machine.fail(f"grep -qx 'serial: yes' {esp}/EFI/BOOT/limine.conf")
           # The bless runs after boot-complete.target, which comes after
           # multi-user.target, so it can still be queued here; waiting
           # still fails if its job was dropped or it failed.
-          machine.wait_for_unit("losos-grub-bless.service")
+          machine.wait_for_unit("losos-limine-bless.service")
 
       with subtest("/usr is dm-verity and the store lives on it"):
           assert "ACTIVE" in machine.succeed("dmsetup info --target verity usr")
@@ -227,18 +236,20 @@ in
               "org.freedesktop.DBus.Introspectable Introspect"
           )
 
-      with subtest("An update's GRUB replaces the one on the ESP"):
-          # losos-grub-update runs once the bless has, and records what it
-          # installed. A GRUB that is not this version's, and the
+      with subtest("An update's Limine replaces the one on the ESP"):
+          # losos-limine-update runs once the bless has, and records what it
+          # installed. A Limine that is not this version's, and the
           # systemd-boot older installs started with, are both replaced,
-          # each by shim with the signed GRUB beside it (image.nix gives the
-          # node a Secure Boot key), and the reboot below starts the result.
-          machine.wait_for_unit("losos-grub-update.service")
+          # each by shim with the signed Limine beside it. The file beside
+          # shim is named grubx64.efi because that is the name shim loads
+          # (shim.nix). image.nix gives the node a Secure Boot key, and the
+          # reboot below starts the result.
+          machine.wait_for_unit("losos-limine-update.service")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
-          grub = "${nodes.machine.system.build.grub.efi}/grub.efi"
+          limine = "${nodes.machine.system.build.limine.efi}/limine.efi"
           shim = "${nodes.machine.system.build.secureBoot.shimFile}"
           machine.succeed(f"cmp {shim} {esp}/EFI/BOOT/BOOTX64.EFI")
-          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/grubx64.efi")
+          machine.succeed(f"cmp {limine} {esp}/EFI/BOOT/grubx64.efi")
           machine.succeed(f"test -f {esp}/EFI/BOOT/mmx64.efi")
           machine.succeed(f"test -f {esp}/ENROLL_THIS_KEY_IN_MOKMANAGER.cer")
           machine.succeed(f"printf older >> {esp}/EFI/BOOT/grubx64.efi")
@@ -247,11 +258,11 @@ in
               f"cp ${nodes.machine.systemd.package}/lib/systemd/boot/efi/systemd-bootx64.efi {esp}/EFI/systemd/"
           )
           machine.succeed(f"rm {esp}/EFI/losos/installed")
-          machine.succeed("systemctl restart losos-grub-update.service")
+          machine.succeed("systemctl restart losos-limine-update.service")
           machine.succeed(f"cmp {shim} {esp}/EFI/BOOT/BOOTX64.EFI")
-          machine.succeed(f"cmp {grub} {esp}/EFI/BOOT/grubx64.efi")
+          machine.succeed(f"cmp {limine} {esp}/EFI/BOOT/grubx64.efi")
           machine.succeed(f"cmp {shim} {esp}/EFI/systemd/systemd-bootx64.efi")
-          machine.succeed(f"cmp {grub} {esp}/EFI/systemd/grubx64.efi")
+          machine.succeed(f"cmp {limine} {esp}/EFI/systemd/grubx64.efi")
           machine.succeed(f"test -f {esp}/EFI/losos/installed")
 
       with subtest("Settings can ask shim to enroll LosOS's key at the next start"):
@@ -275,8 +286,9 @@ in
 
       with subtest("LosOS's firmware entry goes back to the front of the boot order"):
           # The entry the Windows installer adds, and Windows putting its
-          # own back in front of it (grub.nix, losos-boot-order).
-          efibootmgr = "${nodes.machine.system.build.grub.efibootmgr}/bin/efibootmgr"
+          # own back in front of it (limine.nix, losos-boot-order). The loader
+          # path is shim's second-stage name; the file there is Limine.
+          efibootmgr = "${nodes.machine.system.build.limine.efibootmgr}/bin/efibootmgr"
           machine.wait_for_unit("losos-boot-order.service")
           part = machine.succeed(
               "lsblk --noheadings --output PARTN "
@@ -296,20 +308,20 @@ in
           machine.succeed("systemctl restart losos-boot-order.service")
           machine.succeed(f"{efibootmgr} | grep -qx 'BootOrder: {ours},.*'")
 
-      with subtest("A counted UKI is blessed once it boots under UEFI GRUB"):
+      with subtest("A counted UKI is blessed once it boots under UEFI Limine"):
           # As boot-bios.nix checks it under a BIOS: the name sysupdate gives
-          # a new UKI (update.nix), counted down in grubenv and settled by
-          # losos-grub-bless.
+          # a new UKI (update.nix), counted down by renaming the file and
+          # settled by losos-limine-bless.
           machine.succeed(
               f"mv {esp}/EFI/Linux/losos-desktop_1.efi '{esp}/EFI/Linux/losos-desktop_1+3-0.efi'"
           )
           machine.shutdown()
           machine.start()
           machine.wait_for_unit("multi-user.target")
-          machine.wait_for_unit("losos-grub-bless.service")
+          machine.wait_for_unit("losos-limine-bless.service")
           machine.succeed(f"test -f {esp}/EFI/Linux/losos-desktop_1.efi")
           machine.fail(f"ls {esp}/EFI/Linux/ | grep -q '+'")
-          machine.fail(f"grep -q '^losos_' {esp}/EFI/losos/grubenv")
+          machine.fail(f"test -e {esp}/EFI/losos/grubenv")
 
       with subtest("a boot with a second LosOS disk takes swap from its own"):
           # vdb's losos-swap partition was there for the whole of the boot

@@ -50,6 +50,20 @@ let
   # UEFI Limine reads this from the FAT, where the UKI is copied so boot():
   # reaches it. BIOS Limine reads the other file from the ISO.
   cmdline = config.boot.uki.settings.UKI.Cmdline;
+  # No serial here. On UEFI, serial: yes skips Limine's graphical
+  # terminal, so a machine with a serial port would boot in text.
+  efiConf = pkgs.writeText "limine.conf" ''
+    timeout: 3
+    wallpaper: boot():/limine/salmon.png
+    wallpaper_style: centered
+    backdrop: 0a0e12
+    term_background: 800a0e12
+    term_foreground: e2e8ee
+    term_background_bright: 48b3c0
+    term_foreground_bright: 0a0e12
+    interface_branding: ${config.system.nixos.distroName}
+    interface_branding_colour: 48b3c0
+    interface_help_colour: 94a2b0
 
   # The Try entry starts the desktop kernel and initrd from the same version
   # the ISO ships. Its command line comes from that version's finished UKI, so
@@ -109,19 +123,24 @@ let
     inherit pkgs;
     inherit (losos.secureBoot) privateKey certificate;
   };
-  limineEfi = "${pkgs.limine}/share/limine/BOOT${lib.toUpper efiArch}.EFI";
-  grub = if sb.enable then sb.sign "grub${efiArch}.efi" limineEfi else limineEfi;
-  # The UKI GRUB starts, signed as the installed system's are
+  # The same SBAT-bearing Limine the installed system starts (limine-efi.nix).
+  limineEfi = import ../modules/limine-efi.nix {
+    inherit pkgs;
+    inherit efiArch;
+  };
+  limine = if sb.enable then sb.sign "limine${efiArch}.efi" limineEfi else limineEfi;
+  # The UKI Limine starts, signed as the installed system's are
   # (modules/secure-boot.nix).
   uki =
     if sb.enable then
       sb.sign "installer.efi" "${config.system.build.uki}/${ukiFile}"
     else
       "${config.system.build.uki}/${ukiFile}";
-  starters = sb.removable grub;
+  starters = sb.removable limine;
 
-  # What starts GRUB at the removable-media boot path: GRUB alone, or shim
-  # with GRUB beside it. The UKI GRUB starts is on the ISO 9660 filesystem
+  # What starts Limine at the removable-media boot path: Limine alone, or
+  # shim with Limine beside it under the name shim loads. The UKI Limine
+  # starts is on the ISO 9660 filesystem
   # with the rest of the medium. Sized from its contents as nixpkgs sizes
   # its own EFI image: a tenth more for FAT's own overhead, rounded up to a
   # whole MiB.

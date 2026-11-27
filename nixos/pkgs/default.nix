@@ -1,6 +1,6 @@
 # Packages this repository builds itself. They are the programs under
 # github.com/losos-project (this tree, plus the derisk, mcsapi and pm
-# inputs). GTK, Qt, GRUB, QEMU, WebKit and WinBoat stay nixpkgs' builds, so
+# inputs). GTK, Qt, Limine, QEMU, WebKit and WinBoat stay nixpkgs' builds, so
 # they substitute from cache.nixos.org. A patch of one of those used to
 # rebuild it and everything callPackage'd against it.
 final: prev:
@@ -143,7 +143,7 @@ in
   android-headers = callWithMold ./android-headers.nix { };
   libhybris = callWithMold ./libhybris.nix { };
   halium-gsi = final.callPackage ./halium-gsi.nix { };
-  # Fedora's Microsoft-signed shim, which starts LosOS's signed GRUB with
+  # Fedora's Microsoft-signed shim, which starts LosOS's signed Limine with
   # Secure Boot on (secure-boot.nix). Unpacked, not built.
   shim-signed = final.callPackage ./shim-signed.nix { };
   # Android app support (android-apps.nix): a virtual Pixel of each

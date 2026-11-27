@@ -3,7 +3,7 @@
 #
 # Like installer.nix, this is the OS's half: the program is built from this
 # configuration's own channel URL, release key, image id, /usr slot size, and
-# the GRUB and grubenv grub.nix puts on an ESP, so it installs exactly what
+# the Limine limine.nix puts on an ESP, so it installs exactly what
 # an update of this OS would fetch, into a slot of the size first boot
 # expects. A release carries it beside the ISO (image.nix).
 #
@@ -37,6 +37,5 @@ lib.mkIf (cfg.arch.name == "x86_64") {
         arch = cfg.arch.name;
         inherit (cfg) usrSize;
         loader = espContents."/EFI/losos/grub${cfg.arch.efi}.efi".source;
-        grubenv = espContents."/EFI/losos/grubenv".source;
       };
 }

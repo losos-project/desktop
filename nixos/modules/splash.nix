@@ -5,16 +5,16 @@
 # PC image (default.nix) and by the installer's live system, which then
 # reads "LosOS Desktop installer is starting" (docs/boot-loaders.md).
 #
-# The whole start is one picture: GRUB's menu on the same ground with the
-# same salmon (grub.nix), then the UKI's own splash, which systemd-stub
+# The whole start is one picture: Limine's menu on the same ground with the
+# same salmon (limine.nix), then the UKI's own splash, which systemd-stub
 # shows while the kernel and initrd load, then Plymouth from the initrd on,
 # until the login screen or the installer takes the display. Plymouth comes
 # back at shutdown and says the machine is restarting or shutting down.
 #
 # Plymouth draws on the display it finds in its first seconds, which on a
-# UEFI PC is the firmware's framebuffer, in the mode GRUB left. A BIOS
-# machine hands GRUB's graphics mode on to the kernel for the same reason
-# (grub.cfg). Without either, Plymouth runs in text mode. Esc shows the boot
+# UEFI PC is the firmware's framebuffer, in the mode Limine left. A BIOS
+# machine keeps Limine's video mode for the kernel, so the splash is the
+# same picture there too. Without either, Plymouth runs in text mode. Esc shows the boot
 # log, and Esc again hides it.
 #
 # Halium phones boot through Android's boot loader and draw nothing until
@@ -106,7 +106,7 @@ in
   environment.etc."plymouth/fonts".source = fonts;
 
   # The salmon again while the kernel loads, from the UKI's .splash section,
-  # so the screen does not go black between GRUB and Plymouth.
+  # so the screen does not go black between Limine and Plymouth.
   boot.uki.settings.UKI.Splash = "${art}/splash.bmp";
 
   # Errors only, so the kernel and systemd do not write over the splash.

@@ -542,7 +542,7 @@ fn a_pattern_gives_the_version_it_matched() {
     );
     // The version has dots in it, and so does what follows it.
     assert_eq!(
-        v("os_@v.grub", "os_20261016.232901.grub").as_deref(),
+        v("os_@v.cmdline", "os_20261016.232901.cmdline").as_deref(),
         Some("20261016.232901")
     );
     assert_eq!(
