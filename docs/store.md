@@ -1,86 +1,78 @@
 # The Store
 
-Apps the image does not carry come from [Flathub](https://flathub.org), and
-the Store is where a person finds and installs them. It is one of derisk's
-own apps, `org.derisk.store` from `crates/derisk-store` in derisk, and the
-desktop draws it like Settings and Files. The image ships no other store. The
-Store replaced Bazaar, whose GTK 4 window took neither scrolling nor clicks
-under derisk.
+The Store is where you find and install apps the image doesn't carry, from
+[Flathub](https://flathub.org). It is one of derisk's own apps,
+`org.derisk.store` from `crates/derisk-store` in derisk, drawn like Settings
+and Files, and the image ships no other store. It replaced Bazaar, whose GTK 4
+window took neither scrolling nor clicks under derisk.
 
-- **Categories come from what the apps say.** Every app on Flathub ships
-  AppStream data, and the Store sorts by all of it. An app goes in each main
-  category it names, such as `Game` or `Office`. It also goes in each main
-  category that its additional categories belong under in the freedesktop
-  menu specification, such as `ArcadeGame` under Games or `WebBrowser` under
-  Internet. So an app that names only `BoardGame` is still a game. An app
-  that names no category at all goes where its keywords, name and summary
-  point. Utilities, the catch-all, comes last whenever an app names
-  something narrower. A category's page is split into sections by the
-  additional categories its apps name, such as Arcade, Strategy and
-  Emulators.
-- **Release notes on the front page.** Apps list their releases, with notes,
-  in their AppStream data. The front page leads with the updates waiting,
-  then what changed in the apps you have installed, then the categories,
-  then the newest release notes across Flathub, each linking to its app.
-- **An app's page** says what the app is, then what people think of it, then
-  what changed in its releases. Flathub's catalogue has no ratings, so the
-  ratings and reviews come from GNOME's [Open Desktop Ratings
-  Service](https://odrs.gnome.org), ODRS, which GNOME Software reads too. The
-  page shows the average, how many people gave each number of stars, and the
-  five most helpful reviews in the session's language. The Store asks only
-  when a page opens, and it sends a user hash of all zeros, because nothing
-  here writes reviews. So ODRS learns which app was looked at and nothing
-  about who looked.
-- **Search** looks at names first, then keywords, then summaries and IDs.
-  Every word typed has to be found.
-- **Your language.** Names, summaries, descriptions and release notes are
-  shown in the session's language where Flathub has them translated.
-- **Install, open, update and remove.** An app's page installs it, and once
-  it is installed, opens, updates or removes it. The Refresh button fetches
-  Flathub's catalogue again and looks for updates.
+## What it shows
+
+The front page leads with waiting updates, then what changed in your installed
+apps, then the categories, then the newest release notes across Flathub, each
+linking to its app.
+
+Categories come from each app's AppStream data. An app goes in every main
+category it names, such as `Game` or `Office`, and in the main category each of
+its additional categories belongs under in the freedesktop menu specification,
+so `ArcadeGame` lands in Games and `WebBrowser` in Internet. An app that names
+no category goes where its keywords, name and summary point. Utilities, the
+catch-all, comes last whenever an app names something narrower. Each category
+page is split into sections by its apps' additional categories, such as
+Arcade, Strategy and Emulators.
+
+An app's page says what the app is, then what people think of it, then what
+changed in its releases. Flathub has no ratings, so ratings and reviews come
+from GNOME's [Open Desktop Ratings Service](https://odrs.gnome.org) (ODRS),
+which GNOME Software also reads. The page shows the average, the star
+distribution, and the five most helpful reviews in your language. The Store
+asks only when a page opens and sends an all-zero user hash, because nothing
+here writes reviews, so ODRS learns which app was viewed but not by whom.
+
+Search matches names first, then keywords, then summaries and IDs, and every
+typed word must match. Names, summaries, descriptions and release notes show in
+your session's language where Flathub has a translation. An app's page
+installs it, and once installed, opens, updates or removes it. **Refresh**
+fetches the catalogue again and checks for updates.
 
 ## Where it installs
 
-On a PC, Flatpak apps run in their own machine, described in
-[The Flatpak machine](hypervisor.md#the-flatpak-machine), and the Store
-installs into it. It finds the first machine made from the `losos-flatpak`
-template and asks that machine's `losos-guest-flatpak` through the guest
-agent. That runs `flatpak` as the machine's user, whom the machine lets
-install for everyone in it. Installs, removals and updates run in a unit of
-that user's manager, and the Store reads what they have printed so far a few
-times a second for its progress bar. It reads Flathub's catalogue and icons
-from the machine's disk. If the machine is off, the Store starts it. An app
-installed there opens on the desktop like any other machine's app.
+On a PC, Flatpak apps run in [the Flatpak machine](hypervisor.md#the-flatpak-machine),
+and the Store installs there. It finds the first machine made from the
+`losos-flatpak` template and calls its `losos-guest-flatpak` through the guest
+agent, which runs `flatpak` as the machine's user, who may install for the
+whole machine. Installs, removals and updates run in a unit of that user's
+manager, and the Store polls their output a few times a second for its progress
+bar. It reads Flathub's catalogue and icons from the machine's disk, and starts
+the machine if it is off. Installed apps open on the desktop like any machine's
+apps.
 
-A phone has no machines and keeps Flatpak on itself, so there the Store runs
-the system's `flatpak`. flatpak's polkit rule lets an administrator install
-for everyone without a password. For anyone else, the Store installs for that
-person alone with `--user`, from the app's flatpakref, which needs no remote
-set up.
+A phone has no machines and runs Flatpak itself, so the Store uses the system's
+`flatpak`. flatpak's polkit rule lets an administrator install for everyone
+without a password. Anyone else installs for themselves alone with `--user`,
+from the app's flatpakref, which needs no remote set up.
 
 ## Opening a .flatpakref or .flatpakrepo
 
-The Store is the default app for both kinds of file, so opening one in Files
-or from a browser's downloads hands it to the Store. A `.flatpakref` names
-one app and where it comes from; a `.flatpakrepo` describes a remote. The
-Store reads the file's title and, for a remote, its name, then copies the
-file to where flatpak runs: `losos-guest-flatpak store put` keeps it in the
-machine user's runtime directory, since the host's files are not in the
-machine. There it runs `flatpak install --user --from` the file, or `flatpak
-remote-add --user --if-not-exists --from` it, as one of the jobs above, and
-shows the installed apps. Both are for that person alone, the way a phone's
-user installs: a file from a web page is not something to add for everyone
-on the computer.
+The Store is the default app for both file types, so opening one from Files or
+a browser's downloads hands it to the Store. A `.flatpakref` names one app and
+its source, and a `.flatpakrepo` describes a remote. The Store reads the title,
+and for a remote its name, then copies the file to where flatpak runs:
+`losos-guest-flatpak store put` stores it in the machine user's runtime
+directory, because the machine can't see host files. There it runs
+`flatpak install --user --from` the file, or
+`flatpak remote-add --user --if-not-exists --from` it, as a job like the ones
+above, and shows the installed apps. Both are per-user, because a file from a
+web page shouldn't be added for everyone on the computer.
 
 ## How it reads Flathub
 
 flatpak keeps each remote's catalogue at
-`/var/lib/flatpak/appstream/flathub/<arch>/active/appstream.xml.gz`, with the
-icons it names in `icons/64x64/` beside it. It refreshes the catalogue with
-`flatpak update --appstream`, which any user may run. Flathub's catalogue is
-about 50 MB of XML once inflated, with every string in dozens of languages.
-So the Store reads it as a stream and keeps only what it shows. All of
-Flathub, over three thousand apps, reads in about half a second. A category
-or search page lays out only the rows on screen. A system that has never
-fetched the catalogue, such as one on a first boot without network, fetches
-it the first time the Store opens.
+`/var/lib/flatpak/appstream/flathub/<arch>/active/appstream.xml.gz`, with its
+icons in `icons/64x64/` next to it, and refreshes it with
+`flatpak update --appstream`, which any user may run. Inflated, Flathub's
+catalogue is about 50 MB of XML with every string in dozens of languages, so
+the Store streams it and keeps only what it shows. All of Flathub, over 3000
+apps, loads in about half a second, and category and search pages lay out only
+the rows on screen. A system that has never fetched the catalogue, such as one
+that first booted offline, fetches it the first time the Store opens.

@@ -1,77 +1,69 @@
 # Reporting a problem
 
-When something on the desktop stops responding, derisk offers to report it
-as an issue in the project's repository on GitHub. The installer does the
-same for a failed install, as [the installer's page](installer.md#reporting-a-failed-install)
-describes. Both send their reports with the same code, `src/losos-report`.
+When something on the desktop stops responding, derisk offers to file it as a
+GitHub issue in the project's repository. The installer does the same for a
+failed install ([Reporting a failed install](installer.md#reporting-a-failed-install)).
+Both use the same code, `src/losos-report`.
 
 ## What can be reported
 
-A report is about one of three things:
-
 | Problem | What derisk saw | What the report carries |
 | --- | --- | --- |
-| A window stopped responding | The app's window gave no answer to the compositor's ping for a few seconds | The app's ID, its unit's state and journal, and each of its threads with the kernel function it waits in |
+| A window stopped responding | The app gave no answer to the compositor's ping for a few seconds | The app ID, its unit's state and journal, and each thread with the kernel function it waits in |
 | A service failed | A unit is in the failed state | The unit's state, how it ended, and its journal |
-| An action never finished | An app such as Settings was still running an action long after it should have finished | The app, the action's own label, and the process's journal |
+| An action never finished | An app such as Settings was still running an action long after it should have finished | The app, the action's label, and the process's journal |
 
-Every report also has the System table that an installer report has: the
-image's version and architecture, the firmware type, the machine's make and
-model, its CPU, memory and kernel. The journal lines are from this boot, at
-most 200 of them.
+Every report also carries the System table from installer reports: image
+version and architecture, firmware type, make and model, CPU, memory and
+kernel. Journal lines are from this boot, 200 at most.
 
-A window's title is never sent, only its app's ID. A title is often the name
-of a document or a page, which belongs to the person, not to the bug.
+Window titles are never sent, only the app ID. A title is often the name of
+your document or page, which has nothing to do with the bug.
 
 ## Where derisk offers it
 
-- **A window that stopped responding** gets a card over the desktop saying
-  the app isn't responding, with Report, Force Quit and Wait. Wait is the
-  default, since an app busy with something often comes back. The compositor
-  pings a window's app on each click and key into it, and the card comes
-  when the answer is five seconds late.
-- **A failed service** gets a "Report" row in the command palette, beside
-  Restart and Dismiss.
-- **An action that never finished** in Settings shows "This is taking much
-  longer than it should." under its spinner after thirty seconds, with a
-  "Report it" button.
+- A window that stopped responding gets a card over the desktop with
+  **Report**, **Force Quit** and **Wait**. The compositor pings the app on each
+  click or key press, and shows the card when the answer is five seconds late.
+  **Wait** is the default, because busy apps often recover.
+- A failed service gets a **Report** row in the command palette, next to
+  **Restart** and **Dismiss**.
+- A Settings action that runs for 30 seconds shows "This is taking much longer
+  than it should." under its spinner, with a **Report it** button.
 
-Each one opens the same report dialog. None of them appear on a system that
-does not report problems, which is how the section on
-[where reports go](#where-reports-go) ends.
+All three open the same report dialog. None of them appear on an image that
+does not report problems ([Where reports go](#where-reports-go)).
 
 ## Sending one
 
-derisk runs `losos-report serve` for each report and talks to it in JSON
-lines on stdin and stdout. It is the same protocol `losos-installer serve`
-uses for a failed install, so derisk draws both with the same page:
+derisk runs `losos-report serve` for each report and talks to it in JSON lines
+over stdin and stdout, the same protocol as `losos-installer serve`. derisk
+draws both with the same page.
 
-1. `losos-report` reads what the problem needs from this machine and writes
-   the report.
-2. derisk shows the whole text and a field for a note of the person's own,
-   which goes above it.
-3. "Send" asks GitHub for an eight-letter code. derisk shows it beside a QR
-   code for `github.com/login/device`, and the person approves it on a phone
-   or another computer.
-4. `losos-report` files the issue with the token GitHub hands back, and
-   derisk shows the issue's address.
+1. `losos-report` collects what the problem needs and writes the report.
+2. derisk shows the full text and a field for your own note, which goes on top.
+3. **Send** asks GitHub for an eight-letter code. derisk shows it next to a QR
+   code for `github.com/login/device`, and you approve it on a phone or another
+   computer.
+4. `losos-report` files the issue with the token GitHub returns, and derisk
+   shows the issue's address.
 
-The report is public, so MAC and IP addresses are replaced before it is
-shown. The token belongs to a GitHub App whose only permission is issues. It
+The issue is public, so MAC and IP addresses are replaced before you see the
+text. The token belongs to a GitHub App whose only permission is issues. It
 stays in `losos-report`'s memory for that one report and is never written to
 disk.
 
-The same problem on many machines should be one issue. A report's title ends
-with a fingerprint of what went wrong, with numbers taken out:
+The same problem on many machines should land in one issue. Each title ends
+with a fingerprint, with numbers removed:
 
-- a window that stopped responding is fingerprinted by its app's ID;
-- a failed service by its unit with the instance taken out, so
-  `app-derisk-org.foo@1.service` and `app-derisk-org.foo@7.service` match,
-  and by how it ended;
-- an action that never finished by its app and the action's label.
+- A window that stopped responding: its app ID.
+- A failed service: the unit without its instance, so
+  `app-derisk-org.foo@1.service` and `app-derisk-org.foo@7.service` match, and
+  how it ended.
+- An action that never finished: the app and the action's label.
 
-When an open issue already carries that fingerprint, the report is added to
-it as a comment instead.
+If an open issue already has that fingerprint, the report becomes a comment on
+it.
 
 ## Where reports go
 
@@ -82,12 +74,11 @@ writes from `losos.report.repository` and `losos.report.clientId`:
 { "repository": "losos-project/desktop", "client_id": "Iv23li…" }
 ```
 
-The repository is the one the releases come from unless it is set. The
-client ID comes from the `LOSOS_REPORT_CLIENT_ID` repository variable in CI,
-the same one the installer's reports use, and setting it up is described on
-[the installer's page](installer.md#reporting-a-failed-install). An image
-built without it has no such file. `losos-report` then answers that this
-system does not report problems, and derisk offers no report.
+The repository defaults to the one releases come from. The client ID comes
+from the `LOSOS_REPORT_CLIENT_ID` repository variable in CI, shared with
+installer reports ([setup](installer.md#reporting-a-failed-install)). An image
+built without it has no `report.json`, `losos-report` answers that the system
+does not report problems, and derisk offers no report.
 
-For tests, `--repo`, `--client-id`, `--login` and `--api` override the file
-and point the sign-in and the API at a stand-in for GitHub.
+For tests, `--repo`, `--client-id`, `--login` and `--api` override the file and
+point sign-in and the API at a stand-in for GitHub.

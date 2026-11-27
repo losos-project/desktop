@@ -32,6 +32,8 @@ let
   # release and for the raw desktop disk a Try boot snapshots.
   volumeID = "losos-${cfg.version}-${pkgs.stdenv.hostPlatform.parsed.cpu.name}";
 
+  tryRaw = "${config.system.build.disk}/${config.image.baseName}.raw";
+
   # The desktop UKI's own command line carries the usrhash of the /usr in the
   # raw disk. Read it from the finished UKI rather than the configuration, as
   # uki-files.nix does, so a Try boot starts the same version it ships.
@@ -42,6 +44,8 @@ let
         nativeBuildInputs = with pkgs.buildPackages; [
           jq
           systemdUkify
+          coreutils
+          util-linux
         ];
       }
       ''
@@ -52,13 +56,20 @@ let
           *) echo "unexpected UKI command line: $cmdline" >&2; exit 1 ;;
         esac
         # The snapshot disk is not the medium the firmware booted from, so
-        # gpt-auto cannot name its root. Point root at the link uki-files.nix's
-        # udev rule makes beside the snapshot's ESP, as a BIOS boot does.
-        cmdline=''${cmdline/root=gpt-auto/root=/dev/disk/by-loader/root losos.esp=/dev/mapper/losos-try1}
+        # gpt-auto cannot name its root. uki-files.nix's udev rule links the
+        # root partition of the disk holding the ESP named by losos.esp; it
+        # compares partition UUIDs, so pass the snapshot ESP's PARTUUID and
+        # not its device path.
+        esp=$(sfdisk --dump ${tryRaw} \
+          | sed -n 's/.*uuid=\([^,]*\), name="esp".*/\1/p' \
+          | tr A-F a-f)
+        case "$esp" in
+          ????????-????-????-????-????????????) ;;
+          *) echo "no ESP partition UUID in the Try disk: '$esp'" >&2; exit 1 ;;
+        esac
+        cmdline=''${cmdline/root=gpt-auto/root=/dev/disk/by-loader/root losos.esp=$esp}
         printf '%s losos.try=1 losos.iso=${volumeID}\n' "$cmdline" > $out
       '';
-
-  tryRaw = "${config.system.build.disk}/${config.image.baseName}.raw";
 
   # ISO 9660 level 3 cannot hold a file this large, and a qcow2 would need a
   # userspace NBD daemon to survive switch-root. A squashfs keeps the raw disk
